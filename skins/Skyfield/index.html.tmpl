@@ -1,0 +1,108 @@
+## The Sky page: a one-page showcase of the weewx-skyfield almanac.
+## Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
+## Distributed under the terms of the GNU Public License (GPLv3)
+##
+## Every dynamic block is produced by $sky_page (user.wxskyfield_sky), which
+## computes it from the same $almanac tags available to any template.
+##
+## Layout: on wide screens (>= 1160px) .main is a two-track grid -- the
+## primary track (dome, ribbons, table) beside a right rail (planet chips,
+## orrery, analemma).  Below that, sky.css flattens both tracks with
+## display:contents and reorders the sections for a single column.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Sky over $station.location</title>
+  <link rel="stylesheet" href="sky.css">
+</head>
+<body>
+<div class="page">
+<header>
+  <div>
+    <h1>The Sky <span class="over">over</span> $station.location</h1>
+    <div class="sub mono">$sky_page.header_sub($almanac)</div>
+    <div class="countdown">
+      $sky_page.countdown_html($almanac)
+    </div>
+  </div>
+  <div class="moonbox">
+    <div class="mlabel">
+      <div class="mname">$almanac.moon_phase</div>
+      <div class="mpct mono">$almanac.moon_fullness% illuminated</div>
+      <div class="mpct mono">moonset $almanac.moon.set.format("%H:%M")</div>
+    </div>
+    $sky_page.moon_svg($almanac)
+  </div>
+</header>
+
+<div class="main">
+  <div class="primary">
+    <section class="sec-dome">
+      <p class="eyebrow">The Sky Now &middot; looking up</p>
+      $sky_page.dome_svg($almanac)
+      <p class="caption">North at the top, east at the left &mdash; the sky-chart
+      orientation, as if lying on your back looking up.  Altitude rings at 30&deg;
+      and 60&deg;; the rim is the horizon.
+      #if $sky_page.sun_is_up($almanac)
+      The sun is up, so the plate shows the stars where they stand behind the
+      daylight &mdash; Skyfield knows, even when you cannot see them.
+      #else
+      Dot size follows magnitude; the brighter the star, the larger the mark.
+      #end if
+      Hover any mark for its coordinates.</p>
+    </section>
+
+    <section class="sec-ribbons">
+      <p class="eyebrow">Rise &amp; Set &middot; today</p>
+      $sky_page.ribbons_svg($almanac)
+      <p class="caption">Bars span each body's time above the horizon; the ivory tick
+      is the transit.  Background bands are tonight's darkness: civil, nautical and
+      astronomical twilight &mdash; the USNO geometric definitions.</p>
+    </section>
+
+    <section class="sec-table">
+      <p class="eyebrow">The Almanac Table</p>
+      <div class="tablewrap">
+        $sky_page.table_html($almanac)
+      </div>
+      <p class="caption">Every value on this page is a WeeWX report tag served by
+      weewx-skyfield &mdash; no PyEphem, no downloads at run time.</p>
+    </section>
+  </div>
+
+  <aside class="rail">
+    <section class="sec-chips">
+      <p class="eyebrow">Sun &amp; Planets &middot; today</p>
+      <div class="chips">
+        $sky_page.chips_html($almanac)
+      </div>
+    </section>
+
+    <section class="sec-orrery">
+      <p class="eyebrow">The Solar System &middot; today's positions</p>
+      $sky_page.orrery_svg($almanac)
+      <p class="caption">Heliocentric longitudes, viewed from above the north
+      ecliptic pole; orbit spacing is logarithmic.  The dashed ray marks 0&deg;
+      (the direction of the vernal equinox).</p>
+    </section>
+
+    <section class="sec-analemma">
+      <p class="eyebrow">Analemma &middot; the sun at noon</p>
+      $sky_page.analemma_svg($almanac)
+      <p class="caption">The sun's altitude and azimuth at local standard noon for
+      every week of the year.  The figure-eight is the sum of Earth's tilt and its
+      elliptical orbit; the brass point is this week.</p>
+    </section>
+  </aside>
+</div>
+
+<footer>
+  Computed with weewx-skyfield<span class="sep">&middot;</span>Skyfield and the
+  JPL DE421 ephemeris<span class="sep">&middot;</span>IAU-CSN star names
+  (Hipparcos)<span class="sep">&middot;</span>Regenerated every report cycle
+</footer>
+</div>
+</body>
+</html>

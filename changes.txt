@@ -1,0 +1,78 @@
+weewx-skyfield change history
+-----------------------------
+
+1.0 Release 2026/07/05
+----------------------
+Initial release.  The almanac engine is extracted from weewx-celestial 3.0
+(which embeds the same engine alongside its loop-packet fields); this
+extension carries the report almanac alone.
+
+- Replace WeeWX's built-in almanac (PyEphem or weeutil) for report
+  generation.  Requires WeeWX 5.2 or later (the first release with
+  extensible almanacs) and Skyfield 1.47 or later (the first release
+  with find_risings/find_settings; on an older Skyfield the extension
+  logs an error and leaves the built-in almanac in place).  Report tags
+  such as $almanac.sunrise,
+  $almanac.moon.transit, $almanac(horizon=-6).sun(use_center=1).rise and
+  $almanac.next_full_moon are computed with Skyfield and JPL's DE421
+  ephemeris, which is installed with the extension (no downloads at
+  runtime).  PyEphem is not required.
+- Everything WeeWX's built-in almanac computes is computed natively,
+  including physical attributes ($almanac.venus.mag via Skyfield's
+  Mallama/Hilton photometric models, phase, size/radius/radius_size,
+  circumpolar/neverup, parallactic_angle), the moon's libration and
+  selenographic colongitude (Meeus ch. 53), Jupiter's central meridian
+  longitudes (IAU rotation elements) and Saturn's ring tilt (Meeus ch. 45).
+  With PyEphem installed, anything this extension does not compute (e.g.,
+  moon.subsolar_lat) falls through to the built-in almanac, as do almanac
+  times outside the span of the bundled DE421 ephemeris (mid-1899 through
+  2053); without PyEphem, all tags of the standard skins (and much more)
+  work with Skyfield alone.
+- The Sky page: a bundled one-page showcase skin (Skyfield), installed
+  automatically and generated at <HTML_ROOT>/skyfield/index.html each
+  report cycle.  A sky dome of the sun, moon (at true phase), planets and bright
+  IAU-named stars above the station's horizon; rise/set ribbons over USNO
+  twilight bands; an orrery of heliocentric longitudes; a weekly analemma;
+  event countdowns; Jupiter CML, Saturn ring tilt and a full almanac
+  table.  Self-contained HTML/inline SVG (no JavaScript libraries, web
+  fonts or runtime downloads); location comes from weewx.conf.  Disable or
+  retime it in [StdReport] [[SkyfieldReport]].
+- Named star support (e.g., $almanac.rigel.rise, $almanac.sirius.mag), on
+  by default (set stars = false in the Skyfield section of weewx.conf to
+  turn it off).  Every official proper name of the IAU Catalog of Star
+  Names (the Working Group on Star Names' IAU-CSN list) that has a
+  Hipparcos number is supported, plus PyEphem's names as aliases -- 420
+  names in all, covering 412 stars.  Star data comes from
+  wxskyfield_stars.dat, an excerpt of the Hipparcos Catalogue (ESA SP-1200,
+  1997; CDS VizieR I/239) installed with the extension.  Any other
+  Hipparcos star can be addressed by catalog number ($almanac.hip_57939);
+  install a full hip_main.dat in the user directory to serve all 118,218
+  Hipparcos stars.  Unlike PyEphem, earth_distance and sun_distance work
+  for stars with a measured parallax, in astronomical units.
+- Where PyEphem and standard astronomical conventions differ, the almanac
+  follows the standard definitions (see "Differences from PyEphem" in the
+  README): custom horizons are geometric (no refraction), matching the
+  USNO twilight definitions (an explicit horizon=0 cannot be
+  distinguished from the default and gets the default
+  refraction-and-radius treatment; use pressure=0 with use_center=1 for
+  the geometric crossing of the true horizon); circumpolar/neverup use
+  the same effective horizon as rise/set, so they always agree; rise/set honor the almanac's
+  pressure/temperature (refraction is scaled from the standard 34
+  arcminutes, and WeeWX's documented pressure=0 idiom turns it off);
+  hlongitude/hlatitude are true heliocentric coordinates for every body
+  including the moon, and for the sun they report Earth's heliocentric
+  coordinates per the XEphem convention; $almanac.separation() takes
+  (longitude, latitude) tuples and returns radians per the WeeWX 5.2
+  almanac API, additionally accepts this almanac's own body binders
+  ($almanac.separation($almanac.mars, $almanac.venus)), and calls made
+  with PyEphem Body arguments are passed through to PyEphem when
+  installed.
+- The bundled files are prefixed wxskyfield_ (wxskyfield_de421.bsp,
+  wxskyfield_stars.dat) so that no other extension can claim them (and
+  remove them on its uninstall).
+- A malformed record in the star catalog disables only that star, not the
+  entire catalog; a missing catalog degrades to per-tag errors, never a
+  crash of report generation.
+- A pytest test suite (tests/test_almanac.py), including permanent parity
+  audits against the built-in almanac.  Run with:
+  /path/to/weewx-venv/bin/python -m pytest tests
