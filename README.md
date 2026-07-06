@@ -49,7 +49,10 @@ it less often by setting `report_timing` in the `[[SkyfieldReport]]` section of
 Skins embedding the panels themselves can pick the colors baked into the markup with each
 render method's optional `palette` argument — `'night'` (the default, shown above) or
 `'light'`, a paper-atlas plate for light-themed pages: `$sky_page.analemma_svg($almanac,
-palette='light')`.
+palette='light')`.  `dome_svg` additionally takes `label_scale` (default 1.0), which grows
+every dome label by that factor with the collision layout following along — useful when a
+skin displays the chart scaled down, such as a fixed-canvas smartphone page:
+`$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
 
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
 rise/set/transit (including `next_`/`previous_` rising, setting, transit and antitransit), custom

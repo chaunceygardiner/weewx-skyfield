@@ -1,6 +1,33 @@
 weewx-skyfield change history
 -----------------------------
 
+1.2 Release 2026/07/06
+----------------------
+- Chart label placement fixes, prompted by the paloaltoweather.com celestial
+  pages.  One backward-compatible API addition (dome_svg's label_scale,
+  below); everything else is output markup only:
+  * analemma_svg: month labels and the "today" label now sit radially outward
+    from the figure's centroid, so they clear the curve at the lobes (Jun at
+    the top, Dec/Jan at the bottom) and the axis labels; a month label that
+    would land on the today label is skipped.
+  * orrery_svg: body labels flip to the inside using an estimated text width
+    (a fixed threshold clipped Saturn at the right rim), are clamped
+    vertically, and de-overlap when neighbors share a rim (Saturn/Neptune
+    near 0 degrees for years to come).  The 0-degree ray label is anchored
+    inside the viewBox so it survives skins that enlarge .gridlab.
+  * dome_svg: new optional label_scale argument grows every dome label
+    (stars, bodies, cardinals, ring degrees) by that factor, with font sizes
+    emitted inline so the collision layout matches the rendered size --
+    useful for skins whose pages are scaled down (fixed-canvas smartphone
+    layouts).  Default 1.0 keeps today's sizes.
+  * dome_svg: labels are placed after all marks with collision handling --
+    body labels (Sun/Moon/planets) nudge vertically until they clear each
+    other; star labels are dropped on a collision (their dots keep the hover
+    title).  The cardinal letters and the 30/60-degree ring labels are
+    seeded into the collision layout, so body labels dodge them too.
+    Planets bunched along the ecliptic no longer print over each other,
+    and labels near the rim flip inward instead of clipping.
+
 1.1 Release 2026/07/06
 ----------------------
 - Every $sky_page render method (moon_svg, dome_svg, ribbons_svg,

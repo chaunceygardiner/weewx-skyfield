@@ -252,10 +252,18 @@ class SkyPage:
         a = math.radians(az)
         return cx - r * math.sin(a), cy - r * math.cos(a)
 
-    def dome_svg(self, alm, palette: str = 'night') -> str:
+    def dome_svg(self, alm, palette: str = 'night', label_scale: float = 1.0) -> str:
+        """label_scale grows every dome label (stars, bodies, cardinals, ring
+        degrees) by that factor -- font sizes are emitted inline so the
+        collision layout always matches the rendered size.  Useful for skins
+        whose pages are scaled down (fixed-canvas smartphone layouts)."""
         pal = _palette(palette)
         ink, line, halo, body_color = pal['ink'], pal['line'], pal['halo'], pal['body']
         S, cx, cy, R = 680, 340, 348, 296
+        star_px = 10.0 * label_scale
+        body_px = 11.0 * label_scale
+        card_px = 14.0 * label_scale
+        grid_px = 10.0 * label_scale
         sun = self._body(alm, 'sun')
         star_op = 0.55 if sun['alt'] > 0 else 0.95
         p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="Sky dome chart">' % S]
@@ -275,12 +283,57 @@ class SkyPage:
                  % (cx, cy, R, pal['dome_rim']))
         for label, dx, dy, anch in (('N', 0, -R - 12, 'middle'), ('S', 0, R + 22, 'middle'),
                                     ('E', -R - 14, 5, 'end'), ('W', R + 14, 5, 'start')):
-            p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal">%s</text>'
-                     % (cx + dx, cy + dy, anch, label))
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab">30&#176;</text>'
-                 % (int(cx + 6 + R / 3), cy - 6))
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab">60&#176;</text>'
-                 % (int(cx + 8 + R * 2 / 3), cy - 6))
+            p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal" '
+                     'style="font-size:%.1fpx">%s</text>'
+                     % (cx + dx, cy + dy, anch, card_px, label))
+        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
+                 'style="font-size:%.1fpx">30&#176;</text>'
+                 % (int(cx + 6 + R / 3), cy - 6, grid_px))
+        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
+                 'style="font-size:%.1fpx">60&#176;</text>'
+                 % (int(cx + 8 + R * 2 / 3), cy - 6, grid_px))
+        # Labels are placed after every mark is drawn: body labels first (each
+        # nudged vertically until it clears the ones already placed), then
+        # star labels, which are simply dropped on a collision -- their dots
+        # keep the hover title.  Bunched-up bodies (planets crowd the ecliptic)
+        # otherwise print over each other.
+        # Seed the collision list with the fixed chrome labels (cardinals and
+        # ring degrees) so body labels dodge them too.
+        placed: List[Tuple[float, float, float, float]] = []
+        for fx, fy, fw in ((cx, cy - R - 12, card_px), (cx, cy + R + 22, card_px),
+                           (cx - R - 14, cy + 5, card_px), (cx + R + 14, cy + 5, card_px),
+                           (cx + 6 + R / 3.0, cy - 6, 2.0 * grid_px),
+                           (cx + 8 + R * 2 / 3.0, cy - 6, 2.0 * grid_px)):
+            placed.append((fx - fw, fy - card_px, fx + fw, fy + 4))
+        deferred: List[str] = []
+
+        def _try_label(x: float, y: float, text: str, cls: str, gap: float,
+                       must: bool, opacity: Optional[float] = None) -> None:
+            px = body_px if cls == 'bodylab' else star_px
+            est_w = 0.62 * px * len(text)
+            row_h = px + 3.0
+            anchor = 'start'
+            lx = x + gap
+            if lx + est_w > S - 4:
+                anchor = 'end'
+                lx = x - gap
+            ly = min(max(y + 4, row_h), 700.0)
+            for _tries in range(5):
+                x0 = lx if anchor == 'start' else lx - est_w
+                box = (x0, ly - px, x0 + est_w, ly + 2)
+                if not any(box[0] < o[2] and box[2] > o[0] and
+                           box[1] < o[3] and box[3] > o[1] for o in placed):
+                    break
+                if not must:
+                    return
+                ly = min(ly + row_h, 700.0)
+            placed.append((box[0], box[1], box[2], box[3]))
+            op = '' if opacity is None else ' opacity="%.2f"' % opacity
+            deferred.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="%s" '
+                            'style="font-size:%.1fpx"%s>%s</text>'
+                            % (lx, ly, anchor, cls, px, op, text))
+
+        star_labels: List[Tuple[float, float, str]] = []
         for s in self._stars(alm):
             x, y = self._dome_xy(cx, cy, R, s['az'], s['alt'])
             r = max(1.0, min(4.0, 3.2 - 0.62 * s['mag']))
@@ -288,8 +341,7 @@ class SkyPage:
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.2f</title></circle>'
                      % (x, y, r, ink, star_op, _esc(s['name']), s['alt'], s['az'], s['mag']))
             if s['mag'] <= STAR_LABEL_MAG:
-                p.append('<text x="%.1f" y="%.1f" class="starlab" opacity="%.2f">%s</text>'
-                         % (x + 6, y - 4, star_op + 0.05, _esc(s['name'])))
+                star_labels.append((x, y - 8, _esc(s['name'])))
         for name in PLANETS:
             b = self._body(alm, name)
             if b['alt'] <= 0:
@@ -298,7 +350,7 @@ class SkyPage:
             p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.1f</title></circle>'
                      % (x, y, body_color[name], halo, _cap(name), b['alt'], b['az'], b['mag']))
-            p.append('<text x="%.1f" y="%.1f" class="bodylab">%s</text>' % (x + 8, y + 4, _cap(name)))
+            _try_label(x, y, _cap(name), 'bodylab', 8, must=True)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
             for i in range(8):
@@ -309,14 +361,17 @@ class SkyPage:
             p.append('<circle cx="%.1f" cy="%.1f" r="9" fill="%s" stroke="%s" stroke-width="1.5">'
                      '<title>Sun &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
                      % (x, y, body_color['sun'], halo, sun['alt'], sun['az']))
-            p.append('<text x="%.1f" y="%.1f" class="bodylab">Sun</text>' % (x + 19, y + 4))
+            _try_label(x, y, 'Sun', 'bodylab', 19, must=True)
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, moon['az'], moon['alt'])
             p.append('<g>%s<title>Moon &#8212; alt %.1f&#176;, az %.1f&#176;, %d%% illuminated</title></g>'
                      % (self._moon_disc(alm, x, y, 8, pal, ring=False),
                         moon['alt'], moon['az'], alm.moon_fullness))
-            p.append('<text x="%.1f" y="%.1f" class="bodylab">Moon</text>' % (x + 12, y + 4))
+            _try_label(x, y, 'Moon', 'bodylab', 12, must=True)
+        for x, y, name in star_labels:
+            _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + 0.05)
+        p.extend(deferred)
         p.append('</svg>')
         return ''.join(p)
 
@@ -409,11 +464,13 @@ class SkyPage:
                      'stroke-width="1" opacity="0.8"/>' % (cx, cx, orbit_r(a), pal['line']))
         p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" '
                  'stroke-dasharray="2 5" opacity="0.6"/>' % (cx + 44, cx, S - 12, cx, pal['muted']))
-        p.append('<text x="%d" y="%d" class="mono gridlab">0&#176;</text>' % (S - 26, cx - 6))
+        p.append('<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
+                 % (S - 8, cx - 8))
         p.append('<circle cx="%d" cy="%d" r="8" fill="%s"><title>Sun</title></circle>'
                  % (cx, cx, pal['orrery_sun']))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
+        labels: List[List[Any]] = []
         for name, a in SEMI_MAJOR_AU.items():
             h = math.radians(hlongs[name])
             r = orbit_r(a)
@@ -426,13 +483,31 @@ class SkyPage:
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="1.5">'
                          '<title>%s &#8212; heliocentric longitude %.1f&#176;</title></circle>'
                          % (x, y, pal['body'][name], pal['halo'], _cap(name), hlongs[name]))
-            # Label away from center, but flip near the right edge so a
-            # body close to 0 degrees (Neptune, for years) is not clipped.
+            # Label away from center, flipped when its estimated width would
+            # leave the viewBox (a body near 0 degrees sits at the right rim
+            # for years at a time), then clamped vertically.
+            est_w = 8 + 7.0 * len(name)
             anchor = 'start' if x >= cx else 'end'
-            if anchor == 'start' and x > S - 64:
+            if anchor == 'start' and x + est_w > S - 6:
                 anchor = 'end'
+            elif anchor == 'end' and x - est_w < 6:
+                anchor = 'start'
+            lx = x + (8 if anchor == 'start' else -8)
+            ly = min(max(y + 4, 14.0), S - 8.0)
+            x0 = lx if anchor == 'start' else lx - est_w
+            labels.append([lx, ly, anchor, _cap(name), x0, x0 + est_w])
+        # Neighbors sharing a rim (Saturn/Neptune near 0 degrees) collide;
+        # push the later label down in 13 px steps until it clears.
+        placed: List[List[Any]] = []
+        for lab in labels:
+            for _tries in range(6):
+                if not any(lab[4] < o[5] and lab[5] > o[4] and abs(lab[1] - o[1]) < 12
+                           for o in placed):
+                    break
+                lab[1] = min(lab[1] + 13, S - 8.0)
+            placed.append(lab)
             p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="bodylab">%s</text>'
-                     % (x + (8 if anchor == 'start' else -8), y + 4, anchor, _cap(name)))
+                     % (lab[0], lab[1], lab[2], lab[3]))
         p.append('</svg>')
         return ''.join(p)
 
@@ -478,6 +553,21 @@ class SkyPage:
                         for i, q in enumerate(pts)) + ' Z'
         p.append('<path d="%s" fill="none" stroke="%s" stroke-width="1.5" opacity="0.9"/>'
                  % (path, ink))
+        # Labels sit radially outward from the figure's centroid, clear of the
+        # curve at the lobes (Jun at the top, Dec/Jan at the bottom) and of
+        # the axis labels; the today label owns its spot -- a month label
+        # falling on it is skipped.
+        today = min(pts, key=lambda q: abs(q['ts'] - alm.time_ts))
+        az_c = sum(q['az'] for q in pts) / len(pts)
+        al_c = sum(q['alt'] for q in pts) / len(pts)
+
+        def _outward(q, dist: float) -> Tuple[float, float, str]:
+            dx, dy = X(q['az']) - X(az_c), Y(q['alt']) - Y(al_c)
+            n = math.hypot(dx, dy) or 1.0
+            lx = X(q['az']) + dist * dx / n
+            ly = min(max(Y(q['alt']) + dist * dy / n + 3, 14.0), S - 60.0)
+            return lx, ly, ('start' if dx >= 0 else 'end')
+
         month_seen: set = set()
         for q in pts:
             mon = time.strftime('%b', time.localtime(q['ts']))
@@ -487,16 +577,19 @@ class SkyPage:
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
                      % (X(q['az']), Y(q['alt']), muted, _t_date(q['ts']), q['alt'], q['az']))
             if first and mon in ('Jan', 'Mar', 'Jun', 'Sep', 'Nov'):
-                dx = 9 if q['az'] >= (az0 + az1) / 2 else -9
+                if (abs(X(q['az']) - X(today['az'])) < 30
+                        and abs(Y(q['alt']) - Y(today['alt'])) < 18):
+                    continue
+                lx, ly, anchor = _outward(q, 13)
                 p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono gridlab">%s</text>'
-                         % (X(q['az']) + dx, Y(q['alt']) + 4, 'start' if dx > 0 else 'end', mon))
-        today = min(pts, key=lambda q: abs(q['ts'] - alm.time_ts))
+                         % (lx, ly, anchor, mon))
         p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="1.5">'
                  '<title>This week &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
                  % (X(today['az']), Y(today['alt']), pal['brass'], pal['halo'],
                     today['alt'], today['az']))
-        p.append('<text x="%.1f" y="%.1f" class="todaylab">today</text>'
-                 % (X(today['az']) + 10, Y(today['alt']) + 4))
+        lx, ly, anchor = _outward(today, 17)
+        p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">today</text>'
+                 % (lx, ly, anchor))
         p.append('</svg>')
         return ''.join(p)
 
