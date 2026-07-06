@@ -117,11 +117,14 @@ definitions rather than PyEphem:
 ### Relationship to other extensions
 
 - [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) inserts
-  celestial observations into loop packets for live-updating reports, and its 3.x releases embed
-  this same almanac engine.  If you run weewx-celestial 3.x alongside weewx-skyfield, set
-  `replace_builtin_almanac = false` in the `[Celestial]` section of `weewx.conf` so that only one
-  Skyfield almanac is registered (they would compute identical values; there is just no reason to
-  load the 17 MB ephemeris twice).
+  celestial observations into loop packets for live-updating reports.  As of celestial 4.0 the
+  two extensions are complementary and coexist with no configuration: celestial provides the
+  loop fields, weewx-skyfield provides the report almanac (celestial's own report tags come out
+  the same, since both compute from the same definitions).  Only celestial 3.x, which embedded
+  this same almanac engine, needs `replace_builtin_almanac = false` in the `[Celestial]` section
+  of `weewx.conf` when run alongside weewx-skyfield, so that only one Skyfield almanac is
+  registered (they would compute identical values; there is just no reason to load the 17 MB
+  ephemeris twice).
 - weewx-skyfield-almanac (by a different author) is an independent Skyfield almanac extension
   with a different design (it downloads its ephemerides and catalogs at runtime).  Choose one or
   the other; installing both would leave reports using whichever registered last.

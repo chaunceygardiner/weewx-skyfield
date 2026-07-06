@@ -9,9 +9,13 @@ head of `weewx.almanac.almanacs`, so report tags (`$almanac.sunrise`,
 `$almanac(horizon=-6).sun(use_center=1).rise`, `$almanac.rigel.mag`, ...) use Skyfield and the
 bundled JPL DE421 ephemeris instead of WeeWX's built-in PyEphem/weeutil almanac.
 
-The almanac engine is shared history with the weewx-celestial extension (same author): celestial
-3.x embeds the same engine alongside its loop-packet fields.  Bug fixes to the engine should
-usually be applied in both repositories.
+The almanac engine is shared history with the weewx-celestial extension (same author): it was
+extracted from celestial 3.x, and as of celestial 4.0 this repository is the engine's sole home
+(celestial no longer embeds an almanac; it keeps only its loop-field service).  Engine fixes go
+here.  What still spans both repos are the *definitions* (rise/set horizon, geometric twilight,
+coordinates of date): celestial's loop fields compute from the same ones, and its test suite
+cross-checks them against this almanac — a definition change here can fail celestial's
+TestLoopPacketConsistency, so change definitions in both repos together.
 
 ## Commands
 
