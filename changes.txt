@@ -1,6 +1,19 @@
 weewx-skyfield change history
 -----------------------------
 
+1.1 Release 2026/07/06
+----------------------
+- Every $sky_page render method (moon_svg, dome_svg, ribbons_svg,
+  orrery_svg, analemma_svg, chips_html, table_html, countdown_html,
+  header_sub) takes an optional palette argument selecting the colors
+  baked into its markup: 'night' (the default -- the shipped Sky page's
+  plate) or 'light', a paper-atlas plate for light-themed skins, e.g.
+  $sky_page.analemma_svg($almanac, palette='light').  The default output
+  is byte-identical to 1.0; no skin.conf or CSS changes are needed.
+  Typography is unaffected (it stays class-based, styled by the
+  consuming skin's CSS).  An unknown palette name raises an error
+  listing the valid names.
+
 1.0 Release 2026/07/05
 ----------------------
 Initial release.  The almanac engine is extracted from weewx-celestial 3.0

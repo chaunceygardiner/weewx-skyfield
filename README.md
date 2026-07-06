@@ -46,6 +46,11 @@ alone evaluates the almanac 53 times), so if your archive interval is short you 
 it less often by setting `report_timing` in the `[[SkyfieldReport]]` section of
 `weewx.conf`.  To skip generating it entirely, set `enable = false` there.
 
+Skins embedding the panels themselves can pick the colors baked into the markup with each
+render method's optional `palette` argument — `'night'` (the default, shown above) or
+`'light'`, a paper-atlas plate for light-themed pages: `$sky_page.analemma_svg($almanac,
+palette='light')`.
+
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
 rise/set/transit (including `next_`/`previous_` rising, setting, transit and antitransit), custom
 horizons and `use_center` (for twilight tags), azimuth/altitude, right ascension/declination

@@ -20,18 +20,56 @@ import weewx.almanac
 
 from weewx.cheetahgenerator import SearchList
 
-# ── the night-plate palette (see skins/Skyfield/sky.css) ────────────────────
-INK, MUTED, BRASS, LINE = '#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358'
-NIGHT = '#0A0F22'
-
-# Body identity colors, colorblind-validated against the plate surface.
-BODY_COLOR: Dict[str, str] = {
-    'sun': '#B98C31', 'moon': '#7E92DA', 'mercury': '#AB763B',
-    'venus': '#D2B458', 'mars': '#C04F36', 'jupiter': '#D89A56',
-    'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6',
+# ── palettes ─────────────────────────────────────────────────────────────────
+# Every render method takes palette= naming an entry here.  'night' is the
+# bundled Sky page's plate (see skins/Skyfield/sky.css); 'light' is the
+# "paper atlas" plate for light-themed consuming skins.  Only baked SVG/HTML
+# attributes come from the palette; typography stays class-based, styled by
+# the consuming skin's CSS.  Keys: ink (star dots, curves, transit ticks),
+# muted, brass (accents, now-markers), line (gridlines, orbit circles,
+# altitude rings), halo (the stroke lifting body dots off the plate), body
+# (identity colors, colorblind-validated against the plate surface),
+# twilight (mid-tone enough that identity-colored ribbon bars stay readable
+# on every band), the moon-disc fills/ring, the dome gradient stops and rim,
+# and the orrery's sun and Earth.
+PALETTES: Dict[str, Dict[str, Any]] = {
+    'night': {
+        'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
+        'line': '#2A3358', 'halo': '#0A0F22',
+        'body': {'sun': '#B98C31', 'moon': '#7E92DA', 'mercury': '#AB763B',
+                 'venus': '#D2B458', 'mars': '#C04F36', 'jupiter': '#D89A56',
+                 'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
+        'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
+                     'civil': '#233153', 'day': '#2E3D5C'},
+        'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
+        'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
+        'dome_rim': '#D3A94C',
+        'orrery_sun': '#D3A94C',
+        'earth_fill': '#E9E4D4', 'earth_stroke': '#D3A94C',
+    },
+    'light': {
+        'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
+        'line': '#c9cfd8', 'halo': '#ffffff',
+        'body': {'sun': '#B8860B', 'moon': '#4A5FB8', 'mercury': '#8a5a24',
+                 'venus': '#a8862c', 'mars': '#b23a24', 'jupiter': '#b06f2e',
+                 'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
+                 'pluto': '#6a5f96'},
+        'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
+                     'civil': '#9FBCDE', 'day': '#D7E6F5'},
+        'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
+        'dome_stops': (('0%', '#ffffff'), ('100%', '#efece2')),
+        'dome_rim': '#8a94a6',
+        'orrery_sun': '#B8860B',
+        'earth_fill': '#2e6e8e', 'earth_stroke': '#ffffff',
+    },
 }
-TWILIGHT_SHADE = {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
-                  'civil': '#233153', 'day': '#2E3D5C'}
+
+
+def _palette(name: str) -> Dict[str, Any]:
+    if name not in PALETTES:
+        raise ValueError('unknown palette %r; valid palettes: %s'
+                         % (name, ', '.join(sorted(PALETTES))))
+    return PALETTES[name]
 
 PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
 SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
@@ -155,13 +193,15 @@ class SkyPage:
     def sun_is_up(self, alm) -> bool:
         return bool(self._body(alm, 'sun')['alt'] > 0)
 
-    def header_sub(self, alm) -> str:
+    def header_sub(self, alm, palette: str = 'night') -> str:
+        _palette(palette)
         lat, lon = alm.lat, alm.lon
         return '%.2f&#176; %s &#183; %.2f&#176; %s &#183; %s' % (
             abs(lat), 'N' if lat >= 0 else 'S', abs(lon), 'E' if lon >= 0 else 'W',
             time.strftime('%A, %B %-d %Y, %-H:%M %Z', time.localtime(alm.time_ts)))
 
-    def countdown_html(self, alm) -> str:
+    def countdown_html(self, alm, palette: str = 'night') -> str:
+        _palette(palette)
         chips = []
         for label, vh in (('new moon', alm.next_new_moon),
                           ('full moon', alm.next_full_moon),
@@ -178,7 +218,8 @@ class SkyPage:
         return '\n'.join(chips)
 
     # ── moon disc ─────────────────────────────────────────────────────────────
-    def _moon_disc(self, alm, cx: float, cy: float, R: float, ring: bool = True) -> str:
+    def _moon_disc(self, alm, cx: float, cy: float, R: float,
+                   pal: Dict[str, Any], ring: bool = True) -> str:
         frac = alm.moon.phase / 100.0
         waxing = alm.moon_index <= 3
         # Northern hemisphere: waxing is lit on the west (right); flip south.
@@ -192,17 +233,17 @@ class SkyPage:
         path = ('M %.1f %.1f A %.1f %.1f 0 0 %d %.1f %.1f A %.1f %.1f 0 0 %d %.1f %.1f Z'
                 % (cx, cy - R, R, R, limb_sweep, cx, cy + R,
                    rx, R, term_sweep, cx, cy - R))
-        out = ['<circle cx="%.1f" cy="%.1f" r="%.1f" fill="#1E2745"/>' % (cx, cy, R),
-               '<path d="%s" fill="#DDD8C4"/>' % path]
+        out = ['<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s"/>' % (cx, cy, R, pal['moon_dark']),
+               '<path d="%s" fill="%s"/>' % (path, pal['moon_lit'])]
         if ring:
             out.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" '
-                       'stroke="%s" stroke-width="1"/>' % (cx, cy, R, LINE))
+                       'stroke="%s" stroke-width="1"/>' % (cx, cy, R, pal['moon_ring']))
         return ''.join(out)
 
-    def moon_svg(self, alm, size: int = 76) -> str:
+    def moon_svg(self, alm, size: int = 76, palette: str = 'night') -> str:
         c = size / 2.0
         return ('<svg width="%d" height="%d" viewBox="0 0 %d %d" aria-label="Moon phase">%s</svg>'
-                % (size, size, size, size, self._moon_disc(alm, c, c, c - 4)))
+                % (size, size, size, size, self._moon_disc(alm, c, c, c - 4, _palette(palette))))
 
     # ── sky dome ─────────────────────────────────────────────────────────────
     @staticmethod
@@ -211,25 +252,27 @@ class SkyPage:
         a = math.radians(az)
         return cx - r * math.sin(a), cy - r * math.cos(a)
 
-    def dome_svg(self, alm) -> str:
+    def dome_svg(self, alm, palette: str = 'night') -> str:
+        pal = _palette(palette)
+        ink, line, halo, body_color = pal['ink'], pal['line'], pal['halo'], pal['body']
         S, cx, cy, R = 680, 340, 348, 296
         sun = self._body(alm, 'sun')
         star_op = 0.55 if sun['alt'] > 0 else 0.95
         p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="Sky dome chart">' % S]
-        p.append('<defs><radialGradient id="skyg"><stop offset="0%" stop-color="#161F3D"/>'
-                 '<stop offset="72%" stop-color="#1B2749"/>'
-                 '<stop offset="100%" stop-color="#2A3A63"/></radialGradient></defs>')
+        p.append('<defs><radialGradient id="skyg">%s</radialGradient></defs>'
+                 % ''.join('<stop offset="%s" stop-color="%s"/>' % s
+                           for s in pal['dome_stops']))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#skyg)"/>' % (cx, cy, R))
         for alt in (30, 60):
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
                      'stroke-width="1" stroke-dasharray="3 5" opacity="0.7"/>'
-                     % (cx, cy, R * (90 - alt) / 90.0, LINE))
+                     % (cx, cy, R * (90 - alt) / 90.0, line))
         p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" opacity="0.5"/>'
-                 % (cx - R, cy, cx + R, cy, LINE))
+                 % (cx - R, cy, cx + R, cy, line))
         p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" opacity="0.5"/>'
-                 % (cx, cy - R, cx, cy + R, LINE))
+                 % (cx, cy - R, cx, cy + R, line))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="%s" stroke-width="1.5"/>'
-                 % (cx, cy, R, BRASS))
+                 % (cx, cy, R, pal['dome_rim']))
         for label, dx, dy, anch in (('N', 0, -R - 12, 'middle'), ('S', 0, R + 22, 'middle'),
                                     ('E', -R - 14, 5, 'end'), ('W', R + 14, 5, 'start')):
             p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal">%s</text>'
@@ -243,7 +286,7 @@ class SkyPage:
             r = max(1.0, min(4.0, 3.2 - 0.62 * s['mag']))
             p.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" opacity="%.2f">'
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.2f</title></circle>'
-                     % (x, y, r, INK, star_op, _esc(s['name']), s['alt'], s['az'], s['mag']))
+                     % (x, y, r, ink, star_op, _esc(s['name']), s['alt'], s['az'], s['mag']))
             if s['mag'] <= STAR_LABEL_MAG:
                 p.append('<text x="%.1f" y="%.1f" class="starlab" opacity="%.2f">%s</text>'
                          % (x + 6, y - 4, star_op + 0.05, _esc(s['name'])))
@@ -254,7 +297,7 @@ class SkyPage:
             x, y = self._dome_xy(cx, cy, R, b['az'], b['alt'])
             p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.1f</title></circle>'
-                     % (x, y, BODY_COLOR[name], NIGHT, _cap(name), b['alt'], b['az'], b['mag']))
+                     % (x, y, body_color[name], halo, _cap(name), b['alt'], b['az'], b['mag']))
             p.append('<text x="%.1f" y="%.1f" class="bodylab">%s</text>' % (x + 8, y + 4, _cap(name)))
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
@@ -262,24 +305,26 @@ class SkyPage:
                 a = math.pi * i / 4
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1.5"/>'
                          % (x + 11 * math.cos(a), y + 11 * math.sin(a),
-                            x + 16 * math.cos(a), y + 16 * math.sin(a), BODY_COLOR['sun']))
+                            x + 16 * math.cos(a), y + 16 * math.sin(a), body_color['sun']))
             p.append('<circle cx="%.1f" cy="%.1f" r="9" fill="%s" stroke="%s" stroke-width="1.5">'
                      '<title>Sun &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (x, y, BODY_COLOR['sun'], NIGHT, sun['alt'], sun['az']))
+                     % (x, y, body_color['sun'], halo, sun['alt'], sun['az']))
             p.append('<text x="%.1f" y="%.1f" class="bodylab">Sun</text>' % (x + 19, y + 4))
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, moon['az'], moon['alt'])
             p.append('<g>%s<title>Moon &#8212; alt %.1f&#176;, az %.1f&#176;, %d%% illuminated</title></g>'
-                     % (self._moon_disc(alm, x, y, 8, ring=False),
+                     % (self._moon_disc(alm, x, y, 8, pal, ring=False),
                         moon['alt'], moon['az'], alm.moon_fullness))
             p.append('<text x="%.1f" y="%.1f" class="bodylab">Moon</text>' % (x + 12, y + 4))
         p.append('</svg>')
         return ''.join(p)
 
     # ── rise/set ribbons ─────────────────────────────────────────────────────
-    def ribbons_svg(self, alm) -> str:
+    def ribbons_svg(self, alm, palette: str = 'night') -> str:
         import weeutil.weeutil
+        pal = _palette(palette)
+        ink, line, brass, body_color = pal['ink'], pal['line'], pal['brass'], pal['body']
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         eod = sod + 86400
         X0, X1, ROW, TOP = 118, 952, 30, 34
@@ -301,17 +346,17 @@ class SkyPage:
         for i, (ts, shade) in enumerate(edges):
             end = edges[i + 1][0] if i + 1 < len(edges) else eod
             p.append('<rect x="%.1f" y="%d" width="%.1f" height="%d" fill="%s"/>'
-                     % (X(ts), TOP, max(0.0, X(end) - X(ts)), plot_h, TWILIGHT_SHADE[shade]))
+                     % (X(ts), TOP, max(0.0, X(end) - X(ts)), plot_h, pal['twilight'][shade]))
         for h in range(0, 25, 3):
             x = X0 + (X1 - X0) * h / 24.0
             p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
-                     'stroke-width="1" opacity="0.35"/>' % (x, TOP, x, TOP + plot_h, LINE))
+                     'stroke-width="1" opacity="0.35"/>' % (x, TOP, x, TOP + plot_h, line))
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%02d</text>'
                      % (x, TOP + plot_h + 18, h % 24))
         for i, b in enumerate(bodies):
             y = TOP + i * ROW
             cy = y + ROW / 2.0
-            color = BODY_COLOR[b['name']]
+            color = body_color[b['name']]
             p.append('<circle cx="14" cy="%.1f" r="4" fill="%s"/>' % (cy, color))
             p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _cap(b['name'])))
             segs: List[Tuple[float, float]] = []
@@ -339,18 +384,19 @@ class SkyPage:
                 xt = X(b['transit'])
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="2">'
                          '<title>%s transit %s</title></line>'
-                         % (xt, cy - 8, xt, cy + 8, INK, _cap(b['name']), _t_hm(b['transit'])))
+                         % (xt, cy - 8, xt, cy + 8, ink, _cap(b['name']), _t_hm(b['transit'])))
             p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>' % (X1 + 12, cy + 4, right))
         xn = X(alm.time_ts)
         p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5" '
-                 'class="nowpulse"/>' % (xn, TOP - 8, xn, TOP + plot_h, BRASS))
+                 'class="nowpulse"/>' % (xn, TOP - 8, xn, TOP + plot_h, brass))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">now %s</text>'
                  % (xn, TOP - 14, _t_hm(alm.time_ts)))
         p.append('</svg>')
         return ''.join(p)
 
     # ── orrery ───────────────────────────────────────────────────────────────
-    def orrery_svg(self, alm) -> str:
+    def orrery_svg(self, alm, palette: str = 'night') -> str:
+        pal = _palette(palette)
         S, cx = 480, 240
         lo, hi = math.log(0.387), math.log(30.07)
 
@@ -360,12 +406,12 @@ class SkyPage:
         p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Solar system plan view">' % (S, S)]
         for a in SEMI_MAJOR_AU.values():
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
-                     'stroke-width="1" opacity="0.8"/>' % (cx, cx, orbit_r(a), LINE))
+                     'stroke-width="1" opacity="0.8"/>' % (cx, cx, orbit_r(a), pal['line']))
         p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" '
-                 'stroke-dasharray="2 5" opacity="0.6"/>' % (cx + 44, cx, S - 12, cx, MUTED))
+                 'stroke-dasharray="2 5" opacity="0.6"/>' % (cx + 44, cx, S - 12, cx, pal['muted']))
         p.append('<text x="%d" y="%d" class="mono gridlab">0&#176;</text>' % (S - 26, cx - 6))
         p.append('<circle cx="%d" cy="%d" r="8" fill="%s"><title>Sun</title></circle>'
-                 % (cx, cx, BRASS))
+                 % (cx, cx, pal['orrery_sun']))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
         for name, a in SEMI_MAJOR_AU.items():
@@ -375,11 +421,11 @@ class SkyPage:
             if name == 'earth':
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="2">'
                          '<title>Earth &#8212; heliocentric longitude %.1f&#176;</title></circle>'
-                         % (x, y, INK, BRASS, hlongs[name]))
+                         % (x, y, pal['earth_fill'], pal['earth_stroke'], hlongs[name]))
             else:
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="1.5">'
                          '<title>%s &#8212; heliocentric longitude %.1f&#176;</title></circle>'
-                         % (x, y, BODY_COLOR[name], NIGHT, _cap(name), hlongs[name]))
+                         % (x, y, pal['body'][name], pal['halo'], _cap(name), hlongs[name]))
             # Label away from center, but flip near the right edge so a
             # body close to 0 degrees (Neptune, for years) is not clipped.
             anchor = 'start' if x >= cx else 'end'
@@ -391,8 +437,10 @@ class SkyPage:
         return ''.join(p)
 
     # ── analemma ─────────────────────────────────────────────────────────────
-    def analemma_svg(self, alm) -> str:
+    def analemma_svg(self, alm, palette: str = 'night') -> str:
         import calendar
+        pal = _palette(palette)
+        ink, muted, line = pal['ink'], pal['muted'], pal['line']
         year = time.localtime(alm.time_ts).tm_year
         # Local standard (not DST) noon, each week of the year.
         noon0 = calendar.timegm((year, 1, 1, 12, 0, 0)) + time.timezone
@@ -416,12 +464,12 @@ class SkyPage:
         p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Analemma">' % (S, S)]
         for al in range(int(al0) + 4, int(al1), 10):
             p.append('<line x1="54" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
-                     'stroke-width="1" opacity="0.55"/>' % (Y(al), S - 24, Y(al), LINE))
+                     'stroke-width="1" opacity="0.55"/>' % (Y(al), S - 24, Y(al), line))
             p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%d&#176;</text>'
                      % (Y(al) + 4, al))
         for az in range(int(az0) + 4, int(az1), 10):
             p.append('<line x1="%.1f" y1="20" x2="%.1f" y2="%d" stroke="%s" '
-                     'stroke-width="1" opacity="0.35"/>' % (X(az), X(az), S - 54, LINE))
+                     'stroke-width="1" opacity="0.35"/>' % (X(az), X(az), S - 54, line))
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%d&#176;</text>'
                      % (X(az), S - 36, az))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">azimuth</text>'
@@ -429,7 +477,7 @@ class SkyPage:
         path = ' '.join('%s%.1f %.1f' % ('M' if i == 0 else 'L', X(q['az']), Y(q['alt']))
                         for i, q in enumerate(pts)) + ' Z'
         p.append('<path d="%s" fill="none" stroke="%s" stroke-width="1.5" opacity="0.9"/>'
-                 % (path, INK))
+                 % (path, ink))
         month_seen: set = set()
         for q in pts:
             mon = time.strftime('%b', time.localtime(q['ts']))
@@ -437,7 +485,7 @@ class SkyPage:
             month_seen.add(mon)
             p.append('<circle cx="%.1f" cy="%.1f" r="2" fill="%s">'
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (X(q['az']), Y(q['alt']), MUTED, _t_date(q['ts']), q['alt'], q['az']))
+                     % (X(q['az']), Y(q['alt']), muted, _t_date(q['ts']), q['alt'], q['az']))
             if first and mon in ('Jan', 'Mar', 'Jun', 'Sep', 'Nov'):
                 dx = 9 if q['az'] >= (az0 + az1) / 2 else -9
                 p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono gridlab">%s</text>'
@@ -445,14 +493,16 @@ class SkyPage:
         today = min(pts, key=lambda q: abs(q['ts'] - alm.time_ts))
         p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="1.5">'
                  '<title>This week &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                 % (X(today['az']), Y(today['alt']), BRASS, NIGHT, today['alt'], today['az']))
+                 % (X(today['az']), Y(today['alt']), pal['brass'], pal['halo'],
+                    today['alt'], today['az']))
         p.append('<text x="%.1f" y="%.1f" class="todaylab">today</text>'
                  % (X(today['az']) + 10, Y(today['alt']) + 4))
         p.append('</svg>')
         return ''.join(p)
 
     # ── chips and table ──────────────────────────────────────────────────────
-    def chips_html(self, alm) -> str:
+    def chips_html(self, alm, palette: str = 'night') -> str:
+        body_color = _palette(palette)['body']
         rows = []
         sun = self._body(alm, 'sun')
         tw = self._twilight(alm)
@@ -461,7 +511,7 @@ class SkyPage:
             '<div><div class="chipname">Daylight</div>'
             '<div class="chipline mono">%s &#183; sun %s &#8594; %s</div>'
             '<div class="chipsub mono">civil dusk %s &#183; astro dark %s</div></div></div>'
-            % (BODY_COLOR['sun'], _dur_hm(sun['visible']), _t_hm(sun['rise']),
+            % (body_color['sun'], _dur_hm(sun['visible']), _t_hm(sun['rise']),
                _t_hm(sun['set']), _t_hm(tw['civil_dusk']), _t_hm(tw['astro_dusk'])))
         for name in PLANETS:
             b = self._body(alm, name)
@@ -485,10 +535,11 @@ class SkyPage:
                 '<div class="chip"><span class="dot" style="background:%s"></span>'
                 '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
                 '<div class="chipsub mono">%s</div>%s</div></div>'
-                % (BODY_COLOR[name], _cap(name), line, sub, extra))
+                % (body_color[name], _cap(name), line, sub, extra))
         return '\n'.join(rows)
 
-    def table_html(self, alm) -> str:
+    def table_html(self, alm, palette: str = 'night') -> str:
+        body_color = _palette(palette)['body']
         rows = []
         for name in ['sun', 'moon'] + PLANETS:
             b = self._body(alm, name)
@@ -499,7 +550,7 @@ class SkyPage:
             rows.append('<tr><td class="tname"><span class="dot" style="background:%s">'
                         '</span>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
                         '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%+.1f</td><td>%s</td></tr>'
-                        % (BODY_COLOR[name], _cap(name), _t_hm(b['rise']), _t_hm(b['transit']),
+                        % (body_color[name], _cap(name), _t_hm(b['rise']), _t_hm(b['transit']),
                            _t_hm(b['set']), _dur_hm(b['visible']),
                            b['alt'], b['az'], b['mag'], dist))
         return ('<table><thead><tr><th>Body</th><th>Rise</th><th>Transit</th><th>Set</th>'

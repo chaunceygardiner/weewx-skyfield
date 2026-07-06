@@ -166,6 +166,70 @@ class TestPanels:
         assert len(page._memo) == n
 
 
+class TestPalettes:
+    """Every render method takes palette= ('night'/'light'); the default
+    'night' output must be unchanged from before the kwarg existed."""
+
+    RENDERERS = ('moon_svg', 'dome_svg', 'ribbons_svg', 'orrery_svg',
+                 'analemma_svg', 'chips_html', 'table_html',
+                 'countdown_html', 'header_sub')
+
+    # The complete set of night-plate colors ever baked into markup.
+    NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358', '#0A0F22',
+                   '#1E2745', '#DDD8C4', '#161F3D', '#1B2749', '#2A3A63',
+                   '#0B1129', '#131B38', '#1A2547', '#233153', '#2E3D5C',
+                   '#B98C31', '#7E92DA', '#C04F36')
+
+    def test_default_is_night(self, almanac, page):
+        for name in self.RENDERERS:
+            meth = getattr(page, name)
+            assert meth(almanac) == meth(almanac, palette='night')
+
+    def test_night_goldens(self, almanac, page):
+        """Default output still bakes the original night-plate values, so
+        the shipped Sky page and existing users see identical markup."""
+        dome = page.dome_svg(almanac)
+        for hexval in ('#161F3D', '#1B2749', '#2A3A63',     # dome gradient
+                       '#2A3358', '#D3A94C', '#E9E4D4', '#0A0F22'):
+            assert hexval in dome
+        assert '#2E3D5C' in page.ribbons_svg(almanac)       # day twilight band
+        moon = page.moon_svg(almanac)
+        for hexval in ('#1E2745', '#DDD8C4', '#2A3358'):    # disc + ring
+            assert hexval in moon
+        assert '#B98C31' in page.chips_html(almanac)        # sun identity dot
+
+    def test_light_panels(self, almanac, page):
+        """Every panel renders balanced with palette='light' and bakes no
+        night-plate color."""
+        for name in self.RENDERERS:
+            markup = getattr(page, name)(almanac, palette='light')
+            assert_balanced(markup)
+            for hexval in self.NIGHT_HEXES:
+                assert hexval not in markup, '%s leaked night %s' % (name, hexval)
+
+    def test_light_values(self, almanac, page):
+        dome = page.dome_svg(almanac, palette='light')
+        for hexval in ('#ffffff', '#efece2',                # dome gradient
+                       '#8a94a6', '#1d2c4e', '#c9cfd8'):    # rim, ink, line
+            assert hexval in dome
+        ribbons = page.ribbons_svg(almanac, palette='light')
+        for hexval in ('#D7E6F5', '#B45309', '#B8860B'):    # day band, now, sun
+            assert hexval in ribbons
+        orrery = page.orrery_svg(almanac, palette='light')
+        for hexval in ('#B8860B', '#2e6e8e', '#ffffff'):    # sun, earth, halo
+            assert hexval in orrery
+        moon = page.moon_svg(almanac, palette='light')
+        for hexval in ('#26314F', '#F2ECD8', '#888888'):    # disc + ring
+            assert hexval in moon
+        assert '#B45309' in page.analemma_svg(almanac, palette='light')
+        assert '#b23a24' in page.table_html(almanac, palette='light')   # mars
+
+    def test_unknown_palette_raises(self, almanac, page):
+        for name in self.RENDERERS:
+            with pytest.raises(ValueError, match='light, night'):
+                getattr(page, name)(almanac, palette='sepia')
+
+
 class TestSkinFiles:
     SKIN_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield')
 
