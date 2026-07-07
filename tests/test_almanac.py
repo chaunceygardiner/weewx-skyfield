@@ -22,6 +22,8 @@ import time
 
 import pytest
 
+import skyfield.api
+
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, 'bin', 'user'))
@@ -1071,3 +1073,26 @@ class TestSeasonsSkinTags:
     def test_without_pyephem(self, skyfield_only_almanac, expression):
         value = eval(expression, {'almanac': skyfield_only_almanac})
         assert value is not None and str(value) != '', expression
+
+
+def test_stamps_within_drops_wild_times():
+    """Skyfield's find_risings/find_settings can emit a numerically wild
+    time (near Julian day zero, the "year -4713") when a body barely grazes
+    the horizon; converting it to a datetime raises ValueError and, before
+    the stamps_within guard, cost a report cycle its page (production,
+    2026-07-06).  Times outside the search window are dropped unconverted."""
+    ts = skyfield.api.load.timescale(builtin=True)
+    t0 = ts.utc(2026, 7, 6)
+    t1 = ts.utc(2026, 7, 8)
+    good = ts.utc(2026, 7, 6, 12)
+    wild = ts.tt_jd(0.0)
+    # The wild time is exactly the crash the guard prevents.
+    with pytest.raises(ValueError):
+        wild.utc_datetime()
+    stamps = wxskyfield.stamps_within([good, wild], [True, True], t0, t1)
+    assert stamps == [good.utc_datetime().timestamp()]
+    # Unflagged events are dropped regardless.
+    assert wxskyfield.stamps_within([good], [False], t0, t1) == []
+    # An event just outside the window is not this day's event.
+    outside = ts.utc(2026, 7, 12)
+    assert wxskyfield.stamps_within([outside], [True], t0, t1) == []

@@ -48,7 +48,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.2'
+WXSKYFIELD_VERSION = '1.3'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -546,6 +546,24 @@ EPHEMERIS_KEYS: Dict[str, str] = {
     'neptune': 'neptune barycenter',
     'pluto'  : 'pluto barycenter',
 }
+
+def stamps_within(times, flags, t0, t1) -> List[float]:
+    """Timestamps of the flagged skyfield event times that lie inside the
+    search window [t0, t1].  Skyfield's find_risings/find_settings can emit
+    a numerically wild time (near Julian day zero, the "year -4713") when a
+    body barely grazes the horizon; converting such a time to a datetime
+    raises ValueError and, before this guard, cost a report cycle its page
+    (seen once in production, 2026-07-06).  A time outside the window is by
+    definition not this day's event, so it is dropped before conversion."""
+    stamps: List[float] = []
+    for t, flag in zip(times, flags):
+        if not flag:
+            continue
+        if not (t0.tt - 0.1 <= t.tt <= t1.tt + 0.1):
+            continue
+        stamps.append(t.utc_datetime().timestamp())
+    return stamps
+
 
 def find_discrete_events(f, t0, t1, code_sets: Tuple[Tuple[int, ...], ...],
                          previous: bool = False) -> List[Optional[float]]:
@@ -1163,7 +1181,7 @@ class SkyfieldAlmanacBinder:
         t1 = self.almanac_type.skyfield_time(end_ts)
         finder = skyfield.almanac.find_risings if rise else skyfield.almanac.find_settings
         times, crosses = finder(observer, orb, t0, t1, horizon_degrees=self.horizon_degrees())
-        stamps = [t.utc_datetime().timestamp() for t, crossed in zip(times, crosses) if crossed]
+        stamps = stamps_within(times, crosses, t0, t1)
         if not stamps:
             return None
         return stamps[-1] if previous else stamps[0]
@@ -1178,7 +1196,7 @@ class SkyfieldAlmanacBinder:
         # meridian_transits reports 1 for an upper (meridian) transit and 0 for
         # a lower (antimeridian) transit.
         wanted = 0 if antitransit else 1
-        stamps = [t.utc_datetime().timestamp() for t, event in zip(times, events) if event == wanted]
+        stamps = stamps_within(times, [event == wanted for event in events], t0, t1)
         if not stamps:
             return None
         return stamps[-1] if previous else stamps[0]

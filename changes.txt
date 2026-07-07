@@ -1,6 +1,21 @@
 weewx-skyfield change history
 -----------------------------
 
+1.3 Release 2026/07/06
+----------------------
+- Harden rise/set/transit event conversion against a rare skyfield
+  numerical edge: find_risings/find_settings can emit a wildly wrong event
+  time (near Julian day zero -- "Python's datetime does not support
+  negative years like the year -4713") when a body barely grazes the
+  horizon.  Converting it crashed template generation for that report
+  cycle (seen once in production).  Event times are now filtered to the
+  search window before conversion (a time outside the window is by
+  definition not that day's event), in the new stamps_within helper used
+  by both find_rise_set and find_transit.  Regression test included.
+- Housekeeping: SKIN_VERSION in skins/Skyfield/skin.conf now tracks the
+  extension version (it had been left at 1.0 through 1.1 and 1.2; the skin
+  files themselves were unchanged in those releases).
+
 1.2 Release 2026/07/06
 ----------------------
 - Chart label placement fixes, prompted by the paloaltoweather.com celestial
