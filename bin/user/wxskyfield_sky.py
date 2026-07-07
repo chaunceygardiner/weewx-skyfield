@@ -11,14 +11,18 @@ could use.  The page is self-contained -- inline SVG, system fonts, no
 JavaScript libraries and nothing fetched at run time.
 """
 
+import functools
+import logging
 import math
 import time
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import weewx.almanac
 
 from weewx.cheetahgenerator import SearchList
+
+log = logging.getLogger(__name__)
 
 # ── palettes ─────────────────────────────────────────────────────────────────
 # Every render method takes palette= naming an entry here.  'night' is the
@@ -65,11 +69,38 @@ PALETTES: Dict[str, Dict[str, Any]] = {
 }
 
 
+class SkyPageUsageError(ValueError):
+    """A template-author error (e.g. an unknown palette name).  Re-raised
+    through the panel guard: it should fail loudly at development time,
+    not blank a panel."""
+
+
 def _palette(name: str) -> Dict[str, Any]:
     if name not in PALETTES:
-        raise ValueError('unknown palette %r; valid palettes: %s'
-                         % (name, ', '.join(sorted(PALETTES))))
+        raise SkyPageUsageError('unknown palette %r; valid palettes: %s'
+                                % (name, ', '.join(sorted(PALETTES))))
     return PALETTES[name]
+
+
+def _panel_guard(fallback: Any = '') -> Callable:
+    """Wrap a $sky_page render method so a failure costs only its own panel:
+    the error is logged and the panel renders as `fallback`.  Without this,
+    one raising tag takes out the whole Sky page for that report cycle --
+    exactly how the (since-guarded) wild skyfield event time fixed in 1.3
+    presented.  SkyPageUsageError passes through unchanged."""
+    def decorate(method: Callable) -> Callable:
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            try:
+                return method(self, *args, **kwargs)
+            except SkyPageUsageError:
+                raise
+            except Exception as e:
+                log.error('sky_page.%s failed (%s: %s); rendering that panel blank.'
+                          % (method.__name__, type(e).__name__, e))
+                return fallback
+        return wrapper
+    return decorate
 
 PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
 SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
@@ -190,9 +221,11 @@ class SkyPage:
         return out
 
     # ── template conveniences ─────────────────────────────────────────────────
+    @_panel_guard(fallback=False)
     def sun_is_up(self, alm) -> bool:
         return bool(self._body(alm, 'sun')['alt'] > 0)
 
+    @_panel_guard()
     def header_sub(self, alm, palette: str = 'night') -> str:
         _palette(palette)
         lat, lon = alm.lat, alm.lon
@@ -200,6 +233,7 @@ class SkyPage:
             abs(lat), 'N' if lat >= 0 else 'S', abs(lon), 'E' if lon >= 0 else 'W',
             time.strftime('%A, %B %-d %Y, %-H:%M %Z', time.localtime(alm.time_ts)))
 
+    @_panel_guard()
     def countdown_html(self, alm, palette: str = 'night') -> str:
         _palette(palette)
         chips = []
@@ -240,6 +274,7 @@ class SkyPage:
                        'stroke="%s" stroke-width="1"/>' % (cx, cy, R, pal['moon_ring']))
         return ''.join(out)
 
+    @_panel_guard()
     def moon_svg(self, alm, size: int = 76, palette: str = 'night') -> str:
         c = size / 2.0
         return ('<svg width="%d" height="%d" viewBox="0 0 %d %d" aria-label="Moon phase">%s</svg>'
@@ -252,6 +287,7 @@ class SkyPage:
         a = math.radians(az)
         return cx - r * math.sin(a), cy - r * math.cos(a)
 
+    @_panel_guard()
     def dome_svg(self, alm, palette: str = 'night', label_scale: float = 1.0) -> str:
         """label_scale grows every dome label (stars, bodies, cardinals, ring
         degrees) by that factor -- font sizes are emitted inline so the
@@ -376,6 +412,7 @@ class SkyPage:
         return ''.join(p)
 
     # ── rise/set ribbons ─────────────────────────────────────────────────────
+    @_panel_guard()
     def ribbons_svg(self, alm, palette: str = 'night') -> str:
         import weeutil.weeutil
         pal = _palette(palette)
@@ -450,6 +487,7 @@ class SkyPage:
         return ''.join(p)
 
     # ── orrery ───────────────────────────────────────────────────────────────
+    @_panel_guard()
     def orrery_svg(self, alm, palette: str = 'night') -> str:
         pal = _palette(palette)
         S, cx = 480, 240
@@ -512,6 +550,7 @@ class SkyPage:
         return ''.join(p)
 
     # ── analemma ─────────────────────────────────────────────────────────────
+    @_panel_guard()
     def analemma_svg(self, alm, palette: str = 'night') -> str:
         import calendar
         pal = _palette(palette)
@@ -594,6 +633,7 @@ class SkyPage:
         return ''.join(p)
 
     # ── chips and table ──────────────────────────────────────────────────────
+    @_panel_guard()
     def chips_html(self, alm, palette: str = 'night') -> str:
         body_color = _palette(palette)['body']
         rows = []
@@ -631,6 +671,7 @@ class SkyPage:
                 % (body_color[name], _cap(name), line, sub, extra))
         return '\n'.join(rows)
 
+    @_panel_guard()
     def table_html(self, alm, palette: str = 'night') -> str:
         body_color = _palette(palette)['body']
         rows = []

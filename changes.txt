@@ -1,6 +1,17 @@
 weewx-skyfield change history
 -----------------------------
 
+1.4 (not yet released)
+----------------------
+- Sky page resilience: every $sky_page method (moon_svg, dome_svg,
+  ribbons_svg, orrery_svg, analemma_svg, chips_html, table_html,
+  countdown_html, header_sub, sun_is_up) now catches its own failures,
+  logs the error, and renders that panel blank -- an unexpected error
+  costs one panel, not the whole Sky page for that report cycle (defense
+  in depth after the skyfield edge case guarded in 1.3).  Template-author
+  errors are unaffected: an unknown palette name still raises the error
+  listing the valid names.
+
 1.3 Release 2026/07/06
 ----------------------
 - Harden rise/set/transit event conversion against a rare skyfield

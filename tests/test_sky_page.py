@@ -10,6 +10,7 @@ Cheetah template and skin.conf must parse.
 """
 
 import contextlib
+import logging
 import os
 import re
 import sys
@@ -228,6 +229,44 @@ class TestPalettes:
         for name in self.RENDERERS:
             with pytest.raises(ValueError, match='light, night'):
                 getattr(page, name)(almanac, palette='sepia')
+
+
+class TestPanelGuard:
+    """A failure inside one $sky_page method must cost only that panel:
+    the guard logs the error and renders the panel blank instead of
+    killing the whole Sky page for the report cycle (which is how the
+    wild skyfield event time fixed in 1.3 presented)."""
+
+    @staticmethod
+    def _break_bodies(monkeypatch):
+        def boom(self, alm, name):
+            raise ValueError("Python's datetime does not support negative years")
+        monkeypatch.setattr(wxskyfield_sky.SkyPage, '_body', boom)
+
+    def test_failed_panel_is_blank_and_logged(self, almanac, page, monkeypatch, caplog):
+        self._break_bodies(monkeypatch)
+        with caplog.at_level(logging.ERROR, logger='wxskyfield_sky'):
+            for name in ('dome_svg', 'ribbons_svg', 'chips_html', 'table_html'):
+                assert getattr(page, name)(almanac) == ''
+                assert 'sky_page.%s failed' % name in caplog.text
+        assert 'negative years' in caplog.text
+
+    def test_sun_is_up_fails_closed(self, almanac, page, monkeypatch):
+        self._break_bodies(monkeypatch)
+        assert page.sun_is_up(almanac) is False
+
+    def test_healthy_panels_unaffected(self, almanac, page, monkeypatch):
+        """A panel that does not touch the broken helper still renders."""
+        self._break_bodies(monkeypatch)
+        assert_balanced(page.moon_svg(almanac))
+        assert page.countdown_html(almanac).count('class="count"') == 4
+
+    def test_usage_errors_still_raise(self, almanac, page, monkeypatch):
+        """The guard is for runtime surprises only: a template-author error
+        (unknown palette) must keep failing loudly, not blank the panel."""
+        self._break_bodies(monkeypatch)
+        with pytest.raises(ValueError, match='light, night'):
+            page.dome_svg(almanac, palette='sepia')
 
 
 class TestSkinFiles:
