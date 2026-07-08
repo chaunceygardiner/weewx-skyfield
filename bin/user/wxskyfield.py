@@ -48,7 +48,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.3'
+WXSKYFIELD_VERSION = '1.4'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -547,6 +547,51 @@ EPHEMERIS_KEYS: Dict[str, str] = {
     'pluto'  : 'pluto barycenter',
 }
 
+# ── result cache ─────────────────────────────────────────────────────────────
+# Report generation asks the same expensive questions over and over: every
+# template mention of $almanac.moon.rise runs a fresh find_risings scan, a
+# page's desktop and smartphone twins repeat each other's work, and the
+# day-window verbs (rise/set/transit, searched from local midnight) return
+# the same instant for every almanac time within the day.  Cache at the
+# computation layer -- raw floats only, never ValueHelpers, which carry the
+# calling skin's formatter.  Two pools: day-window search results survive
+# across report cycles (their keys name the search window and location);
+# instantaneous positions are keyed on the exact timestamp, collapsing
+# repeats within a cycle -- and across cycles for time-traveled tags
+# anchored to fixed instants (an analemma's weekly noons, a moon calendar's
+# days).  On overflow a pool is simply cleared: correctness never depends
+# on an entry being present.
+_DAY_CACHE: Dict[Tuple, Any] = {}
+_POS_CACHE: Dict[Tuple, Any] = {}
+_DAY_CACHE_CAP = 4096
+_POS_CACHE_CAP = 16384
+_MISS = object()
+
+# Rise/set cache keys quantize the effective horizon to this granularity.
+# The horizon includes refraction scaled by the almanac's current
+# temperature and pressure, which drift a few thousandths of a degree
+# between report cycles; without quantization no day-window entry would
+# ever be reused.  0.002 degrees of horizon moves a mid-latitude rise or
+# set by well under a second (worst measured 0.64 s over a 15-hour replay
+# of real sensor data), so a cached time disagrees with a fresh one by a
+# displayed (truncated) minute only when the true time sits within that
+# fraction of a second of the boundary.  (0.02 originally; its ~5 s of
+# drift flipped displayed minutes on boundary-straddling times -- seen on
+# the bambi5t/ella5t soak, 2026-07-08.)
+_HORIZON_QUANTUM_DEGREES = 0.002
+
+
+def _cached(cache: Dict[Tuple, Any], cap: int, key: Tuple,
+            compute: Callable[[], Any]) -> Any:
+    value = cache.get(key, _MISS)
+    if value is _MISS:
+        value = compute()
+        if len(cache) >= cap:
+            cache.clear()
+        cache[key] = value
+    return value
+
+
 def stamps_within(times, flags, t0, t1) -> List[float]:
     """Timestamps of the flagged skyfield event times that lie inside the
     search window [t0, t1].  Skyfield's find_risings/find_settings can emit
@@ -973,14 +1018,28 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
                            formatter=almanac_obj.formatter,
                            converter=almanac_obj.converter)
 
-    def find_event(self, almanac_obj, f, codes: Tuple[int, ...], previous: bool, window_days: int) -> ValueHelper:
-        """Search for the next (or previous) discrete event of the given type(s)."""
+    def find_event(self, almanac_obj, f, codes: Tuple[int, ...], previous: bool, window_days: int,
+                   cache_key: Optional[str] = None) -> ValueHelper:
+        """Search for the next (or previous) discrete event of the given type(s).
+
+        With a cache_key (the tag name, e.g. 'next_full_moon'), the found
+        event is reused for any almanac time between the time it was
+        computed for and the event itself: no event of that kind lies in
+        between, or the search would have found it.  These events are
+        geocentric, so location plays no part in the key."""
+        time_ts = almanac_obj.time_ts
+        if cache_key is not None:
+            hit = _DAY_CACHE.get(('event', cache_key), _MISS)
+            if hit is not _MISS:
+                valid_from, valid_to, event_ts = hit
+                if valid_from <= time_ts <= valid_to:
+                    return self.time_value(almanac_obj, event_ts, 'ephem_year')
         if previous:
-            t0 = self.skyfield_time(almanac_obj.time_ts - window_days * 86400)
-            t1 = self.skyfield_time(almanac_obj.time_ts)
+            t0 = self.skyfield_time(time_ts - window_days * 86400)
+            t1 = self.skyfield_time(time_ts)
         else:
-            t0 = self.skyfield_time(almanac_obj.time_ts)
-            t1 = self.skyfield_time(almanac_obj.time_ts + window_days * 86400)
+            t0 = self.skyfield_time(time_ts)
+            t1 = self.skyfield_time(time_ts + window_days * 86400)
         try:
             event_ts = find_discrete_events(f, t0, t1, (codes,), previous)[0]
         except skyfield.errors.EphemerisRangeError:
@@ -988,6 +1047,13 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             # time itself is inside it, or get_almanac_data would already
             # have declined).  Let the next almanac serve the tag.
             raise weewx.UnknownType('event search outside the ephemeris span')
+        if cache_key is not None and event_ts is not None:
+            if len(_DAY_CACHE) >= _DAY_CACHE_CAP:
+                _DAY_CACHE.clear()
+            if previous:
+                _DAY_CACHE[('event', cache_key)] = (event_ts, time_ts, event_ts)
+            else:
+                _DAY_CACHE[('event', cache_key)] = (time_ts, event_ts, event_ts)
         return self.time_value(almanac_obj, event_ts, 'ephem_year')
 
     def get_almanac_data(self, almanac_obj, attr: str):
@@ -1006,8 +1072,11 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         elif attr == 'sunset':
             return almanac_obj.sun.set
         elif attr in ('moon_phase', 'moon_index', 'moon_fullness'):
-            pkt_datetime = datetime.fromtimestamp(almanac_obj.time_ts, timezone.utc)
-            moon_phase_degrees, percent_illumination = self.sky.get_moon_phase(self.ts, pkt_datetime)
+            time_ts = almanac_obj.time_ts
+            moon_phase_degrees, percent_illumination = _cached(
+                _POS_CACHE, _POS_CACHE_CAP, ('moon_phase', time_ts),
+                lambda: self.sky.get_moon_phase(
+                    self.ts, datetime.fromtimestamp(time_ts, timezone.utc)))
             if attr == 'moon_fullness':
                 return int(percent_illumination + 0.5)
             index = self.sky.get_moon_phase_index(moon_phase_degrees)
@@ -1016,10 +1085,12 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             return almanac_obj.moon_phases[index]
         elif attr in SEASON_EVENTS:
             previous, codes = SEASON_EVENTS[attr]
-            return self.find_event(almanac_obj, skyfield.almanac.seasons(self.sky.planets), codes, previous, 370)
+            return self.find_event(almanac_obj, skyfield.almanac.seasons(self.sky.planets), codes,
+                                   previous, 370, cache_key=attr)
         elif attr in MOON_EVENTS:
             previous, codes = MOON_EVENTS[attr]
-            return self.find_event(almanac_obj, skyfield.almanac.moon_phases(self.sky.planets), codes, previous, 32)
+            return self.find_event(almanac_obj, skyfield.almanac.moon_phases(self.sky.planets), codes,
+                                   previous, 32, cache_key=attr)
         elif attr in ('sidereal_time', 'sidereal_angle'):
             geographic, _ = self.location(almanac_obj)
             degrees = geographic.lst_hours_at(self.skyfield_time(almanac_obj.time_ts)) * 15.0
@@ -1146,8 +1217,15 @@ class SkyfieldAlmanacBinder:
         """The body's apparent angular radius for rise/set purposes,
         evaluated at the start of the almanac's day (so a day's rise and
         set share one horizon)."""
+        a = self.almanac
+        sod_ts = self.start_of_day_ts()
+        key = ('radius', self.heavenly_body, sod_ts, a.lat, a.lon, a.altitude)
+        return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
+                       lambda: self._apparent_radius_degrees(sod_ts))
+
+    def _apparent_radius_degrees(self, sod_ts: float) -> float:
         _, observer = self.almanac_type.location(self.almanac)
-        t = self.almanac_type.skyfield_time(self.start_of_day_ts())
+        t = self.almanac_type.skyfield_time(sod_ts)
         return self.almanac_type.sky.rise_set_radius_degrees(
             t, self.heavenly_body, self.target_body(), observer=observer)
 
@@ -1175,18 +1253,36 @@ class SkyfieldAlmanacBinder:
         return h
 
     def find_rise_set(self, rise: bool, start_ts: float, end_ts: float, previous: bool = False) -> Optional[float]:
+        a = self.almanac
+        horizon = self.horizon_degrees()
+        key = ('rise' if rise else 'set', self.heavenly_body,
+               start_ts, end_ts, previous, a.lat, a.lon, a.altitude,
+               round(horizon / _HORIZON_QUANTUM_DEGREES))
+        return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
+                       lambda: self._find_rise_set(rise, start_ts, end_ts, previous, horizon))
+
+    def _find_rise_set(self, rise: bool, start_ts: float, end_ts: float,
+                       previous: bool, horizon: float) -> Optional[float]:
         _, observer = self.almanac_type.location(self.almanac)
         orb = self.target_body()
         t0 = self.almanac_type.skyfield_time(start_ts)
         t1 = self.almanac_type.skyfield_time(end_ts)
         finder = skyfield.almanac.find_risings if rise else skyfield.almanac.find_settings
-        times, crosses = finder(observer, orb, t0, t1, horizon_degrees=self.horizon_degrees())
+        times, crosses = finder(observer, orb, t0, t1, horizon_degrees=horizon)
         stamps = stamps_within(times, crosses, t0, t1)
         if not stamps:
             return None
         return stamps[-1] if previous else stamps[0]
 
     def find_transit(self, antitransit: bool, start_ts: float, end_ts: float, previous: bool = False) -> Optional[float]:
+        a = self.almanac
+        key = ('antitransit' if antitransit else 'transit', self.heavenly_body,
+               start_ts, end_ts, previous, a.lat, a.lon, a.altitude)
+        return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
+                       lambda: self._find_transit(antitransit, start_ts, end_ts, previous))
+
+    def _find_transit(self, antitransit: bool, start_ts: float, end_ts: float,
+                      previous: bool) -> Optional[float]:
         geographic, _ = self.almanac_type.location(self.almanac)
         orb = self.target_body()
         t0 = self.almanac_type.skyfield_time(start_ts)
@@ -1241,6 +1337,10 @@ class SkyfieldAlmanacBinder:
         """Apparent geocentric (right ascension, declination) of date, in
         decimal degrees.  One observation serves both angles (separation
         needs the pair; two compute_angle calls would observe twice)."""
+        key = ('gradec', self.heavenly_body, self.almanac.time_ts)
+        return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._geocentric_radec_degrees)
+
+    def _geocentric_radec_degrees(self) -> Tuple[float, float]:
         sky = self.almanac_type.sky
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
         ra, dec, _ = sky.earth.at(t).observe(self.target_body()).apparent().radec('date')
@@ -1248,6 +1348,15 @@ class SkyfieldAlmanacBinder:
 
     def compute_angle(self, attr: str) -> float:
         """Compute the requested angle.  Returned in decimal degrees."""
+        a = self.almanac
+        # Temperature and pressure only matter for the refracted alt/az, but
+        # keying on them unconditionally is merely a few extra cache misses.
+        key = ('angle', self.heavenly_body, attr, a.time_ts,
+               a.lat, a.lon, a.altitude, a.temperature, a.pressure)
+        return _cached(_POS_CACHE, _POS_CACHE_CAP, key,
+                       lambda: self._compute_angle(attr))
+
+    def _compute_angle(self, attr: str) -> float:
         sky = self.almanac_type.sky
         orb = self.target_body()
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
@@ -1297,6 +1406,15 @@ class SkyfieldAlmanacBinder:
             if mag is None:
                 raise AttributeError('mag')
             return mag
+        a = self.almanac
+        # The moon's magnitude is topocentric; keying every body on location
+        # costs nothing.
+        key = ('mag', name, a.time_ts, a.lat, a.lon, a.altitude)
+        return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._magnitude)
+
+    def _magnitude(self) -> float:
+        sky = self.almanac_type.sky
+        name = self.heavenly_body
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
         if name == 'sun':
             # The sun's apparent magnitude is -26.74 at one astronomical unit.

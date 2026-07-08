@@ -3,6 +3,29 @@ weewx-skyfield change history
 
 1.4 (not yet released)
 ----------------------
+- Result cache: expensive almanac computations are now cached at the
+  computation layer, transparently (no configuration, no new tags).
+  Day-window searches -- rise/set/transit, the effective-horizon body
+  radius, and the next_*/previous_* events -- are reused across report
+  cycles (a day's moonrise is computed once, not once per mention per
+  page per cycle; a "next full moon" found once is served until it
+  happens).  Instantaneous positions (alt/az, ra/dec, magnitudes, moon
+  phase) are keyed on the exact timestamp: repeats within a cycle
+  collapse, including desktop/smartphone twin pages and almanac_time
+  loops anchored to fixed instants; a position at a new timestamp is
+  always freshly computed.  Only raw floats are cached, never
+  ValueHelpers, so skins with different formatters cannot leak into each
+  other.  One deliberate tolerance: rise/set cache keys quantize the
+  effective horizon to 0.02 degrees (refraction scaled by the almanac's
+  live temperature/pressure drifts a few thousandths of a degree per
+  cycle; without quantization nothing would ever be reused).  Worth
+  seconds of event time, below the refraction model's own uncertainty.
+  Pools are bounded and cleared wholesale on overflow; correctness never
+  depends on an entry being present.  The first cycle after a WeeWX
+  restart or after local midnight runs at full uncached cost while the
+  day's entries repopulate.  Measured on the eight-page
+  paloaltoweather.com site (~3,200 tag evaluations per cycle, Raspberry
+  Pi 5): template generation 17.7 s -> ~4.6 s per warm cycle.
 - Sky page resilience: every $sky_page method (moon_svg, dome_svg,
   ribbons_svg, orrery_svg, analemma_svg, chips_html, table_html,
   countdown_html, header_sub, sun_is_up) now catches its own failures,

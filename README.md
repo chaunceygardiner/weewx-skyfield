@@ -7,6 +7,10 @@ Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 [Skyfield](https://rhodesmill.org/skyfield/) (1.47 or later) and NumPy libraries.  PyEphem is
 NOT required.**
 
+Skyfield 1.47 is the minimum supported version; development and the test suite track the
+current Skyfield release (1.54 as of July 2026), so if you have an earlier version installed,
+upgrading is recommended — see [Upgrading Skyfield](#upgrading-skyfield).
+
 
 ## Description
 
@@ -122,6 +126,46 @@ definitions rather than PyEphem:
   libration (at most 0.04 degrees) is neglected.  Saturn's ring tilt (`earth_tilt`/`sun_tilt`)
   follows Meeus ch. 45.  All are in radians, like PyEphem's.
 
+### The result cache
+
+Report generation asks the almanac the same expensive questions over and over: every template
+mention of `$almanac.moon.rise` runs a fresh rise search, a page rendered in desktop and
+smartphone variants repeats each other's work, and the day-window verbs (`rise`/`set`/`transit`,
+searched from local midnight) return the same instant for every almanac time within the day.
+Since 1.4, results are cached at the computation layer, transparently — no configuration, no
+new tags:
+
+- **Day-window searches** (rise/set/transit, the effective-horizon body radius, and the
+  `next_*`/`previous_*` events) are reused across report cycles.  A "next full moon" found once
+  is served until it happens; a day's moonrise is computed once, not once per mention per page
+  per cycle.
+- **Instantaneous positions** (alt/az, ra/dec, magnitudes, moon phase) are keyed on the exact
+  timestamp: repeats within a cycle collapse (including desktop/smartphone twin pages), and
+  time-traveled tags anchored to fixed instants (`almanac_time=` loops building calendars or
+  analemmas) are reused across cycles.  A position at a *new* timestamp is always freshly
+  computed — nothing that moves on a page is ever served stale.
+
+Only raw floats are cached, never formatted values, so skins with different formatters cannot
+leak into each other.  The one deliberate tolerance: rise/set cache keys quantize the effective
+horizon to 0.002 degrees, because the default horizon scales refraction by the almanac's current
+temperature and pressure, which drift a few thousandths of a degree between report cycles.
+Within a day, a cached rise/set may therefore be served under conditions differing by up to
+that quantum — worth well under a second of event time (worst measured 0.64 s over a 15-hour
+replay of real sensor data), below the refraction model's own physical uncertainty; the
+displayed minute agrees with a fresh computation except when the true time sits within that
+fraction of a second of the boundary.  For perspective, an uncached answer is itself a moving
+target: because refraction follows the live temperature and pressure, a fresh computation of
+the same rise or set wanders a few seconds over the course of a day — the cache tracks that
+wander well within the wander itself.  Cache pools are bounded and simply cleared on
+overflow; correctness never depends on an entry being present.  Expect the first report cycle
+after a WeeWX restart, and the first after local midnight, to run at full uncached cost while
+the day's entries repopulate (in practice the midnight cycle is often much cheaper: skins with
+calendar strips or day-window loops have already cached the new day's searches).
+
+Measured on the eight-page paloaltoweather.com site (a heavy consumer: ~3,200 almanac tag
+evaluations per cycle, Raspberry Pi 5): template generation dropped from ~17.7 s per report
+cycle to ~4.6 s on warm cycles, with ~10 s for the first cycle after a restart.
+
 ### Relationship to other extensions
 
 - [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) inserts
@@ -165,6 +209,27 @@ Reports generated from then on (e.g., the Seasons skin's Celestial page) use Sky
 values.  No skin changes are needed: the extension answers the same `$almanac` tags as the
 built-in almanac.  The Sky page appears alongside your existing reports at
 `<HTML_ROOT>/skyfield/index.html` after the first report cycle.
+
+## Upgrading Skyfield
+
+Skyfield 1.47 or later works, but the extension is developed and its test suite run against
+the current Skyfield release — 1.54 as of July 2026 — and upgrading to it is recommended.  To
+see what you have:
+
+```
+/home/weewx/weewx-venv/bin/python -c 'import skyfield; print(skyfield.__version__)'
+```
+
+For a pip/venv WeeWX install, upgrade with the virtual environment's pip, then restart WeeWX:
+
+```
+source /home/weewx/weewx-venv/bin/activate
+pip install --upgrade skyfield
+```
+
+For a Debian package install, `apt` serves the distribution's version, which lags the Skyfield
+release (Debian 12 ships 1.45, below even the minimum).  Where the packaged version is too old,
+install with pip as described in the installation instructions instead.
 
 ## Entries in `Skyfield` section of `weewx.conf`:
 
