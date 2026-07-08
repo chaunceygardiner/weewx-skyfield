@@ -32,17 +32,60 @@ log = logging.getLogger(__name__)
 # the consuming skin's CSS.  Keys: ink (star dots, curves, transit ticks),
 # muted, brass (accents, now-markers), line (gridlines, orbit circles,
 # altitude rings), halo (the stroke lifting body dots off the plate), body
-# (identity colors, colorblind-validated against the plate surface),
-# twilight (mid-tone enough that identity-colored ribbon bars stay readable
-# on every band), the moon-disc fills/ring, the dome gradient stops and rim,
-# and the orrery's sun and Earth.
+# (identity colors, colorblind-validated against the plate surface), ring
+# (per-body override of the halo for bodies too pale to hold an edge on the
+# plate; pale ribbon bars also take it as a 1px stroke), twilight (mid-tone
+# enough that identity-colored ribbon bars stay readable on every band), the
+# moon-disc fills/ring, the dome gradient stops and rim, and the orrery's
+# sun and Earth.
+#
+# As of 1.5 the body colors follow the traditional astronomy scheme: yellow
+# sun, silver moon, gray Mercury, pearly Venus, blue Earth (Mars, Jupiter,
+# Saturn, Uranus and Neptune were traditional already).  Two values bend
+# tradition for legibility, the same compromise printed atlases make:
+# Mercury keeps the gray FAMILY at two weights (dark on paper, light on
+# navy), and Neptune stays a readable mid-blue on the night plate.  The
+# pre-1.5 colors survive as 'classic-night' / 'classic-light'.
 PALETTES: Dict[str, Dict[str, Any]] = {
     'night': {
+        'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
+        'line': '#2A3358', 'halo': '#0A0F22',
+        'body': {'sun': '#FFD75E', 'moon': '#C9D0DA', 'mercury': '#9CA0AC',
+                 'venus': '#F0E3BE', 'mars': '#C04F36', 'jupiter': '#D89A56',
+                 'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
+        'ring': {},
+        'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
+                     'civil': '#233153', 'day': '#2E3D5C'},
+        'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
+        'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
+        'dome_rim': '#D3A94C',
+        'orrery_sun': '#FFD75E',
+        'earth_fill': '#4FA3E3', 'earth_stroke': '#E9E4D4',
+    },
+    'light': {
+        'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
+        'line': '#c9cfd8', 'halo': '#ffffff',
+        'body': {'sun': '#FACC15', 'moon': '#D6DAE0', 'mercury': '#52525B',
+                 'venus': '#F0E4BE', 'mars': '#b23a24', 'jupiter': '#b06f2e',
+                 'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
+                 'pluto': '#6a5f96'},
+        'ring': {'sun': '#C77F00', 'moon': '#767E8A', 'venus': '#9C8B4D'},
+        'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
+                     'civil': '#9FBCDE', 'day': '#D7E6F5'},
+        'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
+        'dome_stops': (('0%', '#ffffff'), ('100%', '#efece2')),
+        'dome_rim': '#8a94a6',
+        'orrery_sun': '#FACC15',
+        'earth_fill': '#2E7DBE', 'earth_stroke': '#1B5C8F',
+    },
+    # The pre-1.5 palettes, kept for skins attached to the old colors.
+    'classic-night': {
         'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
         'line': '#2A3358', 'halo': '#0A0F22',
         'body': {'sun': '#B98C31', 'moon': '#7E92DA', 'mercury': '#AB763B',
                  'venus': '#D2B458', 'mars': '#C04F36', 'jupiter': '#D89A56',
                  'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
+        'ring': {},
         'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
                      'civil': '#233153', 'day': '#2E3D5C'},
         'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
@@ -51,13 +94,14 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'orrery_sun': '#D3A94C',
         'earth_fill': '#E9E4D4', 'earth_stroke': '#D3A94C',
     },
-    'light': {
+    'classic-light': {
         'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
         'line': '#c9cfd8', 'halo': '#ffffff',
         'body': {'sun': '#B8860B', 'moon': '#4A5FB8', 'mercury': '#8a5a24',
                  'venus': '#a8862c', 'mars': '#b23a24', 'jupiter': '#b06f2e',
                  'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
                  'pluto': '#6a5f96'},
+        'ring': {},
         'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
                      'civil': '#9FBCDE', 'day': '#D7E6F5'},
         'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
@@ -67,6 +111,12 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'earth_fill': '#2e6e8e', 'earth_stroke': '#ffffff',
     },
 }
+
+
+def _ring(pal: Dict[str, Any], name: str) -> str:
+    """The stroke for a body's mark: its ring color if the palette gives it
+    one (pale bodies on the light plate), else the plate's uniform halo."""
+    return pal.get('ring', {}).get(name, pal['halo'])
 
 
 class SkyPageUsageError(ValueError):
@@ -294,7 +344,7 @@ class SkyPage:
         collision layout always matches the rendered size.  Useful for skins
         whose pages are scaled down (fixed-canvas smartphone layouts)."""
         pal = _palette(palette)
-        ink, line, halo, body_color = pal['ink'], pal['line'], pal['halo'], pal['body']
+        ink, line, body_color = pal['ink'], pal['line'], pal['body']
         S, cx, cy, R = 680, 340, 348, 296
         star_px = 10.0 * label_scale
         body_px = 11.0 * label_scale
@@ -385,7 +435,8 @@ class SkyPage:
             x, y = self._dome_xy(cx, cy, R, b['az'], b['alt'])
             p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
                      '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.1f</title></circle>'
-                     % (x, y, body_color[name], halo, _cap(name), b['alt'], b['az'], b['mag']))
+                     % (x, y, body_color[name], _ring(pal, name), _cap(name),
+                        b['alt'], b['az'], b['mag']))
             _try_label(x, y, _cap(name), 'bodylab', 8, must=True)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
@@ -396,7 +447,7 @@ class SkyPage:
                             x + 16 * math.cos(a), y + 16 * math.sin(a), body_color['sun']))
             p.append('<circle cx="%.1f" cy="%.1f" r="9" fill="%s" stroke="%s" stroke-width="1.5">'
                      '<title>Sun &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (x, y, body_color['sun'], halo, sun['alt'], sun['az']))
+                     % (x, y, body_color['sun'], _ring(pal, 'sun'), sun['alt'], sun['az']))
             _try_label(x, y, 'Sun', 'bodylab', 19, must=True)
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
@@ -449,7 +500,12 @@ class SkyPage:
             y = TOP + i * ROW
             cy = y + ROW / 2.0
             color = body_color[b['name']]
-            p.append('<circle cx="14" cy="%.1f" r="4" fill="%s"/>' % (cy, color))
+            # Pale bodies (palette 'ring' entries) get a 1px edge on their
+            # legend dot, bars and transit tick so they hold up on the pale
+            # daytime band; saturated bodies stay stroke-free as before.
+            ring = pal.get('ring', {}).get(b['name'])
+            edge = ' stroke="%s" stroke-width="1"' % ring if ring else ''
+            p.append('<circle cx="14" cy="%.1f" r="4" fill="%s"%s/>' % (cy, color, edge))
             p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _cap(b['name'])))
             segs: List[Tuple[float, float]] = []
             if b['circumpolar']:
@@ -469,9 +525,10 @@ class SkyPage:
                 xa, xz = X(a), X(z)
                 if xz - xa < 0.5:
                     continue
-                p.append('<rect x="%.1f" y="%.1f" width="%.1f" height="10" rx="4" fill="%s">'
+                p.append('<rect x="%.1f" y="%.1f" width="%.1f" height="10" rx="4" fill="%s"%s>'
                          '<title>%s above the horizon (%s)</title></rect>'
-                         % (xa, cy - 5, xz - xa, color, _cap(b['name']), _dur_hm(b['visible'])))
+                         % (xa, cy - 5, xz - xa, color, edge,
+                            _cap(b['name']), _dur_hm(b['visible'])))
             if b['transit'] is not None and sod <= b['transit'] <= eod:
                 xt = X(b['transit'])
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="2">'
@@ -504,8 +561,10 @@ class SkyPage:
                  'stroke-dasharray="2 5" opacity="0.6"/>' % (cx + 44, cx, S - 12, cx, pal['muted']))
         p.append('<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
                  % (S - 8, cx - 8))
-        p.append('<circle cx="%d" cy="%d" r="8" fill="%s"><title>Sun</title></circle>'
-                 % (cx, cx, pal['orrery_sun']))
+        sun_ring = pal.get('ring', {}).get('sun')
+        p.append('<circle cx="%d" cy="%d" r="8" fill="%s"%s><title>Sun</title></circle>'
+                 % (cx, cx, pal['orrery_sun'],
+                    ' stroke="%s" stroke-width="1.5"' % sun_ring if sun_ring else ''))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
         labels: List[List[Any]] = []
@@ -520,7 +579,7 @@ class SkyPage:
             else:
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="1.5">'
                          '<title>%s &#8212; heliocentric longitude %.1f&#176;</title></circle>'
-                         % (x, y, pal['body'][name], pal['halo'], _cap(name), hlongs[name]))
+                         % (x, y, pal['body'][name], _ring(pal, name), _cap(name), hlongs[name]))
             # Label away from center, flipped when its estimated width would
             # leave the viewBox (a body near 0 degrees sits at the right rim
             # for years at a time), then clamped vertically.
@@ -635,16 +694,25 @@ class SkyPage:
     # ── chips and table ──────────────────────────────────────────────────────
     @_panel_guard()
     def chips_html(self, alm, palette: str = 'night') -> str:
-        body_color = _palette(palette)['body']
+        pal = _palette(palette)
+        body_color = pal['body']
+
+        def dot_style(name: str) -> str:
+            # An inset ring (no layout change) for pale bodies, mirroring the
+            # chart marks; skins size and shape .dot themselves.
+            ring = pal.get('ring', {}).get(name)
+            edge = ';box-shadow:inset 0 0 0 1.5px %s' % ring if ring else ''
+            return 'background:%s%s' % (body_color[name], edge)
+
         rows = []
         sun = self._body(alm, 'sun')
         tw = self._twilight(alm)
         rows.append(
-            '<div class="chip"><span class="dot" style="background:%s"></span>'
+            '<div class="chip"><span class="dot" style="%s"></span>'
             '<div><div class="chipname">Daylight</div>'
             '<div class="chipline mono">%s &#183; sun %s &#8594; %s</div>'
             '<div class="chipsub mono">civil dusk %s &#183; astro dark %s</div></div></div>'
-            % (body_color['sun'], _dur_hm(sun['visible']), _t_hm(sun['rise']),
+            % (dot_style('sun'), _dur_hm(sun['visible']), _t_hm(sun['rise']),
                _t_hm(sun['set']), _t_hm(tw['civil_dusk']), _t_hm(tw['astro_dusk'])))
         for name in PLANETS:
             b = self._body(alm, name)
@@ -665,15 +733,16 @@ class SkyPage:
                 extra = ('<div class="chipsub mono">ring tilt %+.1f&#176;</div>'
                          % math.degrees(alm.saturn.earth_tilt))
             rows.append(
-                '<div class="chip"><span class="dot" style="background:%s"></span>'
+                '<div class="chip"><span class="dot" style="%s"></span>'
                 '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
                 '<div class="chipsub mono">%s</div>%s</div></div>'
-                % (body_color[name], _cap(name), line, sub, extra))
+                % (dot_style(name), _cap(name), line, sub, extra))
         return '\n'.join(rows)
 
     @_panel_guard()
     def table_html(self, alm, palette: str = 'night') -> str:
-        body_color = _palette(palette)['body']
+        pal = _palette(palette)
+        body_color = pal['body']
         rows = []
         for name in ['sun', 'moon'] + PLANETS:
             b = self._body(alm, name)
@@ -681,11 +750,13 @@ class SkyPage:
                 dist = '{:,.0f} km'.format(b['dist_au'] * 149597870.7)
             else:
                 dist = '%.3f au' % b['dist_au']
-            rows.append('<tr><td class="tname"><span class="dot" style="background:%s">'
+            ring = pal.get('ring', {}).get(name)
+            edge = ';box-shadow:inset 0 0 0 1.5px %s' % ring if ring else ''
+            rows.append('<tr><td class="tname"><span class="dot" style="background:%s%s">'
                         '</span>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
                         '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%+.1f</td><td>%s</td></tr>'
-                        % (body_color[name], _cap(name), _t_hm(b['rise']), _t_hm(b['transit']),
-                           _t_hm(b['set']), _dur_hm(b['visible']),
+                        % (body_color[name], edge, _cap(name), _t_hm(b['rise']),
+                           _t_hm(b['transit']), _t_hm(b['set']), _dur_hm(b['visible']),
                            b['alt'], b['az'], b['mag'], dist))
         return ('<table><thead><tr><th>Body</th><th>Rise</th><th>Transit</th><th>Set</th>'
                 '<th>Up for</th><th>Altitude</th><th>Azimuth</th><th>Mag</th><th>Distance</th>'

@@ -168,8 +168,10 @@ class TestPanels:
 
 
 class TestPalettes:
-    """Every render method takes palette= ('night'/'light'); the default
-    'night' output must be unchanged from before the kwarg existed."""
+    """Every render method takes palette=.  As of 1.5 the default 'night'
+    and the 'light' plates bake the traditional astronomy body colors
+    (yellow sun, silver moon, gray Mercury, pearly Venus, blue Earth);
+    'classic-night'/'classic-light' preserve the pre-1.5 values."""
 
     RENDERERS = ('moon_svg', 'dome_svg', 'ribbons_svg', 'orrery_svg',
                  'analemma_svg', 'chips_html', 'table_html',
@@ -179,7 +181,7 @@ class TestPalettes:
     NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358', '#0A0F22',
                    '#1E2745', '#DDD8C4', '#161F3D', '#1B2749', '#2A3A63',
                    '#0B1129', '#131B38', '#1A2547', '#233153', '#2E3D5C',
-                   '#B98C31', '#7E92DA', '#C04F36')
+                   '#FFD75E', '#C9D0DA', '#C04F36')
 
     def test_default_is_night(self, almanac, page):
         for name in self.RENDERERS:
@@ -187,8 +189,8 @@ class TestPalettes:
             assert meth(almanac) == meth(almanac, palette='night')
 
     def test_night_goldens(self, almanac, page):
-        """Default output still bakes the original night-plate values, so
-        the shipped Sky page and existing users see identical markup."""
+        """Default output bakes the night-plate values — traditional body
+        colors as of 1.5."""
         dome = page.dome_svg(almanac)
         for hexval in ('#161F3D', '#1B2749', '#2A3A63',     # dome gradient
                        '#2A3358', '#D3A94C', '#E9E4D4', '#0A0F22'):
@@ -197,7 +199,7 @@ class TestPalettes:
         moon = page.moon_svg(almanac)
         for hexval in ('#1E2745', '#DDD8C4', '#2A3358'):    # disc + ring
             assert hexval in moon
-        assert '#B98C31' in page.chips_html(almanac)        # sun identity dot
+        assert '#FFD75E' in page.chips_html(almanac)        # sun identity dot
 
     def test_light_panels(self, almanac, page):
         """Every panel renders balanced with palette='light' and bakes no
@@ -214,16 +216,46 @@ class TestPalettes:
                        '#8a94a6', '#1d2c4e', '#c9cfd8'):    # rim, ink, line
             assert hexval in dome
         ribbons = page.ribbons_svg(almanac, palette='light')
-        for hexval in ('#D7E6F5', '#B45309', '#B8860B'):    # day band, now, sun
+        for hexval in ('#D7E6F5', '#B45309', '#FACC15'):    # day band, now, sun
             assert hexval in ribbons
         orrery = page.orrery_svg(almanac, palette='light')
-        for hexval in ('#B8860B', '#2e6e8e', '#ffffff'):    # sun, earth, halo
+        for hexval in ('#FACC15', '#2E7DBE', '#1B5C8F'):    # sun, earth + ring
             assert hexval in orrery
         moon = page.moon_svg(almanac, palette='light')
         for hexval in ('#26314F', '#F2ECD8', '#888888'):    # disc + ring
             assert hexval in moon
         assert '#B45309' in page.analemma_svg(almanac, palette='light')
         assert '#b23a24' in page.table_html(almanac, palette='light')   # mars
+
+    def test_light_rings(self, almanac, page):
+        """Pale bodies carry their ring color on the light plate: the sun's
+        orrery dot, the moon and venus ribbon bars, and the chip/table dots
+        (as an inset box-shadow).  The night plate defines no rings —
+        nothing pale needs a lift on navy."""
+        ribbons = page.ribbons_svg(almanac, palette='light')
+        for hexval in ('#767E8A', '#9C8B4D'):               # moon, venus bars
+            assert hexval in ribbons
+        assert '#C77F00' in page.orrery_svg(almanac, palette='light')
+        assert 'box-shadow:inset 0 0 0 1.5px #C77F00' in \
+            page.chips_html(almanac, palette='light')
+        assert 'box-shadow:inset 0 0 0 1.5px #767E8A' in \
+            page.table_html(almanac, palette='light')
+        assert 'box-shadow' not in page.chips_html(almanac)
+        assert 'box-shadow' not in page.table_html(almanac)
+
+    def test_classic_palettes_preserve_pre_15_colors(self, almanac, page):
+        """'classic-night'/'classic-light' bake the pre-1.5 body colors for
+        skins attached to the old look."""
+        assert '#B98C31' in page.chips_html(almanac, palette='classic-night')
+        assert '#7E92DA' in page.ribbons_svg(almanac, palette='classic-night')
+        classic_ribbons = page.ribbons_svg(almanac, palette='classic-light')
+        for hexval in ('#B8860B', '#4A5FB8'):               # old sun, old moon
+            assert hexval in classic_ribbons
+        orrery = page.orrery_svg(almanac, palette='classic-light')
+        for hexval in ('#B8860B', '#2e6e8e'):               # old sun, old earth
+            assert hexval in orrery
+        for name in self.RENDERERS:
+            assert_balanced(getattr(page, name)(almanac, palette='classic-light'))
 
     def test_unknown_palette_raises(self, almanac, page):
         for name in self.RENDERERS:

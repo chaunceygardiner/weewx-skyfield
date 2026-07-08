@@ -53,7 +53,11 @@ it less often by setting `report_timing` in the `[[SkyfieldReport]]` section of
 Skins embedding the panels themselves can pick the colors baked into the markup with each
 render method's optional `palette` argument — `'night'` (the default, shown above) or
 `'light'`, a paper-atlas plate for light-themed pages: `$sky_page.analemma_svg($almanac,
-palette='light')`.  `dome_svg` additionally takes `label_scale` (default 1.0), which grows
+palette='light')`.  As of 1.5 both plates draw the bodies in the traditional astronomy
+colors — yellow sun, silver moon, gray Mercury, pearly Venus, blue Earth, red Mars and so
+on — with pale bodies carrying a thin ring on the light plate so they hold their edge on
+paper; the pre-1.5 colors remain available as `palette='classic-night'` and
+`'classic-light'`.  `dome_svg` additionally takes `label_scale` (default 1.0), which grows
 every dome label by that factor with the collision layout following along — useful when a
 skin displays the chart scaled down, such as a fixed-canvas smartphone page:
 `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.

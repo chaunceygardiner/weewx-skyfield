@@ -1,6 +1,26 @@
 weewx-skyfield change history
 -----------------------------
 
+1.5 Release 2026/07/08
+----------------------
+- Traditional astronomy colors on both chart plates.  The Sky page charts
+  (and any skin embedding them) now draw the bodies the way star atlases
+  do: yellow sun, silver moon, gray Mercury, pearly Venus, blue Earth.
+  Mars, Jupiter, Saturn, Uranus, Neptune and Pluto were traditional
+  already and are unchanged.  Two values bend tradition for legibility,
+  the same compromise printed atlases make: Mercury keeps the gray FAMILY
+  at two weights (dark on the light plate, light on night), and Neptune
+  stays a readable mid-blue on night.  Pale bodies (sun, moon, venus) gain
+  a thin per-body ring on the light plate -- on the dome and orrery dots,
+  the ribbon bars (1px stroke) and the chip/table dots (inset box-shadow)
+  -- so they hold their edge on paper; the night plate needs no rings and
+  its markup stays as before apart from the new fills.
+  This is a VISUAL change to default output: no API, tag, skin or
+  configuration change, but pages will render with the new colors on the
+  first report cycle after upgrading.  Skins attached to the old look can
+  pass palette='classic-night' or palette='classic-light' -- the pre-1.5
+  palettes, preserved verbatim.
+
 1.4 Release 2026/07/08
 ----------------------
 - Result cache: expensive almanac computations are now cached at the
