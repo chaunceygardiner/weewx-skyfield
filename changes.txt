@@ -1,7 +1,7 @@
 weewx-skyfield change history
 -----------------------------
 
-1.4 (not yet released)
+1.4 Release 2026/07/08
 ----------------------
 - Result cache: expensive almanac computations are now cached at the
   computation layer, transparently (no configuration, no new tags).
@@ -16,10 +16,14 @@ weewx-skyfield change history
   always freshly computed.  Only raw floats are cached, never
   ValueHelpers, so skins with different formatters cannot leak into each
   other.  One deliberate tolerance: rise/set cache keys quantize the
-  effective horizon to 0.02 degrees (refraction scaled by the almanac's
+  effective horizon to 0.002 degrees (refraction scaled by the almanac's
   live temperature/pressure drifts a few thousandths of a degree per
-  cycle; without quantization nothing would ever be reused).  Worth
-  seconds of event time, below the refraction model's own uncertainty.
+  cycle; without quantization nothing would ever be reused).  Worth well
+  under a second of event time (worst measured 0.64 s over a 15-hour
+  replay of real sensor data), below the refraction model's own
+  uncertainty and small enough that displayed minutes agree with a fresh
+  computation except when the true time sits within that fraction of a
+  second of a minute boundary.
   Pools are bounded and cleared wholesale on overflow; correctness never
   depends on an entry being present.  The first cycle after a WeeWX
   restart or after local midnight runs at full uncached cost while the
