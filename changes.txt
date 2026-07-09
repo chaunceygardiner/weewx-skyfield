@@ -1,6 +1,22 @@
 weewx-skyfield change history
 -----------------------------
 
+1.6 2026/07/08
+--------------
+- The engine now reads the DE421 ephemeris fully into memory instead of
+  letting jplephem memory-map the file.  Rewriting the .bsp in place under
+  a running weewxd -- exactly what "weectl extension install" over a live
+  WeeWX does -- could kill the process with SIGBUS if a computation caught
+  the sub-second copy window; the running engine is now immune to the file
+  changing (or vanishing) underneath it.  Costs about 16 MB of resident
+  memory.
+- The Hipparcos star data licence is now documented: ESA distributes the
+  Hipparcos and Tycho Catalogues under CC BY-NC 3.0 IGO, and the README,
+  wxskyfield_stars.dat and the Sky page footer now carry the required
+  "Credit: ESA" acknowledgment.  The wxskyfield_stars.dat header also no
+  longer calls itself celestial_stars.dat (a leftover from the celestial
+  3.x extraction).
+
 1.5 Release 2026/07/08
 ----------------------
 - Traditional astronomy colors on both chart plates.  The Sky page charts

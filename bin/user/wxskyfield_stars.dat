@@ -1,12 +1,16 @@
-# celestial_stars.dat
+# wxskyfield_stars.dat
 #
 # An excerpt of the Hipparcos Catalogue (main catalog, hip_main.dat)
-# containing the named stars supported by weewx-celestial.
+# containing the named stars supported by weewx-skyfield.
 #
 # Source: The Hipparcos and Tycho Catalogues, ESA SP-1200 (1997).
 #         European Space Agency.  Distributed by the Centre de Donnees
 #         astronomiques de Strasbourg (CDS) as VizieR catalog I/239:
 #         https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat
+#
+# Licence: CC BY-NC 3.0 IGO
+#          (https://creativecommons.org/licenses/by-nc/3.0/igo/).
+#          Credit: ESA.
 #
 # Each data line is an unmodified record from hip_main.dat.
 #

@@ -20,6 +20,9 @@ generation.  Report tags such as `$almanac.sunrise`, `$almanac.moon.transit`,
 example, in the Seasons skin's Celestial page) are computed with Skyfield and JPL's DE421
 ephemeris, which is installed with the extension — no downloads at runtime, and *much* more
 accurate values than PyEphem, which is deprecated by its own author in favor of Skyfield.
+As of version 1.6 the ephemeris is read fully into memory at startup (about 16 MB), so
+upgrading this extension over a running WeeWX cannot disturb — or crash — the running
+almanac; the new files take effect on the restart that follows the install.
 
 ### The Sky page
 
@@ -289,3 +292,7 @@ versions of Python 3 earlier than 3.9.
 ## Licensing
 
 weewx-skyfield is licensed under the GNU Public License v3.
+
+The bundled star catalog excerpt (`wxskyfield_stars.dat`) contains data from the Hipparcos and
+Tycho Catalogues, which ESA distributes under the
+[CC BY-NC 3.0 IGO](https://creativecommons.org/licenses/by-nc/3.0/igo/) licence.  Credit: ESA.

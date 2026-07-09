@@ -17,6 +17,7 @@ regression values.
 
 import contextlib
 import os
+import shutil
 import sys
 import time
 
@@ -1096,3 +1097,35 @@ def test_stamps_within_drops_wild_times():
     # An event just outside the window is not this day's event.
     outside = ts.utc(2026, 7, 12)
     assert wxskyfield.stamps_within([outside], [True], t0, t1) == []
+
+
+class TestInMemoryEphemeris:
+    """The engine reads the .bsp fully into RAM (InMemorySpiceKernel).
+    'weectl extension install' over a live weewxd rewrites the ephemeris in
+    place; a memory-mapped kernel dies with SIGBUS when that happens, so
+    replacing or truncating the file under a loaded kernel must not disturb
+    its computations."""
+
+    def test_kernel_matches_mmap_and_survives_truncation(self, sky, tmp_path):
+        src = os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp')
+        copy = str(tmp_path / 'wxskyfield_de421.bsp')
+        shutil.copyfile(src, copy)
+        t = sky.ts.utc(2025, 6, 21, 19)
+
+        # Same answers as skyfield's own (mmap) loader on the pristine file.
+        reference = skyfield.api.load_file(src)
+        ref_ra, ref_dec, _ = reference['earth'].at(t).observe(reference['mars']).radec()
+        kernel = wxskyfield.InMemorySpiceKernel(copy)
+        ra, dec, _ = kernel['earth'].at(t).observe(kernel['mars']).radec()
+        assert ra.radians == ref_ra.radians
+        assert dec.radians == ref_dec.radians
+
+        # Truncate the backing file to zero bytes underneath the kernel --
+        # the in-place rewrite window that used to SIGBUS weewxd.
+        open(copy, 'wb').close()
+        ra2, dec2, _ = kernel['earth'].at(t).observe(kernel['mars']).radec()
+        assert ra2.radians == ra.radians
+        assert dec2.radians == dec.radians
+
+    def test_engine_uses_in_memory_kernel(self, sky):
+        assert isinstance(sky.planets, wxskyfield.InMemorySpiceKernel)
