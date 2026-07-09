@@ -173,6 +173,8 @@ Measured on the eight-page paloaltoweather.com site (a heavy consumer: ~3,200 al
 evaluations per cycle, Raspberry Pi 5): template generation dropped from ~17.7 s per report
 cycle to ~4.6 s on warm cycles, with ~10 s for the first cycle after a restart.
 
+<<<<<<< HEAD
+=======
 ### weewx-skyfield in Action
 
 The following pages on [www.paloaltoweather.com](https://www.paloaltoweather.com/celestial.html) demonstrate what can be
@@ -184,6 +186,7 @@ accomplished with this extension and the [weewx-celestial extension](https://git
 ![Celestial Planets Page](PAW_Celestial_Planets.png)
 ![Celestial Stars Page](PAW_Celestial_Stars.png)
 
+>>>>>>> refs/remotes/origin/main
 ### Relationship to other extensions
 
 - [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) inserts
