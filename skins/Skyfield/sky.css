@@ -45,9 +45,10 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
 @media (max-width: 1159px){
   .main{display:flex; flex-direction:column}
   .primary, .rail{display:contents}
-  .sec-dome{order:1} .sec-chips{order:2} .sec-ribbons{order:3}
-  .sec-orrery{order:4} .sec-analemma{order:5} .sec-table{order:6}
-  .sec-orrery svg, .sec-analemma svg{max-width:560px; margin:0 auto}
+  .sec-dome{order:1} .sec-chips{order:2} .sec-sunpath{order:3}
+  .sec-ribbons{order:4} .sec-daylength{order:5} .sec-lunation{order:6}
+  .sec-orrery{order:7} .sec-analemma{order:8} .sec-table{order:9}
+  .sec-sunpath svg, .sec-orrery svg, .sec-analemma svg{max-width:560px; margin:0 auto}
 }
 .chips{display:flex; flex-direction:column; gap:9px}
 .chip{display:flex; gap:10px; align-items:flex-start; border-bottom:1px solid var(--line);

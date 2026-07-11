@@ -124,6 +124,32 @@ class TestPanels:
         assert_balanced(svg)
         assert '<path' in svg
 
+    def test_sunpath(self, almanac, page):
+        svg = page.sunpath_svg(almanac)
+        assert_balanced(svg)
+        # Test noon: the sun is high and the moon is up too.
+        assert '<title>Sun now' in svg
+        assert '<title>Moon now' in svg
+        for cardinal in ('N', 'E', 'S', 'W'):
+            assert '>%s</text>' % cardinal in svg
+
+    def test_daylength(self, almanac, page):
+        svg = page.daylength_svg(almanac)
+        assert_balanced(svg)
+        # A titled daylight rect for (nearly) every week of the year.
+        assert svg.count('daylight ') >= 50
+        assert 'today' in svg
+        for mon in ('Jan', 'Jun', 'Dec'):
+            assert '>%s</text>' % mon in svg
+
+    def test_lunation(self, almanac, page):
+        svg = page.lunation_svg(almanac)
+        assert_balanced(svg)
+        assert svg.count('% illuminated') == 30
+        assert 'first quarter' in svg and 'full' in svg and 'last quarter' in svg
+        assert svg.count('>new</text>') == 2      # both ends of the lunation
+        assert 'today' in svg
+
     def test_chips_and_table(self, almanac, page):
         chips = page.chips_html(almanac)
         assert_balanced(chips)
@@ -174,7 +200,8 @@ class TestPalettes:
     'classic-night'/'classic-light' preserve the pre-1.5 values."""
 
     RENDERERS = ('moon_svg', 'dome_svg', 'ribbons_svg', 'orrery_svg',
-                 'analemma_svg', 'chips_html', 'table_html',
+                 'analemma_svg', 'sunpath_svg', 'daylength_svg',
+                 'lunation_svg', 'chips_html', 'table_html',
                  'countdown_html', 'header_sub')
 
     # The complete set of night-plate colors ever baked into markup.
@@ -278,7 +305,8 @@ class TestPanelGuard:
     def test_failed_panel_is_blank_and_logged(self, almanac, page, monkeypatch, caplog):
         self._break_bodies(monkeypatch)
         with caplog.at_level(logging.ERROR, logger='wxskyfield_sky'):
-            for name in ('dome_svg', 'ribbons_svg', 'chips_html', 'table_html'):
+            for name in ('dome_svg', 'ribbons_svg', 'sunpath_svg',
+                         'chips_html', 'table_html'):
                 assert getattr(page, name)(almanac) == ''
                 assert 'sky_page.%s failed' % name in caplog.text
         assert 'negative years' in caplog.text
@@ -291,6 +319,7 @@ class TestPanelGuard:
         """A panel that does not touch the broken helper still renders."""
         self._break_bodies(monkeypatch)
         assert_balanced(page.moon_svg(almanac))
+        assert_balanced(page.lunation_svg(almanac))
         assert page.countdown_html(almanac).count('class="count"') == 4
 
     def test_usage_errors_still_raise(self, almanac, page, monkeypatch):

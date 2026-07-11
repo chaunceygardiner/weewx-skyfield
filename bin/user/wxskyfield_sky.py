@@ -5,9 +5,9 @@ Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 Distributed under the terms of the GNU Public License (GPLv3)
 
 Search-list extension for the bundled Skyfield skin: renders the "Sky" page's
-SVG panels (sky dome, rise/set ribbons, orrery, analemma, moon disc) and
-HTML blocks server-side, from the same $almanac binder tags any template
-could use.  The page is self-contained -- inline SVG, system fonts, no
+SVG panels (sky dome, rise/set ribbons, sun path, day length, lunation strip,
+orrery, analemma, moon disc) and HTML blocks server-side, from the same
+$almanac binder tags any template could use.  The page is self-contained -- inline SVG, system fonts, no
 JavaScript libraries and nothing fetched at run time.
 """
 
@@ -688,6 +688,280 @@ class SkyPage:
         lx, ly, anchor = _outward(today, 17)
         p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">today</text>'
                  % (lx, ly, anchor))
+        p.append('</svg>')
+        return ''.join(p)
+
+    # ── sun path ─────────────────────────────────────────────────────────────
+    @_panel_guard()
+    def sunpath_svg(self, alm, palette: str = 'night') -> str:
+        """The sun's altitude/azimuth arc across today, midnight to midnight,
+        over twilight-depth bands below the horizon; the moon's path dashed.
+        The azimuth axis is the fixed full circle (N through E, S, W back to
+        N) so the arc's seasonal swing reads at a glance and a circumpolar
+        sun needs no special casing."""
+        import weeutil.weeutil
+        pal = _palette(palette)
+        ink, line, body_color = pal['ink'], pal['line'], pal['body']
+        sod = weeutil.weeutil.startOfDay(alm.time_ts)
+        FLOOR = -24.0
+        sun_pts, moon_pts = [], []
+        for i in range(97):                   # every 15 minutes, both ends
+            a = alm(almanac_time=sod + i * 900)
+            sun_pts.append((i, a.sun.alt, a.sun.az))
+            moon_pts.append((i, a.moon.alt, a.moon.az))
+        alts = [alt for _i, alt, _az in sun_pts + moon_pts if alt >= FLOOR]
+        top = min(94.0, max(alts) + 8.0) if alts else 30.0
+        S, PX0, PX1, PY0, PY1 = 480, 46, 464, 18, 430
+
+        def X(az: float) -> float:
+            return PX0 + (PX1 - PX0) * az / 360.0
+
+        def Y(alt: float) -> float:
+            return PY0 + (PY1 - PY0) * (top - alt) / (top - FLOOR)
+
+        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Sun path today">' % (S, S)]
+        # Day above the horizon, then the twilight depths below it.
+        bands = [(top, 0.0, 'day'), (0.0, -6.0, 'civil'), (-6.0, -12.0, 'naut'),
+                 (-12.0, -18.0, 'astro'), (-18.0, FLOOR, 'night')]
+        for hi, lo, shade in bands:
+            hi, lo = min(hi, top), max(lo, FLOOR)
+            if hi <= lo:
+                continue
+            p.append('<rect x="%d" y="%.1f" width="%d" height="%.1f" fill="%s"/>'
+                     % (PX0, Y(hi), PX1 - PX0, Y(lo) - Y(hi), pal['twilight'][shade]))
+        for alt in (30, 60, 90):
+            if alt >= top:
+                continue
+            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
+                     'stroke-width="1" opacity="0.4"/>' % (PX0, Y(alt), PX1, Y(alt), line))
+            p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%d&#176;</text>'
+                     % (PX0 - 6, Y(alt) + 4, alt))
+        p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
+                 'stroke-width="1" opacity="0.8"/>' % (PX0, Y(0), PX1, Y(0), ink))
+        p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">0&#176;</text>'
+                 % (PX0 - 6, Y(0) + 4, ))
+        for az in range(45, 360, 45):
+            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
+                     'stroke-width="1" opacity="0.25"/>' % (X(az), PY0, X(az), PY1, line))
+        for az, label in ((0, 'N'), (90, 'E'), (180, 'S'), (270, 'W'), (360, 'N')):
+            p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono cardinal" '
+                     'style="font-size:12px">%s</text>' % (X(az), PY1 + 20, label))
+
+        def _paths(pts: List[Tuple[int, float, float]], style: str) -> None:
+            seg: List[str] = []
+            prev_az: Optional[float] = None
+            for _i, alt, az in pts:
+                if alt < FLOOR or (prev_az is not None and abs(az - prev_az) > 180):
+                    if len(seg) > 1:
+                        p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+                    seg = []
+                    prev_az = None
+                if alt >= FLOOR:
+                    seg.append('%.1f %.1f' % (X(az), Y(alt)))
+                    prev_az = az
+            if len(seg) > 1:
+                p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+
+        _paths(moon_pts, 'stroke="%s" stroke-width="1.3" stroke-dasharray="4 4" '
+               'opacity="0.85"' % body_color['moon'])
+        _paths(sun_pts, 'stroke="%s" stroke-width="2.2" opacity="0.95"' % body_color['sun'])
+        for i, alt, az in sun_pts[:-1]:
+            if i % 4 or alt < FLOOR:
+                continue
+            p.append('<circle cx="%.1f" cy="%.1f" r="1.9" fill="%s" opacity="0.9"/>'
+                     % (X(az), Y(alt), ink))
+            if i % 12 == 0 and alt > FLOOR + 4:
+                p.append('<text x="%.1f" y="%.1f" text-anchor="middle" '
+                         'class="mono gridlab">%02d</text>' % (X(az), Y(alt) - 7, i // 4))
+        moon = self._body(alm, 'moon')
+        if moon['alt'] >= FLOOR:
+            x, y = X(moon['az']), Y(moon['alt'])
+            p.append('<g>%s<title>Moon now &#8212; alt %.1f&#176;, az %.1f&#176;</title></g>'
+                     % (self._moon_disc(alm, x, y, 7, pal, ring=False),
+                        moon['alt'], moon['az']))
+        sun = self._body(alm, 'sun')
+        if sun['alt'] >= FLOOR:
+            x, y = X(sun['az']), Y(sun['alt'])
+            for k in range(8):
+                a = math.pi * k / 4
+                p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                         'stroke="%s" stroke-width="1.5"/>'
+                         % (x + 9 * math.cos(a), y + 9 * math.sin(a),
+                            x + 13 * math.cos(a), y + 13 * math.sin(a), body_color['sun']))
+            p.append('<circle cx="%.1f" cy="%.1f" r="7" fill="%s" stroke="%s" stroke-width="1.5">'
+                     '<title>Sun now &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
+                     % (x, y, body_color['sun'], _ring(pal, 'sun'), sun['alt'], sun['az']))
+        p.append('</svg>')
+        return ''.join(p)
+
+    # ── day length through the year ──────────────────────────────────────────
+    @staticmethod
+    def _daylight_state(alt: float) -> str:
+        """The twilight shade for a sun altitude -- seeds each day-length
+        column's state at the start of day, so polar day and polar night
+        (no rise/set events at all) still shade correctly."""
+        if alt >= 0:
+            return 'day'
+        if alt >= -6:
+            return 'civil'
+        if alt >= -12:
+            return 'naut'
+        if alt >= -18:
+            return 'astro'
+        return 'night'
+
+    @_panel_guard()
+    def daylength_svg(self, alm, palette: str = 'night') -> str:
+        """Sunrise, sunset and the twilight depths for every week of the
+        year, columns of local CLOCK time -- the DST steps are real and
+        deliberate.  The solid curves are sunrise and sunset, the dashed
+        curve is solar noon (the transit), the brass line is today."""
+        import calendar
+        pal = _palette(palette)
+        ink, line, brass = pal['ink'], pal['line'], pal['brass']
+        year = time.localtime(alm.time_ts).tm_year
+        # Local standard noon Jan 1, stepped weekly (as the analemma does).
+        noon0 = calendar.timegm((year, 1, 1, 12, 0, 0)) + time.timezone
+        WEEKS = 53
+        X0, X1, TOP, PH = 64, 1016, 24, 300
+        H = TOP + PH + 48
+        colw = (X1 - X0) / float(WEEKS)
+
+        def hod(ts: float) -> float:
+            lt = time.localtime(ts)
+            return lt.tm_hour + lt.tm_min / 60.0 + lt.tm_sec / 3600.0
+
+        def XW(w: float) -> float:
+            return X0 + colw * w
+
+        def Y(h: float) -> float:
+            return TOP + PH * (24.0 - h) / 24.0
+
+        rise_h: List[Optional[float]] = []
+        set_h: List[Optional[float]] = []
+        noon_h: List[Optional[float]] = []
+        cols = []
+        for w in range(WEEKS):
+            ts = noon0 + w * 7 * 86400
+            a = alm(almanac_time=ts)
+            rise, sset = _raw(a.sun.rise), _raw(a.sun.set)
+            noon = _raw(a.sun.transit)
+            tw = self._twilight(a)
+            start = self._daylight_state(alm(almanac_time=ts - 43200).sun.alt)
+            edges: List[Tuple[float, str]] = [(0.0, start)]
+            for tsv, shade in ((tw['astro_dawn'], 'astro'), (tw['nautical_dawn'], 'naut'),
+                               (tw['civil_dawn'], 'civil'), (rise, 'day'),
+                               (sset, 'civil'), (tw['civil_dusk'], 'naut'),
+                               (tw['nautical_dusk'], 'astro'), (tw['astro_dusk'], 'night')):
+                if tsv is not None:
+                    edges.append((hod(tsv), shade))
+            edges.sort(key=lambda e: e[0])    # a shade is the state AFTER its edge
+            cols.append((ts, edges, rise, sset))
+            rise_h.append(hod(rise) if rise is not None else None)
+            set_h.append(hod(sset) if sset is not None else None)
+            noon_h.append(hod(noon) if noon is not None else None)
+
+        p = ['<svg viewBox="0 0 1080 %d" role="img" aria-label="Day length through the year">'
+             % H]
+        for w, (ts, edges, rise, sset) in enumerate(cols):
+            x = XW(w)
+            for i, (h, shade) in enumerate(edges):
+                h2 = edges[i + 1][0] if i + 1 < len(edges) else 24.0
+                if h2 <= h:
+                    continue
+                rect = ('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"/>'
+                        % (x, Y(h2), colw + 0.4, Y(h) - Y(h2), pal['twilight'][shade]))
+                if shade == 'day' and rise is not None and sset is not None:
+                    rect = rect[:-2] + ('><title>%s &#8212; daylight %s</title></rect>'
+                                        % (_t_date(ts), _dur_hm(max(0.0, sset - rise))))
+                p.append(rect)
+        for h in range(0, 25, 3):
+            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
+                     'stroke-width="1" opacity="0.3"/>' % (X0, Y(h), X1, Y(h), line))
+            p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%02d</text>'
+                     % (X0 - 8, Y(h) + 4, h % 24))
+        for mon in range(1, 13):
+            ts_m = calendar.timegm((year, mon, 1, 12, 0, 0)) + time.timezone
+            wf = (ts_m - noon0) / (7 * 86400.0)
+            if wf > 0.2:
+                p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
+                         'stroke-width="1" opacity="0.25"/>'
+                         % (XW(wf), TOP, XW(wf), TOP + PH, line))
+            p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
+                     % (min(XW(wf + 2.2), X1 - 10.0), TOP + PH + 20,
+                        time.strftime('%b', time.localtime(ts_m))))
+
+        def _curve(hours: List[Optional[float]], style: str) -> None:
+            seg: List[str] = []
+            for w, h in enumerate(hours):
+                if h is None:
+                    if len(seg) > 1:
+                        p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+                    seg = []
+                    continue
+                seg.append('%.1f %.1f' % (XW(w + 0.5), Y(h)))
+            if len(seg) > 1:
+                p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+
+        _curve(noon_h, 'stroke="%s" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"' % ink)
+        _curve(rise_h, 'stroke="%s" stroke-width="1.5" opacity="0.95"' % ink)
+        _curve(set_h, 'stroke="%s" stroke-width="1.5" opacity="0.95"' % ink)
+        wf_now = min(max((alm.time_ts - noon0) / (7 * 86400.0) + 0.5, 0.0), float(WEEKS))
+        p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5"/>'
+                 % (XW(wf_now), TOP - 8, XW(wf_now), TOP + PH, brass))
+        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">today</text>'
+                 % (XW(wf_now), TOP - 12))
+        p.append('</svg>')
+        return ''.join(p)
+
+    # ── the lunar month ──────────────────────────────────────────────────────
+    @_panel_guard()
+    def lunation_svg(self, alm, palette: str = 'night') -> str:
+        """The current lunation, previous new moon to next, as a strip of
+        thirty phase discs with the principal phases dated and today's disc
+        ringed in brass."""
+        pal = _palette(palette)
+        prev_new = _raw(alm.previous_new_moon)
+        next_new = _raw(alm.next_new_moon)
+        if prev_new is None or next_new is None or next_new <= prev_new:
+            raise ValueError('lunation anchors unavailable')
+        span = float(next_new - prev_new)
+        N, M, W = 30, 40, 1000
+        y_disc, r = 66, 13
+
+        def X(ts: float) -> float:
+            return M + W * (ts - prev_new) / span
+
+        p = ['<svg viewBox="0 0 1080 152" role="img" aria-label="The lunar month">']
+        today_i = int(round((alm.time_ts - prev_new) / span * (N - 1)))
+        today_i = min(max(today_i, 0), N - 1)
+        for i in range(N):
+            ts = prev_new + span * i / (N - 1)
+            a = alm(almanac_time=ts)
+            x = M + W * i / (N - 1.0)
+            p.append('<g>%s<title>%s &#8212; %d%% illuminated</title></g>'
+                     % (self._moon_disc(a, x, y_disc, r, pal), _t_date(ts), a.moon_fullness))
+        aq = alm(almanac_time=prev_new + 3600)
+        quarters = ((prev_new, 'new'),
+                    (_raw(aq.next_first_quarter_moon), 'first quarter'),
+                    (_raw(aq.next_full_moon), 'full'),
+                    (_raw(aq.next_last_quarter_moon), 'last quarter'),
+                    (next_new, 'new'))
+        for ts_q, name in quarters:
+            if ts_q is None or not prev_new <= ts_q <= next_new:
+                continue
+            x = X(ts_q)
+            p.append('<line x1="%.1f" y1="86" x2="%.1f" y2="96" stroke="%s" '
+                     'stroke-width="1" opacity="0.7"/>' % (x, x, pal['muted']))
+            p.append('<text x="%.1f" y="115" text-anchor="middle" class="rowlab">%s</text>'
+                     % (x, name))
+            p.append('<text x="%.1f" y="133" text-anchor="middle" class="mono gridlab">%s</text>'
+                     % (x, _t_date(ts_q)))
+        x_t = M + W * today_i / (N - 1.0)
+        p.append('<circle cx="%.1f" cy="%d" r="%.1f" fill="none" stroke="%s" '
+                 'stroke-width="1.5"/>' % (x_t, y_disc, r + 4.5, pal['brass']))
+        p.append('<text x="%.1f" y="40" text-anchor="middle" class="todaylab">today</text>'
+                 % x_t)
         p.append('</svg>')
         return ''.join(p)
 

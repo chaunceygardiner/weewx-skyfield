@@ -176,3 +176,6 @@ bin/user/hip_main.dat
 # Claude Code project instructions and local settings; kept locally, not published.
 CLAUDE.md
 .claude/
+
+# Local development tools (e.g. the README panel-screenshot generator); not published.
+tools/

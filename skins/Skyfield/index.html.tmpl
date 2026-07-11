@@ -6,9 +6,10 @@
 ## computes it from the same $almanac tags available to any template.
 ##
 ## Layout: on wide screens (>= 1160px) .main is a two-track grid -- the
-## primary track (dome, ribbons, table) beside a right rail (planet chips,
-## orrery, analemma).  Below that, sky.css flattens both tracks with
-## display:contents and reorders the sections for a single column.
+## primary track (dome, ribbons, day length, lunation, table) beside a right
+## rail (planet chips, sun path, orrery, analemma).  Below that, sky.css
+## flattens both tracks with display:contents and reorders the sections for
+## a single column.
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -62,6 +63,22 @@
       astronomical twilight &mdash; the USNO geometric definitions.</p>
     </section>
 
+    <section class="sec-daylength">
+      <p class="eyebrow">The Solar Year &middot; daylight week by week</p>
+      $sky_page.daylength_svg($almanac)
+      <p class="caption">Sunrise, sunset and solar noon (dashed) for every week of the
+      year, over the same twilight bands as the timeline above &mdash; in local clock
+      time, so the daylight-saving steps in spring and fall are real.  The brass line
+      is today.</p>
+    </section>
+
+    <section class="sec-lunation">
+      <p class="eyebrow">The Lunar Month &middot; this lunation</p>
+      $sky_page.lunation_svg($almanac)
+      <p class="caption">New moon to new moon in thirty steps, the principal phases
+      dated; the brass ring is today.  Hover any disc for its date and illumination.</p>
+    </section>
+
     <section class="sec-table">
       <p class="eyebrow">The Almanac Table</p>
       <div class="tablewrap">
@@ -78,6 +95,14 @@
       <div class="chips">
         $sky_page.chips_html($almanac)
       </div>
+    </section>
+
+    <section class="sec-sunpath">
+      <p class="eyebrow">The Sun&#8217;s Path &middot; today</p>
+      $sky_page.sunpath_svg($almanac)
+      <p class="caption">Altitude against azimuth from midnight to midnight, a dot
+      every hour.  The dashed curve is the moon&#8217;s path; the bands below the
+      horizon line are civil, nautical and astronomical twilight depth.</p>
     </section>
 
     <section class="sec-orrery">

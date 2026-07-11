@@ -1,6 +1,33 @@
 weewx-skyfield change history
 -----------------------------
 
+1.7 2026/07/11
+--------------
+- Three new panels on The Sky page, each embeddable in your own skin like
+  the rest (README: "Using the Sky panels in your own skin"):
+  * The Solar Year (daylength_svg) -- sunrise, sunset and solar noon for
+    every week of the year over the civil/nautical/astronomical twilight
+    bands, today marked in brass.  Local clock time, so the DST steps in
+    spring and fall are real; polar day and polar night shade correctly.
+    The costliest panel on the page (several hundred rise/set searches),
+    but its samples anchor to fixed weekly instants, so the 1.4 result
+    cache reuses them across report cycles -- the full price is paid once
+    after startup, not every cycle.
+  * The Lunar Month (lunation_svg) -- the current lunation, new moon to
+    new moon, as thirty phase discs with the principal phases dated and
+    today's disc ringed in brass.
+  * The Sun's Path (sunpath_svg) -- today's altitude/azimuth arc with a
+    dot every hour, the moon's path dashed beside it, twilight-depth
+    bands below the horizon, on a fixed whole-compass azimuth axis so
+    the arc's seasonal swing reads at a glance.
+- The README now documents embedding the Sky panels in your own skin: a
+  new section, "Using the Sky panels in your own skin", covers the
+  skin.conf search-list registration, the sky.css classes the markup
+  relies on, and every panel -- the three new ones included -- with its
+  template snippet and a screenshot.  All screenshots moved from the
+  repository root into screenshots/, and the Sky page's computation-cost
+  note now reflects the result cache.
+
 1.6 2026/07/08
 --------------
 - The engine now reads the DE421 ephemeris fully into memory instead of
