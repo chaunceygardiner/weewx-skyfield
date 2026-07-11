@@ -1,6 +1,14 @@
 weewx-skyfield change history
 -----------------------------
 
+1.8 (in development)
+--------------------
+- The Sky page's single-column layout (below 1160 px, e.g. phones and most
+  iPads) no longer shrinks every section to its content width: the sky
+  dome, timelines and table now fill the viewport as intended.  (The grid
+  rule's align-items:start carried over into the flex-column fallback;
+  the fallback now sets align-items:stretch.)
+
 1.7 2026/07/11
 --------------
 - Three new panels on The Sky page, each embeddable in your own skin like

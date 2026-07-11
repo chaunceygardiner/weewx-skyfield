@@ -43,7 +43,9 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
 .primary, .rail{display:flex; flex-direction:column; gap:30px; min-width:0}
 .sec-dome svg{max-width:820px; margin:0 auto}
 @media (max-width: 1159px){
-  .main{display:flex; flex-direction:column}
+  /* align-items:start would carry over from the grid rule and shrink the
+   * flex-column items to fit their content; stretch restores full width */
+  .main{display:flex; flex-direction:column; align-items:stretch}
   .primary, .rail{display:contents}
   .sec-dome{order:1} .sec-chips{order:2} .sec-sunpath{order:3}
   .sec-ribbons{order:4} .sec-daylength{order:5} .sec-lunation{order:6}
