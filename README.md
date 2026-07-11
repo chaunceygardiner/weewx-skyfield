@@ -300,6 +300,24 @@ which is part of this repository, so no additional downloads are needed.
 weewx-skyfield uses timezone aware date features which do not work with Python 2, nor in
 versions of Python 3 earlier than 3.9.
 
+## Credits
+
+weewx-skyfield stands on the work of others:
+
+ * **Brandon Rhodes**, author of the [Skyfield](https://rhodesmill.org/skyfield/) astronomy
+   library that performs every computation in this extension.
+ * **NASA's Jet Propulsion Laboratory (JPL)**, whose DE421 planetary ephemeris (bundled as
+   `wxskyfield_de421.bsp`) provides the positions of the sun, moon, and planets.
+ * The **European Space Agency (ESA)**, whose Hipparcos mission produced the star catalog
+   from which the bundled excerpt (`wxskyfield_stars.dat`) is drawn, and the
+   **CDS (Strasbourg astronomical Data Centre)**, which distributes it via VizieR.
+ * The **International Astronomical Union (IAU)** Working Group on Star Names, whose Catalog
+   of Star Names supplies the named-star tags.
+ * The **U.S. Naval Observatory (USNO)** and **Jean Meeus**, whose published definitions and
+   algorithms are the reference for rise/set, twilight, and other almanac conventions.
+ * **Tom Keffer, Matthew Wall, and the WeeWX project**, whose almanac framework this
+   extension plugs into.
+
 ## Licensing
 
 weewx-skyfield is licensed under the GNU Public License v3.
