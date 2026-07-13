@@ -192,6 +192,36 @@ class TestService:
         assert not s.is_valid()
 
 
+class TestTerminatePropagation:
+    """weewxd stops by raising Terminate from its SIGTERM signal handler --
+    inside whatever the main thread is executing at that instant.  This
+    extension's main-thread exposure is Sky.__init__, which the service
+    runs at engine startup; its broad exception handlers must hand
+    Terminate back (a shutdown request, not a failure -- the one exemption
+    from the never-raise contract), or weewx cannot shut down.  Almanac
+    tags run on the report thread, which never receives signals."""
+
+    class Terminate(Exception):
+        """Stands in for weewxd's Terminate, which is recognized by name
+        (weewxd runs as __main__, so the real class cannot be imported)."""
+
+    def test_sky_init_lets_terminate_through(self, monkeypatch):
+        def raise_terminate(*args, **kwargs):
+            raise self.Terminate
+        monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', raise_terminate)
+        with pytest.raises(self.Terminate):
+            wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
+
+    def test_ordinary_exception_still_swallowed(self, monkeypatch):
+        """The reraise guard must not change error handling for real
+        failures: Sky.__init__ still logs and leaves valid=False."""
+        def raise_valueerror(*args, **kwargs):
+            raise ValueError('boom')
+        monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', raise_valueerror)
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
+        assert not s.is_valid()
+
+
 class TestRegistration:
     def test_skyfield_registered_first(self, sky):
         with saved_almanacs():

@@ -58,6 +58,19 @@ if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] 
     raise weewx.UnsupportedFeature(
         "weewx-skyfield requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
 
+def reraise_if_terminate(e: BaseException) -> None:
+    """weewxd stops by raising Terminate from its SIGTERM signal handler --
+    inside whatever the main thread is executing at that instant.  This
+    extension's main-thread exposure is Sky.__init__, which the service runs
+    at engine startup; every broad exception handler there must call this
+    first and hand the exception back, or weewx cannot shut down.  (Almanac
+    tags are evaluated during report generation, on a child thread that
+    never receives signals.)  weewxd runs as __main__, so its Terminate
+    class cannot be imported here and is recognized by name."""
+    if type(e).__name__ == 'Terminate':
+        raise e
+
+
 # The WeeWX 5.2 requirement is enforced by register_almanac, which declines
 # gracefully (with a log message) on anything older.
 
@@ -675,7 +688,12 @@ class InMemorySpiceKernel(skyfield.jpllib.SpiceKernel):
 class Sky():
     """The Skyfield engine: the timescale, the JPL ephemeris and the star
     catalog.  Its __init__ never raises: every failure logs and leaves
-    valid=False, and the service then simply does nothing."""
+    valid=False, and the service then simply does nothing.  The one
+    exemption is weewxd's Terminate, a shutdown request rather than a
+    failure: __init__ runs on the main thread, where a SIGTERM during
+    startup surfaces as Terminate inside whatever is executing, so every
+    handler here re-raises it (reraise_if_terminate) instead of logging
+    it away -- otherwise weewx cannot stop."""
 
     def __init__(self, user_root: str, load_stars: bool = False):
         log.info("Skyfield version: %d.%d." % (skyfield.VERSION[0], skyfield.VERSION[1]))
@@ -697,6 +715,7 @@ class Sky():
         try:
             self.ts: skyfield.timelib.Timescale = skyfield.api.load.timescale()
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('init: Could not build the skyfield timescale: %s.  The Skyfield almanac will not run.' % e)
             return
 
@@ -710,6 +729,7 @@ class Sky():
             planets_file: str = '%s/wxskyfield_de421.bsp' % user_root
             self.planets: skyfield.jpllib.SpiceKernel = InMemorySpiceKernel(planets_file)
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('init: Could not load %s: %s.  The Skyfield almanac will not run.' % (planets_file, e))
             return
 
@@ -724,6 +744,7 @@ class Sky():
             for orb, key in EPHEMERIS_KEYS.items():
                 self.orbs[orb] = self.planets[key]
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('init: Could not find %s in ephermis file %s: %s.  The Skyfield almanac will not run.' % (orb, planets_file, e))
             return
 
@@ -736,6 +757,7 @@ class Sky():
             self.end_ts: float = self.ts.tdb_jd(
                 min(seg.end_jd for seg in self.planets.spk.segments)).utc_datetime().timestamp()
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('init: Could not determine the span of %s: %s.  The Skyfield almanac will not run.' % (planets_file, e))
             return
 
@@ -763,6 +785,7 @@ class Sky():
                 self.stars = Sky.load_named_stars(user_root)
                 log.info('Loaded %d named stars from the Hipparcos catalog.' % len(self.stars))
             except Exception as e:
+                reraise_if_terminate(e)
                 log.error('init: Could not load the Hipparcos star catalog: %s.  Star support disabled.' % e)
                 self.load_stars = False
 

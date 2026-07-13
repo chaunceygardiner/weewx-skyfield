@@ -1,8 +1,12 @@
 weewx-skyfield change history
 -----------------------------
 
-1.8 (in development)
---------------------
+1.8 2026/07/12
+--------------
+- weewx could fail to shut down if the SIGTERM landed during the Skyfield
+  almanac's startup ephemeris/star-catalog load: weewxd stops by raising
+  Terminate inside whatever the main thread is running, and Sky.__init__'s
+  log-and-continue handlers swallowed it.  They now hand Terminate back.
 - The Sky page's single-column layout (below 1160 px, e.g. phones and most
   iPads) no longer shrinks every section to its content width: the sky
   dome, timelines and table now fill the viewport as intended.  (The grid
