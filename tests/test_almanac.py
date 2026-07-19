@@ -955,6 +955,105 @@ PYEPHEM_PARITY_EXPRESSIONS = [
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
 ]
 
+class TestConstellations:
+    """$almanac.<body>.constellation / .constellation_abbr, computed from
+    the observer's topocentric apparent place against skyfield's bundled
+    IAU boundary map.  Values verified against a star atlas for
+    2025-06-21."""
+
+    def test_planets(self, almanac):
+        assert almanac.mars.constellation == 'Leo'
+        assert almanac.mars.constellation_abbr == 'Leo'
+        assert almanac.saturn.constellation == 'Pisces'
+        assert almanac.saturn.constellation_abbr == 'Psc'
+        assert almanac.jupiter.constellation == 'Gemini'
+
+    def test_sun_and_moon(self, almanac):
+        # The sun crosses the Taurus/Gemini boundary each June 21; by noon
+        # PDT on 2025-06-21 it sits just inside Gemini.
+        assert almanac.sun.constellation == 'Gemini'
+        assert almanac.sun.constellation_abbr == 'Gem'
+        assert almanac.moon.constellation == 'Aries'
+
+    @needs_catalog
+    def test_stars(self, almanac):
+        assert almanac.rigel.constellation == 'Orion'
+        assert almanac.polaris.constellation == 'Ursa Minor'
+        assert almanac.polaris.constellation_abbr == 'UMi'
+        assert almanac.antares.constellation == 'Scorpius'
+        # Serpens, the one constellation in two pieces, maps to one name.
+        assert almanac.unukalhai.constellation == 'Serpens'
+
+    def test_abbreviation_table_is_complete(self):
+        assert len(wxskyfield.CONSTELLATION_NAMES) == 88
+
+
+class TestEclipses:
+    """The eclipse tags report the nearest eclipse VISIBLE from the
+    station (the eclipsed body above the horizon at maximum), with _type
+    the kind as locally seen.  Dates and local types cross-checked
+    against NASA's Five Millennium eclipse catalogs: from Palo Alto on
+    2025-06-21, the previous lunar eclipse is the 2025-03-14 total
+    (maximum 06:58:43 UTC), the next is 2026-03-03 (the 2025-09-07 total
+    falls with the moon below Palo Alto's horizon and must be skipped);
+    the previous solar eclipse is 2024-04-08 -- total along its path,
+    PARTIAL as seen from Palo Alto -- and the next is the 2029-01-14
+    partial."""
+
+    def test_lunar(self, almanac):
+        assert almanac.previous_lunar_eclipse.raw == pytest.approx(1741935525.5, abs=TIME_TOL)
+        assert almanac.previous_lunar_eclipse_type == 'total'
+        assert almanac.next_lunar_eclipse.raw == pytest.approx(1772537621.6, abs=TIME_TOL)
+        assert almanac.next_lunar_eclipse_type == 'total'
+        assert almanac.previous_lunar_eclipse.raw < TIME_TS < almanac.next_lunar_eclipse.raw
+        # The tag is a ValueHelper, formattable like any other event tag.
+        assert str(almanac.next_lunar_eclipse) != ''
+
+    def test_solar(self, almanac):
+        assert almanac.previous_solar_eclipse.raw == pytest.approx(1712599986.6, abs=TIME_TOL)
+        assert almanac.previous_solar_eclipse_type == 'partial'
+        assert almanac.next_solar_eclipse.raw == pytest.approx(1863102136.4, abs=TIME_TOL)
+        assert almanac.next_solar_eclipse_type == 'partial'
+        assert almanac.previous_solar_eclipse.raw < TIME_TS < almanac.next_solar_eclipse.raw
+
+    def test_combined(self, almanac):
+        """next_/previous_eclipse pick the sooner (later) of the two
+        kinds, with _kind naming the winner -- the selection skins would
+        otherwise reimplement (added for weewx-liveseasons)."""
+        assert almanac.next_eclipse.raw == almanac.next_lunar_eclipse.raw
+        assert almanac.next_eclipse_kind == 'lunar'
+        assert almanac.next_eclipse_type == 'total'
+        assert almanac.previous_eclipse.raw == almanac.previous_lunar_eclipse.raw
+        assert almanac.previous_eclipse_kind == 'lunar'
+        assert almanac.previous_eclipse_type == 'total'
+
+    def test_combined_solar_wins(self, sky):
+        """Time-traveled to New Year 2029, Palo Alto's next visible
+        eclipse is the 2029-01-14 partial solar (its next visible lunar
+        is not until 2031)."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            jan29 = weewx.almanac.Almanac(1861992000, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                          formatter=weewx.units.get_default_formatter())
+            assert jan29.next_eclipse_kind == 'solar'
+            assert jan29.next_eclipse_type == 'partial'
+            assert jan29.next_eclipse.raw == pytest.approx(1863102136.4, abs=TIME_TOL)
+
+    def test_visibility_is_local(self, sky):
+        """From Sydney the same date answers differently: the 2025-09-07
+        total lunar eclipse IS visible there (maximum 18:11:47 UTC), and
+        the next solar eclipse is 2028-07-22, on whose path of totality
+        Sydney famously sits."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            sydney = weewx.almanac.Almanac(TIME_TS, -33.87, 151.21, altitude=58,
+                                           formatter=weewx.units.get_default_formatter())
+            assert sydney.next_lunar_eclipse.raw == pytest.approx(1757268707.2, abs=TIME_TOL)
+            assert sydney.next_lunar_eclipse_type == 'total'
+            assert sydney.next_solar_eclipse.raw == pytest.approx(1847851293.2, abs=TIME_TOL)
+            assert sydney.next_solar_eclipse_type == 'total'
+
+
 # These raise AttributeError on the built-in almanac too (PyEphem limitations);
 # the Skyfield almanac must fail the same way rather than crash differently.
 PYEPHEM_PARITY_ATTRIBUTE_ERRORS = [
@@ -1026,6 +1125,14 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.sun.hlong", "almanac.mars.hlongitude", "almanac.mars.hlatitude",
     "almanac.separation((0.1, 0.2), (0.3, 0.4))",
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
+    "almanac.sun.constellation", "almanac.sun.constellation_abbr",
+    "almanac.moon.constellation", "almanac.mars.constellation_abbr",
+    "almanac.next_lunar_eclipse", "almanac.next_lunar_eclipse_type",
+    "almanac.previous_lunar_eclipse", "almanac.previous_lunar_eclipse_type",
+    "almanac.next_solar_eclipse", "almanac.next_solar_eclipse_type",
+    "almanac.previous_solar_eclipse", "almanac.previous_solar_eclipse_type",
+    "almanac.next_eclipse", "almanac.next_eclipse_type", "almanac.next_eclipse_kind",
+    "almanac.previous_eclipse", "almanac.previous_eclipse_type", "almanac.previous_eclipse_kind",
 ]
 
 SKYFIELD_ONLY_STAR_EXPRESSIONS = [
@@ -1036,6 +1143,7 @@ SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.rigel.earth_distance", "almanac.rigel.sun_distance",
     "almanac.proxima_centauri.earth_distance", "almanac.barnards_star.mag",
     "almanac.hip_32349.mag",
+    "almanac.rigel.constellation", "almanac.rigel.constellation_abbr",
 ]
 
 

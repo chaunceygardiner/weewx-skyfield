@@ -48,8 +48,9 @@ it is computed for *your* station's location and elevation, taken automatically 
 - an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic;
 - an **analemma** — the sun's altitude and azimuth at local standard noon for every week of
   the year, with this week's point marked;
-- moon phase and illumination, countdowns to the next equinox, solstice, new and full moon,
-  Jupiter's central meridian longitudes, Saturn's ring tilt, and a full almanac table.
+- moon phase and illumination, countdowns to the next equinox, solstice, new and full moon —
+  and to the next eclipse visible from your station — Jupiter's central meridian longitudes,
+  Saturn's ring tilt, the constellation each planet stands in, and a full almanac table.
 
 The page is self-contained HTML and inline SVG — no JavaScript libraries, no web fonts, and
 nothing fetched at run time — so it requires nothing beyond what the extension already
@@ -75,6 +76,24 @@ illuminated (`$almanac.venus.phase`), apparent angular size (`$almanac.sun.size`
 moon's libration and selenographic colongitude, Jupiter's central meridian longitudes and Saturn's
 ring tilt; as well as equinoxes, solstices, moon phases and the moon index.  PyEphem is *not*
 required for any of these, nor for any tag used by WeeWX's standard skins.
+
+Two tag families (new in 1.9) have no PyEphem counterpart at all.  Every body, stars
+included, reports the constellation it currently stands in — `$almanac.saturn.constellation`
+gives "Pisces", `$almanac.saturn.constellation_abbr` gives "Psc" — judged from the
+observer's topocentric place against the IAU boundaries (the boundary map ships inside the
+Skyfield library; nothing is downloaded).  And the almanac finds eclipses:
+`$almanac.next_lunar_eclipse` and `$almanac.next_solar_eclipse` (with `previous_`
+counterparts) give the time of maximum eclipse of the nearest eclipse *visible from the
+station* — the eclipsed body must be above the horizon at maximum — and each has a `_type`
+companion: `penumbral`/`partial`/`total` for lunar eclipses, and for solar eclipses the type
+as seen from *your* location (`partial`/`annular`/`total`) — a station that catches only the
+penumbra of a total eclipse reports `partial`, which is exactly what an observer there sees.
+Lunar eclipses come from Skyfield's `eclipselib`; solar eclipses this extension finds
+directly, testing each new moon for a topocentric overlap of the solar and lunar discs at
+the station.  When a skin just wants "the next eclipse, whichever kind", the combined
+`$almanac.next_eclipse` (and `previous_eclipse`) picks the sooner (later) of the two, with
+`_kind` ("lunar"/"solar") and `_type` companions — the Sky page's eclipse chip is written
+with exactly these three tags.
 
 Named stars (e.g., `$almanac.rigel.rise`, `$almanac.polaris.circumpolar`, `$almanac.sirius.mag`)
 are also computed natively.  The names are the official proper names of the IAU Catalog of
@@ -259,9 +278,9 @@ hemisphere, matching the moon disc above.
 <img src="screenshots/panel_chips.png" width="340" alt="Planet chips panel">
 
 A summary card per body: daylight (length, sun rise → set, civil dusk and astronomical dark),
-then each planet with its rise time or current position, magnitude, distance and elongation —
-plus Jupiter's central meridian longitudes and Saturn's ring tilt.  The `chips` wrapper
-provides the single-column layout.
+then each planet with its rise time or current position, the constellation it stands in,
+magnitude, distance and elongation — plus Jupiter's central meridian longitudes and Saturn's
+ring tilt.  The `chips` wrapper provides the single-column layout.
 
 #### Countdown chips — `countdown_html`
 
@@ -273,8 +292,10 @@ provides the single-column layout.
 
 <img src="screenshots/panel_countdown.png" width="700" alt="Countdown chips panel">
 
-Date and days-to-go chips for the next new moon, full moon, equinox and solstice.  The
-`countdown` wrapper lays the chips out as a wrapping row.
+Date and days-to-go chips for the next new moon, full moon, equinox and solstice, plus the
+next eclipse visible from the station (lunar or solar, whichever comes first, labeled with
+its locally seen type; its date carries the year, since the next visible eclipse can be
+years out).  The `countdown` wrapper lays the chips out as a wrapping row.
 
 #### The almanac table — `table_html`
 
@@ -505,6 +526,29 @@ which is part of this repository, so no additional downloads are needed.
 
 weewx-skyfield uses timezone aware date features which do not work with Python 2, nor in
 versions of Python 3 earlier than 3.9.
+
+## Why the DE421 ephemeris (and not DE440)?
+
+JPL has published newer ephemerides since DE421 (2008) — notably DE440 and its
+shorter-span excerpt DE440s (2020), which incorporate another decade of spacecraft
+ranging data.  This extension bundles DE421 anyway, deliberately:
+
+ * **The accuracy difference is invisible here.**  DE440's corrections are largest for
+   the outer planets and amount to well under an arcsecond as seen from Earth for every
+   body this almanac serves.  An arcsecond moves a rise or set time by about a
+   fifteenth of a second — while atmospheric refraction at the horizon, which no
+   ephemeris can predict, makes every real rise and set uncertain by tens of seconds.
+   At the precision reports display, DE421 and DE440 are indistinguishable.
+ * **Half the size.**  DE421 is about 16 MB; DE440s is about 32 MB.  The difference
+   would be paid in the release zip and on disk — for corrections no report could
+   display.
+ * **DE421's span is enough.**  It covers mid-1899 through 2053, and a weather
+   station's almanac lives within a few years of now; times outside the span fall
+   through to PyEphem as described above.  DE440s would extend the span to 1849–2150 —
+   the only difference a user could ever see.
+
+Should the 2053 horizon ever draw near, swapping the bundled `.bsp` for a newer one is
+a small change: Skyfield does not care about the ephemeris file's name.
 
 ## Credits
 

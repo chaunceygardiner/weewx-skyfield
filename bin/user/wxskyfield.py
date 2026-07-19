@@ -33,6 +33,7 @@ import numpy
 import skyfield
 import skyfield.almanac
 import skyfield.api
+import skyfield.eclipselib
 import skyfield.errors
 import skyfield.framelib
 import skyfield.jpllib
@@ -52,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.8'
+WXSKYFIELD_VERSION = '1.9'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -700,6 +701,10 @@ class Sky():
 
         self.valid    : bool = False
         self.user_root: str  = user_root
+        # Skyfield's constellation boundary map, loaded lazily on first
+        # use by constellation_abbr_at (None: not yet tried; False: tried
+        # and failed, don't retry).
+        self._constellation_map: Any = None
 
         # find_risings/find_settings arrived in Skyfield 1.47; on anything
         # older every rise/set tag would fail at report time, so decline
@@ -904,6 +909,23 @@ class Sky():
             user_root = "%s/%s" % (weewx_root, user_root)
         return user_root
 
+    def constellation_abbr_at(self, position) -> Optional[str]:
+        """The IAU abbreviation of the constellation containing the given
+        skyfield position.  The boundary map ships inside the skyfield
+        package (no download) and is loaded lazily on first use; None when
+        it cannot be loaded, in which case the constellation tags fall
+        through to the next almanac.  Runs on the report thread only, so
+        no Terminate guard is needed."""
+        if self._constellation_map is None:
+            try:
+                self._constellation_map = skyfield.api.load_constellation_map()
+            except Exception as e:
+                log.error('constellation_abbr_at: could not load the constellation map: %s' % e)
+                self._constellation_map = False
+        if self._constellation_map is False:
+            return None
+        return str(self._constellation_map(position))
+
     def is_valid(self) -> bool:
         return self.valid
 
@@ -991,6 +1013,75 @@ MOON_EVENTS: Dict[str, Tuple[bool, Tuple[int, ...]]] = {
     'next_full_moon'             : (False, (2,)),
     'previous_last_quarter_moon' : (True,  (3,)),
     'next_last_quarter_moon'     : (False, (3,)),
+}
+
+# Eclipse tags: attribute -> (solar, previous).  Each reports the instant
+# of maximum eclipse of the nearest eclipse VISIBLE from the station: the
+# eclipsed body must be above the horizon at maximum.  Each has a
+# companion _type tag ('penumbral'/'partial'/'total' for lunar;
+# 'partial'/'annular'/'total', the type as seen from the station, for
+# solar -- a station inside only the penumbra of a total solar eclipse
+# sees, and reports, 'partial').
+ECLIPSE_EVENTS: Dict[str, Tuple[bool, bool]] = {
+    'next_lunar_eclipse'     : (False, False),
+    'previous_lunar_eclipse' : (False, True),
+    'next_solar_eclipse'     : (True,  False),
+    'previous_solar_eclipse' : (True,  True),
+}
+
+# skyfield.eclipselib.lunar_eclipses event codes 0/1/2.
+LUNAR_ECLIPSE_KINDS = ('penumbral', 'partial', 'total')
+
+# Every eclipse tag: the per-kind tags with their _type companions, plus
+# the combined next_/previous_eclipse -- the sooner (later) of the two
+# kinds -- whose extra _kind companion says which kind won ('lunar' or
+# 'solar').  The combined tags exist so a skin needs no selection logic
+# of its own (the Sky page's eclipse chip uses them).
+ECLIPSE_ATTRS = (frozenset(ECLIPSE_EVENTS)
+                 | {name + '_type' for name in ECLIPSE_EVENTS}
+                 | {'next_eclipse', 'next_eclipse_type', 'next_eclipse_kind',
+                    'previous_eclipse', 'previous_eclipse_type', 'previous_eclipse_kind'})
+
+# How far a single eclipse-search scan extends.  The next eclipse visible
+# from a given station is usually months away, occasionally a few years
+# (solar); scanning in chunks keeps the common case cheap while still
+# reaching the edge of the ephemeris when it has to.
+_ECLIPSE_CHUNK_DAYS = 400
+
+# IAU constellation abbreviation -> nominative name, for
+# $almanac.<body>.constellation.  Skyfield's bundled boundary map answers
+# with the abbreviation ($almanac.<body>.constellation_abbr).
+CONSTELLATION_NAMES: Dict[str, str] = {
+    'And': 'Andromeda',       'Ant': 'Antlia',           'Aps': 'Apus',
+    'Aqr': 'Aquarius',        'Aql': 'Aquila',           'Ara': 'Ara',
+    'Ari': 'Aries',           'Aur': 'Auriga',           'Boo': 'Boötes',
+    'Cae': 'Caelum',          'Cam': 'Camelopardalis',   'Cnc': 'Cancer',
+    'CVn': 'Canes Venatici',  'CMa': 'Canis Major',      'CMi': 'Canis Minor',
+    'Cap': 'Capricornus',     'Car': 'Carina',           'Cas': 'Cassiopeia',
+    'Cen': 'Centaurus',       'Cep': 'Cepheus',          'Cet': 'Cetus',
+    'Cha': 'Chamaeleon',      'Cir': 'Circinus',         'Col': 'Columba',
+    'Com': 'Coma Berenices',  'CrA': 'Corona Australis', 'CrB': 'Corona Borealis',
+    'Crv': 'Corvus',          'Crt': 'Crater',           'Cru': 'Crux',
+    'Cyg': 'Cygnus',          'Del': 'Delphinus',        'Dor': 'Dorado',
+    'Dra': 'Draco',           'Equ': 'Equuleus',         'Eri': 'Eridanus',
+    'For': 'Fornax',          'Gem': 'Gemini',           'Gru': 'Grus',
+    'Her': 'Hercules',        'Hor': 'Horologium',       'Hya': 'Hydra',
+    'Hyi': 'Hydrus',          'Ind': 'Indus',            'Lac': 'Lacerta',
+    'Leo': 'Leo',             'LMi': 'Leo Minor',        'Lep': 'Lepus',
+    'Lib': 'Libra',           'Lup': 'Lupus',            'Lyn': 'Lynx',
+    'Lyr': 'Lyra',            'Men': 'Mensa',            'Mic': 'Microscopium',
+    'Mon': 'Monoceros',       'Mus': 'Musca',            'Nor': 'Norma',
+    'Oct': 'Octans',          'Oph': 'Ophiuchus',        'Ori': 'Orion',
+    'Pav': 'Pavo',            'Peg': 'Pegasus',          'Per': 'Perseus',
+    'Phe': 'Phoenix',         'Pic': 'Pictor',           'Psc': 'Pisces',
+    'PsA': 'Piscis Austrinus', 'Pup': 'Puppis',          'Pyx': 'Pyxis',
+    'Ret': 'Reticulum',       'Sge': 'Sagitta',          'Sgr': 'Sagittarius',
+    'Sco': 'Scorpius',        'Scl': 'Sculptor',         'Sct': 'Scutum',
+    'Ser': 'Serpens',         'Sex': 'Sextans',          'Tau': 'Taurus',
+    'Tel': 'Telescopium',     'Tri': 'Triangulum',       'TrA': 'Triangulum Australe',
+    'Tuc': 'Tucana',          'UMa': 'Ursa Major',       'UMi': 'Ursa Minor',
+    'Vel': 'Vela',            'Vir': 'Virgo',            'Vol': 'Volans',
+    'Vul': 'Vulpecula',
 }
 
 # Mean apparent semidiameters, used when a custom horizon is combined with
@@ -1106,6 +1197,191 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
                 _DAY_CACHE[('event', cache_key)] = (time_ts, event_ts, event_ts)
         return self.time_value(almanac_obj, event_ts, 'ephem_year')
 
+    def eclipse_event(self, almanac_obj, attr: str):
+        """Serve any name in ECLIPSE_ATTRS: the per-kind tags
+        (next_lunar_eclipse, ... plus _type), and the combined
+        next_/previous_eclipse (plus _type and _kind), which report the
+        sooner (later) of the two kinds so a skin needs no selection
+        logic of its own."""
+        base, suffix = attr, ''
+        for s in ('_type', '_kind'):
+            if attr.endswith(s):
+                base, suffix = attr[:-len(s)], s
+        if base in ECLIPSE_EVENTS:
+            solar, previous = ECLIPSE_EVENTS[base]
+            found = self.eclipse_lookup(almanac_obj, solar, previous)
+            kind = 'solar' if solar else 'lunar'
+        else:
+            # next_eclipse / previous_eclipse: the sooner (later) of the
+            # two kinds.  One kind having none left in the ephemeris'
+            # span does not spoil the other.
+            previous = (base == 'previous_eclipse')
+            best: Optional[Tuple[Tuple[float, str], str]] = None
+            for solar in (False, True):
+                try:
+                    candidate = self.eclipse_lookup(almanac_obj, solar, previous)
+                except weewx.UnknownType:
+                    continue
+                if (best is None
+                        or (candidate[0] > best[0][0] if previous
+                            else candidate[0] < best[0][0])):
+                    best = (candidate, 'solar' if solar else 'lunar')
+            if best is None:
+                raise weewx.UnknownType(attr)
+            found, kind = best
+        if suffix == '_type':
+            return found[1]
+        if suffix == '_kind':
+            return kind
+        return self.time_value(almanac_obj, found[0], 'ephem_year')
+
+    def eclipse_lookup(self, almanac_obj, solar: bool, previous: bool) -> Tuple[float, str]:
+        """(time of maximum, locally seen type) of the nearest eclipse of
+        one kind visible from the station, through the cache.  Like
+        find_event, a found eclipse is valid for any almanac time between
+        the time searched from and the eclipse itself; unlike the
+        seasonal events an eclipse is local (the visibility test runs at
+        the station), so the cache key carries the location.  Raises
+        weewx.UnknownType when no visible eclipse lies within the
+        ephemeris' span."""
+        a = almanac_obj
+        time_ts = a.time_ts
+        key = ('eclipse', solar, previous, a.lat, a.lon, a.altitude)
+        hit = _DAY_CACHE.get(key, _MISS)
+        if hit is not _MISS:
+            valid_from, valid_to, found = hit
+            if valid_from <= time_ts <= valid_to:
+                return found
+        try:
+            found = (self.find_solar_eclipse(a, previous) if solar
+                     else self.find_lunar_eclipse(a, previous))
+        except skyfield.errors.EphemerisRangeError:
+            # A search window poking past the ephemeris' span.
+            raise weewx.UnknownType('eclipse')
+        if found is None:
+            # No visible eclipse inside the ephemeris' span.
+            raise weewx.UnknownType('eclipse')
+        if len(_DAY_CACHE) >= _DAY_CACHE_CAP:
+            _DAY_CACHE.clear()
+        if previous:
+            _DAY_CACHE[key] = (found[0], time_ts, found)
+        else:
+            _DAY_CACHE[key] = (time_ts, found[0], found)
+        return found
+
+    def eclipse_windows(self, time_ts: float, previous: bool) -> List[Tuple[float, float]]:
+        """Consecutive search windows from time_ts to the edge of the
+        ephemeris, in _ECLIPSE_CHUNK_DAYS steps: the nearest visible
+        eclipse is usually in the first chunk, so scanning the whole
+        remaining span up front would be wasted work."""
+        sky = self.sky
+        floor_ts = sky.start_ts + 86400
+        ceil_ts = sky.end_ts - 86400
+        windows: List[Tuple[float, float]] = []
+        if previous:
+            hi = time_ts
+            while hi > floor_ts:
+                lo = max(floor_ts, hi - _ECLIPSE_CHUNK_DAYS * 86400)
+                windows.append((lo, hi))
+                hi = lo
+        else:
+            lo = time_ts
+            while lo < ceil_ts:
+                hi = min(ceil_ts, lo + _ECLIPSE_CHUNK_DAYS * 86400)
+                windows.append((lo, hi))
+                lo = hi
+        return windows
+
+    def altitude_degrees(self, almanac_obj, orb, time_ts: float) -> float:
+        """Geometric altitude of the body's center at the station, in
+        degrees, used for the is-the-eclipse-visible judgments."""
+        _, observer = self.location(almanac_obj)
+        alt, _, _ = observer.at(self.skyfield_time(time_ts)).observe(orb).apparent().altaz()
+        return alt.degrees
+
+    def find_lunar_eclipse(self, almanac_obj, previous: bool) -> Optional[Tuple[float, str]]:
+        """Maximum of the nearest lunar eclipse visible from the station
+        (the moon above the horizon at maximum), searched chunk by chunk
+        to the edge of the ephemeris.  skyfield's eclipselib supplies the
+        eclipses; only the visibility test is local."""
+        sky = self.sky
+        for start_ts, end_ts in self.eclipse_windows(almanac_obj.time_ts, previous):
+            times, kinds, _ = skyfield.eclipselib.lunar_eclipses(
+                self.skyfield_time(start_ts), self.skyfield_time(end_ts), sky.planets)
+            stamps = [(t.utc_datetime().timestamp(), int(kind))
+                      for t, kind in zip(times, kinds)]
+            for event_ts, kind in (reversed(stamps) if previous else stamps):
+                if self.altitude_degrees(almanac_obj, sky.moon, event_ts) > 0.0:
+                    return event_ts, LUNAR_ECLIPSE_KINDS[kind]
+        return None
+
+    def find_solar_eclipse(self, almanac_obj, previous: bool) -> Optional[Tuple[float, str]]:
+        """Maximum of the nearest solar eclipse visible from the station.
+        A solar eclipse is local by nature, so every new moon is tested
+        for a sun-moon overlap as seen from the station: a partial
+        eclipse counts exactly when the station lies inside the penumbra,
+        and the _type is the local type (a station that catches only the
+        penumbra of a total eclipse sees, and reports, 'partial')."""
+        for start_ts, end_ts in self.eclipse_windows(almanac_obj.time_ts, previous):
+            new_moons = self.new_moons(start_ts, end_ts)
+            for nm_ts in (reversed(new_moons) if previous else new_moons):
+                found = self.local_solar_eclipse(almanac_obj, nm_ts)
+                if found is not None:
+                    return found
+        return None
+
+    def new_moons(self, start_ts: float, end_ts: float) -> List[float]:
+        """Timestamps of the new moons in [start_ts, end_ts]."""
+        times, events = skyfield.almanac.find_discrete(
+            self.skyfield_time(start_ts), self.skyfield_time(end_ts),
+            skyfield.almanac.moon_phases(self.sky.planets))
+        return [t.utc_datetime().timestamp() for t, e in zip(times, events) if e == 0]
+
+    def local_solar_eclipse(self, almanac_obj, nm_ts: float) -> Optional[Tuple[float, str]]:
+        """Whether the new moon at nm_ts eclipses the sun as seen from
+        the station: (time of maximum, local type), or None.  Maximum is
+        the minimum topocentric sun-moon separation -- a coarse scan of
+        the five hours either side of the new moon (partial phases span
+        at most about three hours either side of maximum, and topocentric
+        parallax shifts maximum from the geocentric new moon by at most
+        about an hour), refined to ~5 seconds -- compared against the
+        apparent radii of the two discs.  The maximum must occur with the
+        sun above the horizon to count as visible."""
+        _, observer = self.location(almanac_obj)
+        sky = self.sky
+
+        def observe(t) -> Tuple[Any, Any, Any]:
+            o = observer.at(t)
+            sun = o.observe(sky.sun).apparent()
+            moon = o.observe(sky.moon).apparent()
+            return sun, moon, sun.separation_from(moon).degrees
+
+        coarse = self.ts.linspace(self.skyfield_time(nm_ts - 5 * 3600),
+                                  self.skyfield_time(nm_ts + 5 * 3600), 101)
+        _, _, sep = observe(coarse)
+        i = int(numpy.argmin(sep))
+        fine = self.ts.linspace(coarse[max(i - 1, 0)],
+                                coarse[min(i + 1, len(coarse) - 1)], 145)
+        sun, moon, sep = observe(fine)
+        j = int(numpy.argmin(sep))
+        sep_min = float(sep[j])
+        r_sun = math.degrees(math.asin(BODY_RADIUS_KM['sun'] / sun.distance().km[j]))
+        r_moon = math.degrees(math.asin(BODY_RADIUS_KM['moon'] / moon.distance().km[j]))
+        if sep_min >= r_sun + r_moon:
+            # The discs never overlap: no eclipse at this station.
+            return None
+        max_ts = fine[j].utc_datetime().timestamp()
+        if self.altitude_degrees(almanac_obj, sky.sun, max_ts) <= 0.0:
+            # The eclipsed sun is below the horizon.
+            return None
+        if r_moon >= r_sun and sep_min <= r_moon - r_sun:
+            kind = 'total'
+        elif r_moon < r_sun and sep_min <= r_sun - r_moon:
+            kind = 'annular'
+        else:
+            kind = 'partial'
+        return max_ts, kind
+
     def get_almanac_data(self, almanac_obj, attr: str):
         if attr.startswith('__'):
             raise weewx.UnknownType(attr)
@@ -1141,6 +1417,8 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             previous, codes = MOON_EVENTS[attr]
             return self.find_event(almanac_obj, skyfield.almanac.moon_phases(self.sky.planets), codes,
                                    previous, 32, cache_key=attr)
+        elif attr in ECLIPSE_ATTRS:
+            return self.eclipse_event(almanac_obj, attr)
         elif attr in ('sidereal_time', 'sidereal_angle'):
             geographic, _ = self.location(almanac_obj)
             degrees = geographic.lst_hours_at(self.skyfield_time(almanac_obj.time_ts)) * 15.0
@@ -1507,6 +1785,23 @@ class SkyfieldAlmanacBinder:
         return (lower_culmination_alt > threshold,
                 upper_culmination_alt < threshold)
 
+    def constellation_lookup(self) -> Optional[str]:
+        """IAU abbreviation of the constellation the body stands in, as
+        the observer sees it (topocentric apparent place -- for the moon,
+        parallax can matter near a boundary).  Works for stars too.  NOT
+        named constellation_abbr: a real attribute would shadow the tag
+        (__getattr__ only runs for names not otherwise found, so the tag
+        would evaluate to the bound method)."""
+        a = self.almanac
+        key = ('constellation', self.heavenly_body, a.time_ts, a.lat, a.lon, a.altitude)
+        return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._constellation_lookup)
+
+    def _constellation_lookup(self) -> Optional[str]:
+        _, observer = self.almanac_type.location(self.almanac)
+        t = self.almanac_type.skyfield_time(self.almanac.time_ts)
+        position = observer.at(t).observe(self.target_body()).apparent()
+        return self.almanac_type.sky.constellation_abbr_at(position)
+
     def parallactic_angle(self) -> float:
         """Parallactic angle of the body in radians (a method, like PyEphem's,
         so that both $almanac.venus.parallactic_angle and an explicit call
@@ -1730,6 +2025,13 @@ class SkyfieldAlmanacBinder:
             return self.jupiter_cml(attr)
         elif attr in ('earth_tilt', 'sun_tilt') and self.heavenly_body == 'saturn':
             return self.saturn_ring_tilt(attr)
+        elif attr in ('constellation', 'constellation_abbr'):
+            abbr = self.constellation_lookup()
+            if abbr is None:
+                return self.pyephem_fallback(attr)
+            if attr == 'constellation_abbr':
+                return abbr
+            return CONSTELLATION_NAMES.get(abbr, abbr)
         elif attr == 'name':
             return self.heavenly_body.replace('_', ' ').title()
 

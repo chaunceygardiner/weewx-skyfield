@@ -1,6 +1,35 @@
 weewx-skyfield change history
 -----------------------------
 
+1.9 2026/07/18
+--------------
+- New eclipse tags, with no PyEphem counterpart: next_/previous_
+  lunar_eclipse and next_/previous_solar_eclipse give the time of maximum
+  of the nearest eclipse VISIBLE from the station (the eclipsed body above
+  the horizon at maximum), each with a _type companion --
+  penumbral/partial/total for lunar; for solar, the type as seen from the
+  station (partial/annular/total), so inside the penumbra of a total
+  eclipse the reported -- and observed -- type is partial.  Lunar
+  eclipses come from Skyfield's eclipselib; solar eclipses are found
+  natively, testing each new moon for a topocentric sun/moon disc
+  overlap at the station.  The combined next_eclipse/previous_eclipse
+  (with _kind and _type companions) picks the sooner (later) of the two
+  kinds, so skins need no selection logic of their own.
+- Every body, stars included, reports its constellation:
+  $almanac.saturn.constellation ("Pisces") and .constellation_abbr
+  ("Psc"), judged from the observer's topocentric place against the IAU
+  boundaries (the boundary map ships inside the Skyfield library;
+  nothing is downloaded).
+- The Sky page: the countdown row gains the next eclipse visible from
+  the station (lunar or solar, whichever is sooner, with its locally
+  seen type and the year on its date), and each planet chip names the
+  constellation the planet stands in.
+- The README now explains why the bundled ephemeris is DE421 rather than
+  the newer DE440s: the accuracy difference is invisible at almanac
+  precision (refraction at the horizon dwarfs it), while DE440s would
+  double the size of the release zip and the installed extension (new
+  section, "Why the DE421 ephemeris (and not DE440)?").
+
 1.8 2026/07/12
 --------------
 - weewx could fail to shut down if the SIGTERM landed during the Skyfield

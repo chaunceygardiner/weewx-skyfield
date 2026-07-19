@@ -154,6 +154,7 @@ class TestPanels:
         chips = page.chips_html(almanac)
         assert_balanced(chips)
         assert 'CML I' in chips and 'ring tilt' in chips
+        assert 'in Leo' in chips                  # Mars's constellation, June 2025
         table = page.table_html(almanac)
         assert_balanced(table)
         assert table.count('<tr>') == 10     # header + 9 bodies
@@ -161,7 +162,13 @@ class TestPanels:
     def test_header_bits(self, almanac, page):
         assert 'N' in page.header_sub(almanac)
         countdown = page.countdown_html(almanac)
-        assert countdown.count('class="count"') == 4
+        assert countdown.count('class="count"') == 5
+        # The eclipse chip: the nearer of the next visible lunar/solar
+        # eclipse (from Palo Alto in June 2025, the 2026-03-03 total
+        # lunar), its date carrying the year since it can be years out.
+        assert 'lunar eclipse' in countdown
+        assert 'Mar 3 2026' in countdown
+        assert 'total' in countdown
         assert page.sun_is_up(almanac) is True
 
     def test_star_lookup_in_installed_weewx(self, almanac, page, monkeypatch):
@@ -320,7 +327,7 @@ class TestPanelGuard:
         self._break_bodies(monkeypatch)
         assert_balanced(page.moon_svg(almanac))
         assert_balanced(page.lunation_svg(almanac))
-        assert page.countdown_html(almanac).count('class="count"') == 4
+        assert page.countdown_html(almanac).count('class="count"') == 5
 
     def test_usage_errors_still_raise(self, almanac, page, monkeypatch):
         """The guard is for runtime surprises only: a template-author error

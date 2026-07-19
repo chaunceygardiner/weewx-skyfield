@@ -231,6 +231,13 @@ class SkyPage:
             'circumpolar': bool(b.circumpolar), 'neverup': bool(b.neverup),
             'dist_au': b.earth_distance,
         }
+        # The constellation tag can legitimately be unserved (the boundary
+        # map failed to load and there is no PyEphem to fall through to);
+        # that must cost the chip its constellation, not the page its panels.
+        try:
+            d['constellation'] = str(b.constellation)
+        except Exception:
+            d['constellation'] = None
         if name != 'moon':
             d['elong'] = b.elong
         if name not in ('sun', 'moon'):
@@ -286,6 +293,11 @@ class SkyPage:
     @_panel_guard()
     def countdown_html(self, alm, palette: str = 'night') -> str:
         _palette(palette)
+
+        def when_str(ts: float) -> str:
+            n = max(0, int(math.ceil((ts - alm.time_ts) / 86400.0)))
+            return 'today' if n == 0 else ('in %d day%s' % (n, '' if n == 1 else 's'))
+
         chips = []
         for label, vh in (('new moon', alm.next_new_moon),
                           ('full moon', alm.next_full_moon),
@@ -294,11 +306,27 @@ class SkyPage:
             ts = _raw(vh)
             if ts is None:
                 continue
-            n = max(0, int(math.ceil((ts - alm.time_ts) / 86400.0)))
-            when = 'today' if n == 0 else ('in %d day%s' % (n, '' if n == 1 else 's'))
             chips.append('<div class="count"><span class="k">%s</span>'
                          '<span class="v mono">%s</span><span class="d">%s</span></div>'
-                         % (label, _t_date(ts), when))
+                         % (label, _t_date(ts), when_str(ts)))
+        # The next eclipse visible from the station, via the combined tag
+        # (which already picks the sooner of lunar/solar).  Unlike the
+        # chips above, an eclipse can be years out, so its date carries
+        # the year.  A tag failure (e.g. a non-Skyfield almanac serving
+        # the page) drops this chip, not the row.
+        eclipse = None
+        try:
+            ts = _raw(alm.next_eclipse)
+            if ts is not None:
+                eclipse = (ts, str(alm.next_eclipse_kind), str(alm.next_eclipse_type))
+        except Exception:
+            pass
+        if eclipse is not None:
+            ts, kind, etype = eclipse
+            chips.append('<div class="count"><span class="k">%s eclipse</span>'
+                         '<span class="v mono">%s</span><span class="d">%s &#183; %s</span></div>'
+                         % (kind, time.strftime('%b %-d %Y', time.localtime(ts)),
+                            etype, when_str(ts)))
         return '\n'.join(chips)
 
     # ── moon disc ─────────────────────────────────────────────────────────────
@@ -998,6 +1026,8 @@ class SkyPage:
                 line = 'below the horizon'
             sub = ('mag %+.1f &#183; %.2f au &#183; elong %.0f&#176;'
                    % (b['mag'], b['dist_au'], b['elong']))
+            if b['constellation']:
+                sub = 'in %s &#183; %s' % (_esc(b['constellation']), sub)
             extra = ''
             if name == 'jupiter':
                 extra = ('<div class="chipsub mono">CML I %.0f&#176; &#183; II %.0f&#176;</div>'
