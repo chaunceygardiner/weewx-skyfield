@@ -31,7 +31,7 @@ h1 .over{color:var(--brass)}
 .count .v{font-size:.9rem}
 .count .d{color:var(--brass); font-size:.8rem}
 section{background:var(--vault); border:1px solid var(--line); padding:20px 22px 16px}
-.eyebrow{font-variant-caps:small-caps; letter-spacing:.22em; color:var(--brass);
+.eyebrow{font-variant-caps:small-caps; letter-spacing:.22em; color:var(--brass); font-weight:400;
          font-size:.85rem; margin:0 0 4px}
 .caption{color:var(--muted); font-size:.85rem; margin:10px 0 0; max-width:68ch}
 .caption code{font-family: ui-monospace, Menlo, Consolas, monospace; font-size:.92em;

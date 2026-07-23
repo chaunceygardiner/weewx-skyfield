@@ -1,6 +1,14 @@
 weewx-skyfield change history
 -----------------------------
 
+1.9.1 2026/07/23
+----------------
+- Sample skin: the Sky page's card titles (<p class="eyebrow">) are now
+  real <h2> headings, satisfying the current Nu Html Checker's rule that
+  every <section> carry a heading (h1 -> h2 cards, no level skips).  The
+  .eyebrow rule gains font-weight:400 so the headings keep the exact
+  non-bold look; no visual change.
+
 1.9 2026/07/18
 --------------
 - New eclipse tags, with no PyEphem counterpart: next_/previous_
