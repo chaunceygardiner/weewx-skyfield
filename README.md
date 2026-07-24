@@ -1,5 +1,5 @@
-# weewx-skyfield
-*Open source plugin for WeeWX software.
+# weewx-skyfield – The drop-in upgrade for WeeWX's almanac
+Open source plugin for WeeWX software.
 
 Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 
