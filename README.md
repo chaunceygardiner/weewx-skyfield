@@ -403,7 +403,7 @@ cycle to ~4.6 s on warm cycles, with ~10 s for the first cycle after a restart.
 ### weewx-skyfield in Action
 
 The following pages on [www.paloaltoweather.com](https://www.paloaltoweather.com/celestial.html) demonstrate what can be
-accomplished with this extension and the [weewx-celestial extension](https://github.com/chaunceygardiner/weewx-celestial).
+accomplished with this extension.
 
 ![Celestial Today Page](screenshots/PAW_Celestial_Today.png)
 ![Celestial Sun Page](screenshots/PAW_Celestial_Sun.png)
