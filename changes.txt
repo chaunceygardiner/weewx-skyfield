@@ -1,6 +1,39 @@
 weewx-skyfield change history
 -----------------------------
 
+1.10 2026/07/25
+---------------
+- FIX: on Skyfield 1.53 (the version Debian trixie packages) the almanac
+  failed to start: "init: Could not find earth in ephermis file ...:
+  'InMemorySpiceKernel' object has no attribute 'codes'.  The Skyfield
+  almanac will not run."  Reports then fell through to the built-in
+  PyEphem/weeutil almanac -- planets right, stars and Proxima gone, easy
+  to misread as a star-catalog problem.  The in-memory ephemeris kernel
+  (1.6, the SIGBUS guard) reproduced SpiceKernel.__init__'s assignments,
+  and that set changes between Skyfield releases: 1.53's __init__ also
+  sets codes and _vector_functions, 1.54's sets neither.  The kernel now
+  reuses SpiceKernel.__init__ verbatim, swapping the SPK factory it
+  consults for one that serves the already-read bytes, so it tracks any
+  Skyfield release's initialization exactly (verified against 1.53 and
+  1.54).  Skyfield 1.47 remains the minimum.
+- The Sky page footer now tells the truth about what computed the page,
+  instead of printing the full Skyfield/DE421/Hipparcos credit as static
+  text no matter what.  The full credit appears only when the registered
+  Skyfield almanac and its star catalog are actually live; when stars were
+  requested but the catalog failed to load, the footer says "star catalog
+  unavailable -- see the weewxd log"; with stars = false it says "star
+  catalog disabled"; and when weewx-skyfield never registered at all (the
+  page then renders off the built-in almanac's fall-through) it credits
+  the built-in almanac and points at the log.  Field case: a user
+  diagnosing missing stars quoted the old footer's Hipparcos credit as
+  evidence the catalog had loaded -- it hadn't; the footer is now a
+  place that failure shows.  (The ESA acknowledgment is required exactly
+  when Hipparcos data is displayed, so it moves with the star credit.)
+- Housekeeping: WXSKYFIELD_VERSION and SKIN_VERSION now match install.py
+  again -- both had been left at 1.9 through the 1.9.1 release (install.py
+  alone was bumped; it is one version scheme, not three).  A test now pins
+  the three sites in lockstep.
+
 1.9.1 2026/07/23
 ----------------
 - Sample skin: the Sky page's card titles (<p class="eyebrow">) are now

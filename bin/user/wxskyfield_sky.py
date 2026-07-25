@@ -291,6 +291,32 @@ class SkyPage:
             time.strftime('%A, %B %-d %Y, %-H:%M %Z', time.localtime(alm.time_ts)))
 
     @_panel_guard()
+    def footer_html(self) -> str:
+        """The footer credit line, true for what actually computed the page.
+        The full Skyfield/DE421/Hipparcos credit appears only when the
+        registered Skyfield almanac and its star catalog are live; a stars
+        problem or an unregistered almanac (the page then renders off the
+        built-in almanac's fall-through) is named instead, with a pointer at
+        the weewxd log -- the footer doubles as a diagnostic.  The ESA
+        acknowledgment is required exactly when Hipparcos data is shown."""
+        sep = '<span class="sep">&#183;</span>'
+        sky = _find_sky()
+        if sky is None:
+            return sep.join(['Computed with the station&#8217;s built-in almanac',
+                             'weewx-skyfield is not active &#8212; see the weewxd log',
+                             'Regenerated every report cycle'])
+        parts = ['Computed with weewx-skyfield',
+                 'Skyfield and the JPL DE421 ephemeris']
+        if sky.stars:
+            parts += ['IAU-CSN star names', 'Hipparcos star data Credit: ESA']
+        elif sky.stars_requested:
+            parts.append('star catalog unavailable &#8212; see the weewxd log')
+        else:
+            parts.append('star catalog disabled')
+        parts.append('Regenerated every report cycle')
+        return sep.join(parts)
+
+    @_panel_guard()
     def countdown_html(self, alm, palette: str = 'night') -> str:
         _palette(palette)
 

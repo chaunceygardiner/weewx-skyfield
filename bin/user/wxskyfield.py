@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.9'
+WXSKYFIELD_VERSION = '1.10'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -670,20 +670,34 @@ class InMemorySpiceKernel(skyfield.jpllib.SpiceKernel):
     DE421) instead of memory-mapped by jplephem.  A mapped ephemeris kills
     the process with SIGBUS if the file is rewritten in place underneath
     it -- which is exactly what 'weectl extension install' over a live
-    weewxd does.  Deliberately does not chain to SpiceKernel.__init__
-    (that would reopen the path with mmap); it reproduces its assignments
-    over an in-memory SPK, whose DAF falls back to plain reads when the
-    file object cannot be mapped."""
+    weewxd does.  SpiceKernel.__init__ is reused verbatim; for the length
+    of that one call, the module-level SPK name it consults is swapped for
+    a stand-in whose open() builds the SPK over the already-read bytes
+    (jplephem's DAF falls back to plain reads when the file object cannot
+    be mapped).  Reproducing the parent's assignments here instead is a
+    trap: the set changes between Skyfield releases (1.53's __init__ sets
+    codes and _vector_functions, 1.54's sets neither) and a missing one
+    surfaces only at almanac time as an AttributeError -- field case,
+    "'InMemorySpiceKernel' object has no attribute 'codes'" on Debian's
+    Skyfield 1.53, which silently cost the user the whole almanac.  The
+    swap is safe: __init__ runs once, on the main thread, at engine
+    startup, before any report thread exists."""
 
     def __init__(self, path: str):
         with open(path, 'rb') as f:
             data: bytes = f.read()
-        self.path = path
-        self.filename = os.path.basename(path)
-        self.spk = jplephem.spk.SPK(jplephem.daf.DAF(io.BytesIO(data)))
-        self.segments = [skyfield.jpllib.SPICESegment(self, segment)
-                         for segment in self.spk.segments]
-        self.comments = self.spk.comments
+
+        class _SPKFromBytes:
+            @staticmethod
+            def open(_path: str) -> Any:
+                return jplephem.spk.SPK(jplephem.daf.DAF(io.BytesIO(data)))
+
+        saved = skyfield.jpllib.SPK
+        skyfield.jpllib.SPK = _SPKFromBytes
+        try:
+            super().__init__(path)
+        finally:
+            skyfield.jpllib.SPK = saved
 
 
 class Sky():
@@ -783,6 +797,11 @@ class Sky():
         # are added lazily by get_star_by_hip; misses are remembered so a bad
         # tag doesn't rescan the catalog on every report.
         self.stars: Dict[str, Tuple[Any, Optional[float]]] = {}
+        # What was asked for, as distinct from what happened: load_stars is
+        # cleared when the catalog fails to load, stars_requested is not --
+        # the difference is "disabled" vs "broken" (the Sky page footer
+        # reports it).
+        self.stars_requested: bool = load_stars
         self.load_stars: bool = load_stars
         self.hip_misses: set = set()
         if load_stars:

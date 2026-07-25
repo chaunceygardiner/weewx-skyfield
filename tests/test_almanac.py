@@ -1267,3 +1267,23 @@ class TestInMemoryEphemeris:
 
     def test_engine_uses_in_memory_kernel(self, sky):
         assert isinstance(sky.planets, wxskyfield.InMemorySpiceKernel)
+
+    def test_kernel_has_every_spicekernel_attribute(self):
+        """Field failure on Debian's Skyfield 1.53: SpiceKernel.__init__'s
+        attribute set changes between Skyfield releases (1.53 sets codes
+        and _vector_functions, 1.54 sets neither), and reproducing the
+        assignments by hand left the in-memory kernel missing whatever the
+        installed release added -- 'InMemorySpiceKernel' object has no
+        attribute 'codes', and the whole almanac declined at startup.  The
+        kernel now runs the real __init__, so whatever attributes the
+        installed Skyfield's own loader ends up with, ours must too."""
+        src = os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp')
+        reference = skyfield.api.load_file(src)
+        kernel = wxskyfield.InMemorySpiceKernel(src)
+        missing = set(vars(reference)) - set(vars(kernel))
+        assert not missing
+        # The name-decode path the 1.53 failure died in.
+        assert kernel.decode('earth') == 399
+        assert 399 in kernel.codes
+        # The SPK factory swap must have been restored.
+        assert skyfield.jpllib.SPK is wxskyfield.jplephem.spk.SPK

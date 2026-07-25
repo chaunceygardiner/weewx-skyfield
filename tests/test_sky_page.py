@@ -200,6 +200,61 @@ class TestPanels:
         assert len(page._memo) == n
 
 
+class TestFooter:
+    """footer_html must be true for what actually computed the page: the
+    full Skyfield/DE421/Hipparcos credit only when the registered almanac's
+    star catalog is live, a named failure otherwise (the footer doubles as
+    a diagnostic -- the pre-1.10 static footer claimed Hipparcos data
+    while a user's almanac had never registered at all)."""
+
+    def test_full_credit_with_stars(self, almanac, page):
+        html = page.footer_html()
+        assert 'Computed with weewx-skyfield' in html
+        assert 'Skyfield and the JPL DE421 ephemeris' in html
+        assert 'IAU-CSN star names' in html
+        assert 'Hipparcos star data Credit: ESA' in html
+        assert 'Regenerated every report cycle' in html
+
+    def test_stars_disabled(self, page):
+        starless = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                                  load_stars=False)
+        assert starless.is_valid()
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(starless)
+            html = page.footer_html()
+        assert 'star catalog disabled' in html
+        assert 'Hipparcos' not in html
+        assert 'weewxd log' not in html          # disabled is not a failure
+
+    def test_star_catalog_failure(self, page, tmp_path):
+        """stars = true but wxskyfield_stars.dat unreadable: the engine
+        stays valid (planets fine) and the footer names the failure."""
+        os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp'),
+                   os.path.join(str(tmp_path), 'wxskyfield_de421.bsp'))
+        broken = wxskyfield.Sky(str(tmp_path), load_stars=True)
+        assert broken.is_valid()
+        assert not broken.stars and broken.stars_requested
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(broken)
+            html = page.footer_html()
+        assert 'star catalog unavailable' in html
+        assert 'see the weewxd log' in html
+        assert 'Hipparcos' not in html
+
+    def test_almanac_not_registered(self, page):
+        """No registered Skyfield almanac (service failed or absent): the
+        page renders off the built-in almanac and the footer says so."""
+        with saved_almanacs():
+            weewx.almanac.almanacs[:] = [
+                a for a in weewx.almanac.almanacs
+                if not isinstance(a, wxskyfield.SkyfieldAlmanacType)]
+            assert wxskyfield_sky._find_sky() is None
+            html = page.footer_html()
+        assert 'built-in almanac' in html
+        assert 'weewx-skyfield is not active' in html
+        assert 'DE421' not in html and 'Hipparcos' not in html
+
+
 class TestPalettes:
     """Every render method takes palette=.  As of 1.5 the default 'night'
     and the 'light' plates bake the traditional astronomy body colors
@@ -353,6 +408,19 @@ class TestSkinFiles:
         assert conf['CheetahGenerator']['search_list_extensions'] \
             == 'user.wxskyfield_sky.SkyfieldSky'
         assert conf['CheetahGenerator']['ToDate']['index']['template'] == 'index.html.tmpl'
+
+    def test_version_lockstep(self):
+        """The version lives in three places, kept identical: install.py,
+        WXSKYFIELD_VERSION, and SKIN_VERSION in skin.conf.  (1.9.1 shipped
+        with only install.py bumped -- this pins all three.)"""
+        with open(os.path.join(REPO_ROOT, 'install.py')) as f:
+            m = re.search(r'version\s*=\s*"([^"]+)"', f.read())
+        assert m is not None
+        assert m.group(1) == wxskyfield.WXSKYFIELD_VERSION
+        with open(os.path.join(self.SKIN_DIR, 'skin.conf')) as f:
+            m = re.search(r'^\s*SKIN_VERSION\s*=\s*(\S+)', f.read(), re.MULTILINE)
+        assert m is not None
+        assert m.group(1) == wxskyfield.WXSKYFIELD_VERSION
 
     def test_installer_lists_all_skin_files(self):
         with open(os.path.join(REPO_ROOT, 'install.py')) as f:

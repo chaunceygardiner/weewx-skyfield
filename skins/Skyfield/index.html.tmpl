@@ -124,10 +124,10 @@
 </div>
 
 <footer>
-  Computed with weewx-skyfield<span class="sep">&middot;</span>Skyfield and the
-  JPL DE421 ephemeris<span class="sep">&middot;</span>IAU-CSN star names<span
-  class="sep">&middot;</span>Hipparcos star data Credit: ESA<span
-  class="sep">&middot;</span>Regenerated every report cycle
+  ## The credit must be true for what actually computed the page: the full
+  ## Skyfield/DE421/Hipparcos line only when the star catalog is live, a
+  ## see-the-log hint when it is broken or the almanac never registered.
+  $sky_page.footer_html()
 </footer>
 </div>
 </body>
