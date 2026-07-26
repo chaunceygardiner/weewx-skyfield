@@ -1,0 +1,6 @@
+# GitHub Pages configuration for https://chaunceygardiner.github.io/weewx-skyfield/
+theme: jekyll-theme-primer
+title: weewx-skyfield
+description: "The drop-in upgrade for WeeWX's almanac -- Skyfield-powered $almanac tags, stars, eclipses, and a planetarium-style Sky page"
+plugins:
+  - jekyll-sitemap
