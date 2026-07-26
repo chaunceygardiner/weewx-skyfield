@@ -3,6 +3,8 @@ Open source plugin for WeeWX software.
 
 Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 
+The GitHub project is at: [weewx-skyfield](https://github.com/chaunceygardiner/weewx-skyfield)
+
 **This extension requires Python 3.9 or later, WeeWX 5.2 or later, and the
 [Skyfield](https://rhodesmill.org/skyfield/) (1.47 or later) and NumPy libraries.  PyEphem is
 NOT required.**
