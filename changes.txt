@@ -1,8 +1,29 @@
 weewx-skyfield change history
 -----------------------------
 
-1.11 (release TBD)
-------------------
+1.11 2026/07/27
+---------------
+- The Sun's Path panel now marks times on the moon's dashed curve:
+  moonrise and moonset get a tick and the time at the horizon crossings,
+  the transit gets a tick and time at the apex, and the curve's two ends
+  -- the moon's positions at 00:00 and 24:00 -- get dots labeled 00 and
+  24 when they clear the plot floor.  Times honor the skin's TimeFormats;
+  each mark carries a hover tooltip, the endpoint dots' explaining the
+  open curve (below).  Labels dodge the sun's hour labels, and the
+  transit label yields to a nearby endpoint label rather than crowd it.
+  Skins embedding sunpath_svg with hand-copied CSS rules: the labels use
+  a NEW class, moonlab -- copy its rule from sky.css or the labels
+  render at the 16px SVG default.
+- Root cause of the above, and now also explained in the caption: a user
+  spotted a gap at the top of the moon's arc near full moon and read it
+  as a bug.  The panel plots midnight to midnight, but a lunar day runs
+  about 50 minutes longer than a calendar day, so the moon's 24-hour
+  track is an open curve -- the break sits wherever midnight catches the
+  moon, and around full moon (moon transiting near midnight) that is
+  right at the apex, above the plot floor where it shows.  The plot was
+  correct all along: the moon genuinely does not cross those azimuths
+  that day.  The 00/24 endpoint dots now make the break read as the day
+  boundary it is.  (README and manual updated to match.)
 
 1.10 2026/07/25
 ---------------
@@ -36,28 +57,6 @@ weewx-skyfield change history
   again -- both had been left at 1.9 through the 1.9.1 release (install.py
   alone was bumped; it is one version scheme, not three).  A test now pins
   the three sites in lockstep.
-- The Sun's Path panel now marks times on the moon's dashed curve:
-  moonrise and moonset get a tick and the time at the horizon crossings,
-  the transit gets a tick and time at the apex, and the curve's two ends
-  -- the moon's positions at 00:00 and 24:00 -- get dots labeled 00 and
-  24 when they clear the plot floor.  Times honor the skin's TimeFormats;
-  each mark carries a hover tooltip, the endpoint dots' explaining the
-  open curve (below).  Labels dodge the sun's hour labels, and the
-  transit label yields to a nearby endpoint label rather than crowd it.
-  Skins embedding sunpath_svg with hand-copied CSS rules: the labels use
-  a NEW class, moonlab -- copy its rule from sky.css or the labels
-  render at the 16px SVG default.
-- Root cause of the above, and now also explained in the caption: a user
-  spotted a gap at the top of the moon's arc near full moon and read it
-  as a bug.  The panel plots midnight to midnight, but a lunar day runs
-  about 50 minutes longer than a calendar day, so the moon's 24-hour
-  track is an open curve -- the break sits wherever midnight catches the
-  moon, and around full moon (moon transiting near midnight) that is
-  right at the apex, above the plot floor where it shows.  The plot was
-  correct all along: the moon genuinely does not cross those azimuths
-  that day.  The 00/24 endpoint dots now make the break read as the day
-  boundary it is.  (README and manual updated to match.)
-
 1.9.1 2026/07/23
 ----------------
 - Sample skin: the Sky page's card titles (<p class="eyebrow">) are now
