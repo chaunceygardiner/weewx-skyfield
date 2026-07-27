@@ -80,14 +80,28 @@ The celestial pages of
 [www.paloaltoweather.com](https://www.paloaltoweather.com/celestial.html) — Today, Sun, Moon,
 Planets and Stars — demonstrate what can be accomplished with this extension, live.
 
+## Live-updating pages
+
+weewx-skyfield computes at report time: its tags — and the Sky page — refresh once per report
+cycle.  For pages that update continuously in the browser, add
+[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) (same author, 5.0 or
+later): its *almanac fields* — report almanac tags with the `$` removed — are evaluated
+against the registered almanac (this extension's, once installed) on every loop packet and
+published in `loop-data.txt` for the page's JavaScript to pick up.  One computation engine
+serves the report tags and the live values, so they always agree.
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) is a complete worked
+example — a live Geocentric panel built entirely from loopdata almanac fields — and the
+paloaltoweather.com pages above update the same way.
+
 ## Relationship to other extensions
 
-- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) inserts
-  celestial observations into loop packets for live-updating reports.  As of celestial 4.0 the
-  two extensions are complementary and coexist with no configuration: celestial provides the
-  loop fields, weewx-skyfield provides the report almanac.  (Only celestial 3.x, which
-  embedded this same almanac engine, needs `replace_builtin_almanac = false` in the
-  `[Celestial]` section of `weewx.conf` when run alongside weewx-skyfield.)
+- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) ships a
+  live celestial page driven by weewx-loopdata almanac fields (see
+  [Live-updating pages](#live-updating-pages) above).  Since celestial 6.0 it runs no service
+  and computes nothing itself, so the two extensions coexist with no configuration —
+  weewx-skyfield is the atlas, weewx-celestial the live instrument.  (Only the historical
+  celestial 3.x, which embedded this same almanac engine, needs `replace_builtin_almanac =
+  false` in the `[Celestial]` section of `weewx.conf` when run alongside weewx-skyfield.)
 - weewx-skyfield-almanac (by a different author) is an independent Skyfield almanac extension
   with a different design (it downloads its ephemerides and catalogs at runtime).  Choose one
   or the other; installing both would leave reports using whichever registered last.
