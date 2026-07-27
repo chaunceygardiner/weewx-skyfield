@@ -27,6 +27,10 @@ As of version 1.6 the ephemeris is read fully into memory at startup (about 16 M
 upgrading this extension over a running WeeWX cannot disturb — or crash — the running
 almanac; the new files take effect on the restart that follows the install.
 
+And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
+translatable through WeeWX's own lang-file mechanisms, and a complete German translation
+ships with the skin — see [Translations (i18n)](#translations-i18n) below.
+
 ### The Sky page
 
 ![The Sky page](screenshots/SkyfieldSampleReport.png)
@@ -69,6 +73,9 @@ entirely, set `enable = false` there.
 Every panel on the page can also be embedded individually in your own skin — see
 [Using the Sky panels in your own skin](#using-the-sky-panels-in-your-own-skin) below.
 
+The page is translatable, German translation included — see
+[Translations (i18n)](#translations-i18n) below.
+
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
 rise/set/transit (including `next_`/`previous_` rising, setting, transit and antitransit), custom
 horizons and `use_center` (for twilight tags), azimuth/altitude, right ascension/declination
@@ -98,6 +105,12 @@ the station.  When a skin just wants "the next eclipse, whichever kind", the com
 `_kind` ("lunar"/"solar") and `_type` companions — the Sky page's eclipse chip is written
 with exactly these three tags.
 
+A third native-only tag arrived in 1.12: every body, stars included, carries a display name
+a skin can translate — `$almanac.moon.label`.  Add the tag name to the report's `[Almanac]`
+section (the same section that holds `moon_phases`, so usually in a lang file), for example
+`moon = Mond`, and the tag renders "Mond"; bodies the skin does not translate fall back to
+the English name, so a partial list is fine.  The lookup follows each report's own language.
+
 Named stars (e.g., `$almanac.rigel.rise`, `$almanac.polaris.circumpolar`, `$almanac.sirius.mag`)
 are also computed natively.  The names are the official proper names of the IAU Catalog of
 Star Names (every entry of the Working Group on Star Names' IAU-CSN list with a Hipparcos
@@ -125,7 +138,8 @@ generation.
 
 Every panel on The Sky page is rendered by `$sky_page` — a standard WeeWX search-list
 extension, `user.wxskyfield_sky`, installed along with this extension — and can be dropped
-into any skin's Cheetah template.  Three things to arrange:
+into any skin's Cheetah template.  Three things to arrange — four if your skin is not in
+English:
 
 1. Add the search list to your skin's `skin.conf` (if the skin already sets
    `search_list_extensions`, append `user.wxskyfield_sky.SkyfieldSky` to that list):
@@ -148,6 +162,11 @@ into any skin's Cheetah template.  Three things to arrange:
    re-check on each upgrade: a release that adds marks to a panel can add a class (1.10
    added `moonlab`, the sun-path moon-time labels), and text with no rule renders at the
    16px SVG default in the wrong color — changes.txt calls out new classes.
+
+4. Non-English skins only: bring the translations along the same way.  The panels read
+   `[Texts]` and `[Almanac]` from *your* report, not from the bundled skin, so without this
+   step they render in English.  The copy/merge recipe is in the manual:
+   [Copying the dictionary into an embedding skin](https://chaunceygardiner.github.io/weewx-skyfield/i18n.html#copying-the-dictionary-into-an-embedding-skin).
 
 The bundled template, `skins/Skyfield/index.html.tmpl`, shows every panel in use and is the
 reference for the wrapper markup mentioned below.  A failing panel never takes down report
@@ -337,6 +356,53 @@ The sun is up, so the plate shows the stars where they stand behind the daylight
 Dot size follows magnitude; the brighter the star, the larger the mark.
 #end if
 ```
+
+### Translations (i18n)
+
+New in 1.12, everything this extension renders speaks the report's language — the Sky page,
+the embeddable panels, and the almanac's body names — entirely through WeeWX's own
+mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
+translated a WeeWX skin before, there is nothing new to learn.
+
+- **A complete German translation ships with the skin** (Beta).  One line turns it on:
+
+  ```
+  [StdReport]
+      [[SkyfieldReport]]
+          lang = de
+  ```
+
+  Beta means the words, not the machinery: the translation awaits native-speaker review,
+  and a clumsy phrase is the worst it can do.  Corrections are welcome — as are further
+  languages: a lang file is a self-contained, no-code contribution.
+
+- **English fallback, one string at a time.**  Every string the page renders is a
+  gettext-style `[Texts]` key — the English string *is* the key.  A missing entry falls
+  back to English for just that string, so a partial translation is fine and can never
+  blank a panel.
+
+- **The reference dictionary ships in the skin**, at `skins/Skyfield/lang/en.conf`: every
+  string the page renders and nothing else.  Tests keep it exact in both directions, and
+  keep the German complete — new strings cannot ship untranslated.
+
+- **Body names are report tags too.**  `$almanac.moon.label` renders the body's translated
+  display name, from the report's `[Almanac]` section keyed by tag name (`moon = Mond`) —
+  every body and named star, falling back to the English name, following each report's own
+  language.  weewx-loopdata almanac fields (e.g. `almanac.moon.label`) render in the
+  language of loopdata's target report.
+
+- **Your own skins get their own language.**  The panels and `.label` read the report being
+  generated, never the bundled skin — copy the entries you need into your skin's lang file,
+  set names per report in `weewx.conf` (`[[[Almanac]]]`), or define them once for every
+  report on the station under `[StdReport]` `[[Defaults]]` — where `lang = de` also works,
+  switching every skin that ships German (Seasons included) in one line.
+
+- **Dates come free.**  Month and date names follow the report's locale (`strftime`), so
+  they were never in the dictionary at all.
+
+The manual's [Translating the Sky page](https://chaunceygardiner.github.io/weewx-skyfield/i18n.html)
+has the full story with examples, including the copy/merge recipe for embedding skins and
+the complete dictionary as a reference table.
 
 ### Differences from PyEphem
 

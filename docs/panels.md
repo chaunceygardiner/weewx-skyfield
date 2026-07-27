@@ -9,13 +9,15 @@ description: Embedding weewx-skyfield's $sky_page panels — sky dome, ribbons, 
 [Installation](installation.md) ·
 [Almanac tags](tags.md) ·
 [The Sky page](sky-page.md) ·
+[Translating (i18n)](i18n.md) ·
 [GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
 
 ---
 
 Every panel on [The Sky page](sky-page.md) is rendered by `$sky_page` — a standard WeeWX
 search-list extension, `user.wxskyfield_sky`, installed along with this extension — and can be
-dropped into any skin's Cheetah template.  Three things to arrange:
+dropped into any skin's Cheetah template.  Three things to arrange — four if your skin is
+not in English:
 
 1. Add the search list to your skin's `skin.conf` (if the skin already sets
    `search_list_extensions`, append `user.wxskyfield_sky.SkyfieldSky` to that list):
@@ -38,6 +40,11 @@ dropped into any skin's Cheetah template.  Three things to arrange:
    re-check on each upgrade: a release that adds marks to a panel can add a class (1.10
    added `moonlab`, the sun-path moon-time labels), and text with no rule renders at the
    16px SVG default in the wrong color — changes.txt calls out new classes.
+
+4. Non-English skins only: bring the translations along the same way.  The panels read
+   `[Texts]` and `[Almanac]` from *your* report, not from the bundled skin, so without this
+   step they render in English.  The copy/merge recipe is on the translation page:
+   [Copying the dictionary into an embedding skin](i18n.md#copying-the-dictionary-into-an-embedding-skin).
 
 The bundled template, `skins/Skyfield/index.html.tmpl`, shows every panel in use and is the
 reference for the wrapper markup mentioned below.  A failing panel never takes down report

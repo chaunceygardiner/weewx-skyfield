@@ -9,6 +9,7 @@ description: The planetarium-style showcase page installed with weewx-skyfield �
 [Installation](installation.md) ·
 [Almanac tags](tags.md) ·
 [Sky panels in your skin](panels.md) ·
+[Translating (i18n)](i18n.md) ·
 [GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
 
 ---

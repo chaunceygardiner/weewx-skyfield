@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.11'
+WXSKYFIELD_VERSION = '1.12'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -2053,6 +2053,14 @@ class SkyfieldAlmanacBinder:
             return CONSTELLATION_NAMES.get(abbr, abbr)
         elif attr == 'name':
             return self.heavenly_body.replace('_', ' ').title()
+        elif attr == 'label':
+            # Localized display name.  Skins translate body names in their
+            # [Almanac] section, keyed by the tag name (moon = Mond, beside
+            # moon_phases); WeeWX pipes that section into every almanac as
+            # .texts.  Untranslated bodies fall back to the English .name,
+            # mirroring $obs.label's fall-through.
+            return self.almanac.texts.get(self.heavenly_body,
+                                          self.heavenly_body.replace('_', ' ').title())
 
         # Something Skyfield does not compute (e.g., the moon's subsolar
         # latitude).  Fall back to the built-in PyEphem almanac if PyEphem

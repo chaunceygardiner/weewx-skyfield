@@ -175,18 +175,11 @@ def _t_date(ts: float) -> str:
     return time.strftime('%b %-d', time.localtime(ts))
 
 
-def _dur_hm(seconds: Optional[float]) -> str:
-    if seconds is None:
-        return '&#8212;'
-    return '%dh %02dm' % (int(seconds // 3600), int(seconds % 3600 // 60))
-
-
 def _esc(s: str) -> str:
-    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-
-def _cap(name: str) -> str:
-    return name.capitalize()
+    # Quotes too: translated text lands inside attribute values (titles,
+    # aria-labels), and translators control that text.
+    return (s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            .replace('"', '&quot;'))
 
 
 def _wxskyfield():
@@ -211,12 +204,78 @@ def _find_sky():
 
 class SkyPage:
     """The template-facing helper: each method returns a finished SVG or
-    HTML fragment for one panel of the Sky page."""
+    HTML fragment for one panel of the Sky page.
 
-    def __init__(self) -> None:
+    Constructed with the report's skin_dict, whose [Texts] section
+    translates the panels' own strings: gettext-style, the English string
+    is the key and a missing entry falls back to it, so a partial
+    translation degrades one string at a time, never a panel.  The other
+    translated words come from the core-standard sources, not invented
+    keys: body display names from the almanac's texts (the [Almanac]
+    section -- the same source as $almanac.<body>.label), compass
+    cardinals from the report formatter's [Units][[Ordinates]] directions,
+    and the coordinate hemisphere letters from [Labels] hemispheres."""
+
+    def __init__(self, skin_dict: Optional[Dict[str, Any]] = None) -> None:
         # Per-page memo of body evaluations: rise/set searches are the
         # expensive tags and three panels need them.
         self._memo: Dict[Tuple[float, str], Dict[str, Any]] = {}
+        sd: Dict[str, Any] = skin_dict if skin_dict is not None else {}
+        self._texts: Dict[str, Any] = sd.get('Texts', {}) or {}
+        hemis = (sd.get('Labels', {}) or {}).get('hemispheres', ())
+        if isinstance(hemis, str):
+            hemis = (hemis,)
+        self._hemispheres: Tuple[str, ...] = (
+            tuple(str(h) for h in hemis)[:4] if len(hemis) >= 4
+            else ('N', 'S', 'E', 'W'))
+
+    # ── translation ──────────────────────────────────────────────────────────
+    def _t(self, key: str, **values: Any) -> str:
+        """The [Texts] translation for key (gettext-style: the English
+        string IS the key, a missing entry falls back to it), escaped for
+        markup, then {name} placeholders filled from values.  Call sites
+        always pass the key as a single-line literal: the test suite reads
+        them from this source file to enforce that lang/en.conf ships
+        exactly the keys that render, in both directions."""
+        s = self._texts.get(key, key)
+        if not isinstance(s, str):
+            s = key
+        s = _esc(s)
+        if not values:
+            return s
+        try:
+            return s.format(**values)
+        except (KeyError, IndexError, ValueError):
+            # A translation with broken placeholders must not blank the
+            # panel (the guard would eat the whole SVG): fall back to the
+            # English key, which the tests guarantee formats.
+            return _esc(key).format(**values)
+
+    @staticmethod
+    def _label(alm, name: str) -> str:
+        """The body's display name, unescaped: the report's [Almanac]
+        texts (the same source $almanac.<body>.label reads), else the
+        English name.  Read straight off the almanac's texts so the page
+        keeps rendering when a non-Skyfield almanac serves it."""
+        val = (getattr(alm, 'texts', None) or {}).get(name)
+        if isinstance(val, str):
+            return val
+        return name.replace('_', ' ').title()
+
+    def _cardinals(self, alm) -> Tuple[str, str, str, str]:
+        """The report's N, E, S, W, from the formatter's [Units]
+        [[Ordinates]] directions -- the core-standard translated compass."""
+        try:
+            o = alm.formatter.ordinate_names
+            return str(o[0]), str(o[4]), str(o[8]), str(o[12])
+        except Exception:
+            return 'N', 'E', 'S', 'W'
+
+    def _dur(self, seconds: Optional[float]) -> str:
+        if seconds is None:
+            return '&#8212;'
+        return self._t('{h}h {m}m', h=int(seconds // 3600),
+                       m='%02d' % int(seconds % 3600 // 60))
 
     # ── shared data access (plain $almanac tags) ─────────────────────────────
     def _body(self, alm, name: str) -> Dict[str, Any]:
@@ -273,7 +332,7 @@ class SkyPage:
             alt = b.alt
             if alt <= 0:
                 continue
-            out.append({'name': name.replace('_', ' ').title(),
+            out.append({'name': self._label(alm, name),
                         'az': b.az, 'alt': alt, 'mag': mag})
         return out
 
@@ -286,8 +345,10 @@ class SkyPage:
     def header_sub(self, alm, palette: str = 'night') -> str:
         _palette(palette)
         lat, lon = alm.lat, alm.lon
+        hemi = self._hemispheres
         return '%.2f&#176; %s &#183; %.2f&#176; %s &#183; %s' % (
-            abs(lat), 'N' if lat >= 0 else 'S', abs(lon), 'E' if lon >= 0 else 'W',
+            abs(lat), _esc(hemi[0] if lat >= 0 else hemi[1]),
+            abs(lon), _esc(hemi[2] if lon >= 0 else hemi[3]),
             time.strftime('%A, %B %-d %Y, %-H:%M %Z', time.localtime(alm.time_ts)))
 
     @_panel_guard()
@@ -302,18 +363,19 @@ class SkyPage:
         sep = '<span class="sep">&#183;</span>'
         sky = _find_sky()
         if sky is None:
-            return sep.join(['Computed with the station&#8217;s built-in almanac',
-                             'weewx-skyfield is not active &#8212; see the weewxd log',
-                             'Regenerated every report cycle'])
-        parts = ['Computed with weewx-skyfield',
-                 'Skyfield and the JPL DE421 ephemeris']
+            return sep.join([self._t('Computed with the station’s built-in almanac'),
+                             self._t('weewx-skyfield is not active — see the weewxd log'),
+                             self._t('Regenerated every report cycle')])
+        parts = [self._t('Computed with weewx-skyfield'),
+                 self._t('Skyfield and the JPL DE421 ephemeris')]
         if sky.stars:
-            parts += ['IAU-CSN star names', 'Hipparcos star data Credit: ESA']
+            parts += [self._t('IAU-CSN star names'),
+                      self._t('Hipparcos star data Credit: ESA')]
         elif sky.stars_requested:
-            parts.append('star catalog unavailable &#8212; see the weewxd log')
+            parts.append(self._t('star catalog unavailable — see the weewxd log'))
         else:
-            parts.append('star catalog disabled')
-        parts.append('Regenerated every report cycle')
+            parts.append(self._t('star catalog disabled'))
+        parts.append(self._t('Regenerated every report cycle'))
         return sep.join(parts)
 
     @_panel_guard()
@@ -322,13 +384,17 @@ class SkyPage:
 
         def when_str(ts: float) -> str:
             n = max(0, int(math.ceil((ts - alm.time_ts) / 86400.0)))
-            return 'today' if n == 0 else ('in %d day%s' % (n, '' if n == 1 else 's'))
+            if n == 0:
+                return self._t('today')
+            if n == 1:
+                return self._t('in {n} day', n=1)
+            return self._t('in {n} days', n=n)
 
         chips = []
-        for label, vh in (('new moon', alm.next_new_moon),
-                          ('full moon', alm.next_full_moon),
-                          ('equinox', alm.next_equinox),
-                          ('solstice', alm.next_solstice)):
+        for label, vh in ((self._t('new moon'), alm.next_new_moon),
+                          (self._t('full moon'), alm.next_full_moon),
+                          (self._t('equinox'), alm.next_equinox),
+                          (self._t('solstice'), alm.next_solstice)):
             ts = _raw(vh)
             if ts is None:
                 continue
@@ -349,10 +415,18 @@ class SkyPage:
             pass
         if eclipse is not None:
             ts, kind, etype = eclipse
-            chips.append('<div class="count"><span class="k">%s eclipse</span>'
+            # The tags serve English data (loopdata consumers rely on it);
+            # the panel translates on display.
+            kind_label = (self._t('lunar eclipse') if kind == 'lunar'
+                          else self._t('solar eclipse'))
+            type_label = {'penumbral': self._t('penumbral'),
+                          'partial': self._t('partial'),
+                          'total': self._t('total'),
+                          'annular': self._t('annular')}.get(etype, _esc(etype))
+            chips.append('<div class="count"><span class="k">%s</span>'
                          '<span class="v mono">%s</span><span class="d">%s &#183; %s</span></div>'
-                         % (kind, time.strftime('%b %-d %Y', time.localtime(ts)),
-                            etype, when_str(ts)))
+                         % (kind_label, time.strftime('%b %-d %Y', time.localtime(ts)),
+                            type_label, when_str(ts)))
         return '\n'.join(chips)
 
     # ── moon disc ─────────────────────────────────────────────────────────────
@@ -381,8 +455,9 @@ class SkyPage:
     @_panel_guard()
     def moon_svg(self, alm, size: int = 76, palette: str = 'night') -> str:
         c = size / 2.0
-        return ('<svg width="%d" height="%d" viewBox="0 0 %d %d" aria-label="Moon phase">%s</svg>'
-                % (size, size, size, size, self._moon_disc(alm, c, c, c - 4, _palette(palette))))
+        return ('<svg width="%d" height="%d" viewBox="0 0 %d %d" aria-label="%s">%s</svg>'
+                % (size, size, size, size, self._t('Moon phase'),
+                   self._moon_disc(alm, c, c, c - 4, _palette(palette))))
 
     # ── sky dome ─────────────────────────────────────────────────────────────
     @staticmethod
@@ -406,7 +481,8 @@ class SkyPage:
         grid_px = 10.0 * label_scale
         sun = self._body(alm, 'sun')
         star_op = 0.55 if sun['alt'] > 0 else 0.95
-        p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="Sky dome chart">' % S]
+        p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="%s">'
+             % (S, self._t('Sky dome chart'))]
         p.append('<defs><radialGradient id="skyg">%s</radialGradient></defs>'
                  % ''.join('<stop offset="%s" stop-color="%s"/>' % s
                            for s in pal['dome_stops']))
@@ -421,11 +497,12 @@ class SkyPage:
                  % (cx, cy - R, cx, cy + R, line))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="%s" stroke-width="1.5"/>'
                  % (cx, cy, R, pal['dome_rim']))
-        for label, dx, dy, anch in (('N', 0, -R - 12, 'middle'), ('S', 0, R + 22, 'middle'),
-                                    ('E', -R - 14, 5, 'end'), ('W', R + 14, 5, 'start')):
+        c_n, c_e, c_s, c_w = self._cardinals(alm)
+        for label, dx, dy, anch in ((c_n, 0, -R - 12, 'middle'), (c_s, 0, R + 22, 'middle'),
+                                    (c_e, -R - 14, 5, 'end'), (c_w, R + 14, 5, 'start')):
             p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal" '
                      'style="font-size:%.1fpx">%s</text>'
-                     % (cx + dx, cy + dy, anch, card_px, label))
+                     % (cx + dx, cy + dy, anch, card_px, _esc(label)))
         p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
                  'style="font-size:%.1fpx">30&#176;</text>'
                  % (int(cx + 6 + R / 3), cy - 6, grid_px))
@@ -478,8 +555,11 @@ class SkyPage:
             x, y = self._dome_xy(cx, cy, R, s['az'], s['alt'])
             r = max(1.0, min(4.0, 3.2 - 0.62 * s['mag']))
             p.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" opacity="%.2f">'
-                     '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.2f</title></circle>'
-                     % (x, y, r, ink, star_op, _esc(s['name']), s['alt'], s['az'], s['mag']))
+                     '<title>%s</title></circle>'
+                     % (x, y, r, ink, star_op,
+                        self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
+                                name=_esc(s['name']), alt='%.1f' % s['alt'],
+                                az='%.1f' % s['az'], mag='%.2f' % s['mag'])))
             if s['mag'] <= STAR_LABEL_MAG:
                 star_labels.append((x, y - 8, _esc(s['name'])))
         for name in PLANETS:
@@ -487,11 +567,14 @@ class SkyPage:
             if b['alt'] <= 0:
                 continue
             x, y = self._dome_xy(cx, cy, R, b['az'], b['alt'])
+            label = self._label(alm, name)
             p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
-                     '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;, mag %.1f</title></circle>'
-                     % (x, y, body_color[name], _ring(pal, name), _cap(name),
-                        b['alt'], b['az'], b['mag']))
-            _try_label(x, y, _cap(name), 'bodylab', 8, must=True)
+                     '<title>%s</title></circle>'
+                     % (x, y, body_color[name], _ring(pal, name),
+                        self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
+                                name=_esc(label), alt='%.1f' % b['alt'],
+                                az='%.1f' % b['az'], mag='%.1f' % b['mag'])))
+            _try_label(x, y, _esc(label), 'bodylab', 8, must=True)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
             for i in range(8):
@@ -500,16 +583,22 @@ class SkyPage:
                          % (x + 11 * math.cos(a), y + 11 * math.sin(a),
                             x + 16 * math.cos(a), y + 16 * math.sin(a), body_color['sun']))
             p.append('<circle cx="%.1f" cy="%.1f" r="9" fill="%s" stroke="%s" stroke-width="1.5">'
-                     '<title>Sun &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (x, y, body_color['sun'], _ring(pal, 'sun'), sun['alt'], sun['az']))
-            _try_label(x, y, 'Sun', 'bodylab', 19, must=True)
+                     '<title>%s</title></circle>'
+                     % (x, y, body_color['sun'], _ring(pal, 'sun'),
+                        self._t('{name} — alt {alt}°, az {az}°',
+                                name=_esc(self._label(alm, 'sun')),
+                                alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
+            _try_label(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True)
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, moon['az'], moon['alt'])
-            p.append('<g>%s<title>Moon &#8212; alt %.1f&#176;, az %.1f&#176;, %d%% illuminated</title></g>'
+            p.append('<g>%s<title>%s</title></g>'
                      % (self._moon_disc(alm, x, y, 8, pal, ring=False),
-                        moon['alt'], moon['az'], alm.moon_fullness))
-            _try_label(x, y, 'Moon', 'bodylab', 12, must=True)
+                        self._t('{name} — alt {alt}°, az {az}°, {pct}% illuminated',
+                                name=_esc(self._label(alm, 'moon')),
+                                alt='%.1f' % moon['alt'], az='%.1f' % moon['az'],
+                                pct='%d' % alm.moon_fullness)))
+            _try_label(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True)
         for x, y, name in star_labels:
             _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + 0.05)
         p.extend(deferred)
@@ -532,7 +621,8 @@ class SkyPage:
         def X(ts: float) -> float:
             return X0 + (X1 - X0) * (min(max(ts, sod), eod) - sod) / 86400.0
 
-        p = ['<svg viewBox="0 0 1080 %d" role="img" aria-label="Rise and set timeline">' % H]
+        p = ['<svg viewBox="0 0 1080 %d" role="img" aria-label="%s">'
+             % (H, self._t('Rise and set timeline'))]
         tw = self._twilight(alm)
         sun = bodies[0]
         edges = [(sod, 'night'), (tw['astro_dawn'], 'astro'), (tw['nautical_dawn'], 'naut'),
@@ -559,13 +649,14 @@ class SkyPage:
             # daytime band; saturated bodies stay stroke-free as before.
             ring = pal.get('ring', {}).get(b['name'])
             edge = ' stroke="%s" stroke-width="1"' % ring if ring else ''
+            label = self._label(alm, b['name'])
             p.append('<circle cx="14" cy="%.1f" r="4" fill="%s"%s/>' % (cy, color, edge))
-            p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _cap(b['name'])))
+            p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _esc(label)))
             segs: List[Tuple[float, float]] = []
             if b['circumpolar']:
-                segs, right = [(sod, eod)], 'always up'
+                segs, right = [(sod, eod)], self._t('always up')
             elif b['neverup']:
-                right = 'never up'
+                right = self._t('never up')
             else:
                 r, s = b['rise'], b['set']
                 if r is not None and s is not None:
@@ -580,20 +671,23 @@ class SkyPage:
                 if xz - xa < 0.5:
                     continue
                 p.append('<rect x="%.1f" y="%.1f" width="%.1f" height="10" rx="4" fill="%s"%s>'
-                         '<title>%s above the horizon (%s)</title></rect>'
+                         '<title>%s</title></rect>'
                          % (xa, cy - 5, xz - xa, color, edge,
-                            _cap(b['name']), _dur_hm(b['visible'])))
+                            self._t('{name} above the horizon ({duration})',
+                                    name=_esc(label), duration=self._dur(b['visible']))))
             if b['transit'] is not None and sod <= b['transit'] <= eod:
                 xt = X(b['transit'])
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="2">'
-                         '<title>%s transit %s</title></line>'
-                         % (xt, cy - 8, xt, cy + 8, ink, _cap(b['name']), _t_hm(b['transit'])))
+                         '<title>%s</title></line>'
+                         % (xt, cy - 8, xt, cy + 8, ink,
+                            self._t('{name} transit {time}', name=_esc(label),
+                                    time=_t_hm(b['transit']))))
             p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>' % (X1 + 12, cy + 4, right))
         xn = X(alm.time_ts)
         p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5" '
                  'class="nowpulse"/>' % (xn, TOP - 8, xn, TOP + plot_h, brass))
-        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">now %s</text>'
-                 % (xn, TOP - 14, _t_hm(alm.time_ts)))
+        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">%s</text>'
+                 % (xn, TOP - 14, self._t('now {time}', time=_t_hm(alm.time_ts))))
         p.append('</svg>')
         return ''.join(p)
 
@@ -607,7 +701,8 @@ class SkyPage:
         def orbit_r(a: float) -> float:
             return 44 + 176 * (math.log(a) - lo) / (hi - lo)
 
-        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Solar system plan view">' % (S, S)]
+        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="%s">'
+             % (S, S, self._t('Solar system plan view'))]
         for a in SEMI_MAJOR_AU.values():
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
                      'stroke-width="1" opacity="0.8"/>' % (cx, cx, orbit_r(a), pal['line']))
@@ -616,9 +711,10 @@ class SkyPage:
         p.append('<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
                  % (S - 8, cx - 8))
         sun_ring = pal.get('ring', {}).get('sun')
-        p.append('<circle cx="%d" cy="%d" r="8" fill="%s"%s><title>Sun</title></circle>'
+        p.append('<circle cx="%d" cy="%d" r="8" fill="%s"%s><title>%s</title></circle>'
                  % (cx, cx, pal['orrery_sun'],
-                    ' stroke="%s" stroke-width="1.5"' % sun_ring if sun_ring else ''))
+                    ' stroke="%s" stroke-width="1.5"' % sun_ring if sun_ring else '',
+                    _esc(self._label(alm, 'sun'))))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
         labels: List[List[Any]] = []
@@ -626,18 +722,21 @@ class SkyPage:
             h = math.radians(hlongs[name])
             r = orbit_r(a)
             x, y = cx + r * math.cos(h), cx - r * math.sin(h)
+            disp = self._label(alm, name)
+            title = self._t('{name} — heliocentric longitude {deg}°',
+                            name=_esc(disp), deg='%.1f' % hlongs[name])
             if name == 'earth':
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="2">'
-                         '<title>Earth &#8212; heliocentric longitude %.1f&#176;</title></circle>'
-                         % (x, y, pal['earth_fill'], pal['earth_stroke'], hlongs[name]))
+                         '<title>%s</title></circle>'
+                         % (x, y, pal['earth_fill'], pal['earth_stroke'], title))
             else:
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="1.5">'
-                         '<title>%s &#8212; heliocentric longitude %.1f&#176;</title></circle>'
-                         % (x, y, pal['body'][name], _ring(pal, name), _cap(name), hlongs[name]))
+                         '<title>%s</title></circle>'
+                         % (x, y, pal['body'][name], _ring(pal, name), title))
             # Label away from center, flipped when its estimated width would
             # leave the viewBox (a body near 0 degrees sits at the right rim
             # for years at a time), then clamped vertically.
-            est_w = 8 + 7.0 * len(name)
+            est_w = 8 + 7.0 * len(disp)
             anchor = 'start' if x >= cx else 'end'
             if anchor == 'start' and x + est_w > S - 6:
                 anchor = 'end'
@@ -646,7 +745,7 @@ class SkyPage:
             lx = x + (8 if anchor == 'start' else -8)
             ly = min(max(y + 4, 14.0), S - 8.0)
             x0 = lx if anchor == 'start' else lx - est_w
-            labels.append([lx, ly, anchor, _cap(name), x0, x0 + est_w])
+            labels.append([lx, ly, anchor, _esc(disp), x0, x0 + est_w])
         # Neighbors sharing a rim (Saturn/Neptune near 0 degrees) collide;
         # push the later label down in 13 px steps until it clears.
         placed: List[List[Any]] = []
@@ -688,7 +787,8 @@ class SkyPage:
         def Y(al: float) -> float:
             return 20 + (S - 74) * (al1 - al) / (al1 - al0)
 
-        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Analemma">' % (S, S)]
+        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="%s">'
+             % (S, S, self._t('Analemma'))]
         for al in range(int(al0) + 4, int(al1), 10):
             p.append('<line x1="54" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
                      'stroke-width="1" opacity="0.55"/>' % (Y(al), S - 24, Y(al), line))
@@ -699,8 +799,8 @@ class SkyPage:
                      'stroke-width="1" opacity="0.35"/>' % (X(az), X(az), S - 54, line))
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%d&#176;</text>'
                      % (X(az), S - 36, az))
-        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">azimuth</text>'
-                 % (X((az0 + az1) / 2), S - 18))
+        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
+                 % (X((az0 + az1) / 2), S - 18, self._t('azimuth')))
         path = ' '.join('%s%.1f %.1f' % ('M' if i == 0 else 'L', X(q['az']), Y(q['alt']))
                         for i, q in enumerate(pts)) + ' Z'
         p.append('<path d="%s" fill="none" stroke="%s" stroke-width="1.5" opacity="0.9"/>'
@@ -720,28 +820,35 @@ class SkyPage:
             ly = min(max(Y(q['alt']) + dist * dy / n + 3, 14.0), S - 60.0)
             return lx, ly, ('start' if dx >= 0 else 'end')
 
+        # Months to label are picked by number — comparing strftime('%b')
+        # output against English abbreviations loses every label on a
+        # non-English OS locale.  The label text itself is strftime output,
+        # so it renders in the station's locale like the panel dates do.
         month_seen: set = set()
         for q in pts:
-            mon = time.strftime('%b', time.localtime(q['ts']))
-            first = mon not in month_seen
-            month_seen.add(mon)
+            tm = time.localtime(q['ts'])
+            first = tm.tm_mon not in month_seen
+            month_seen.add(tm.tm_mon)
             p.append('<circle cx="%.1f" cy="%.1f" r="2" fill="%s">'
-                     '<title>%s &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (X(q['az']), Y(q['alt']), muted, _t_date(q['ts']), q['alt'], q['az']))
-            if first and mon in ('Jan', 'Mar', 'Jun', 'Sep', 'Nov'):
+                     '<title>%s</title></circle>'
+                     % (X(q['az']), Y(q['alt']), muted,
+                        self._t('{date} — alt {alt}°, az {az}°', date=_t_date(q['ts']),
+                                alt='%.1f' % q['alt'], az='%.1f' % q['az'])))
+            if first and tm.tm_mon in (1, 3, 6, 9, 11):
                 if (abs(X(q['az']) - X(today['az'])) < 30
                         and abs(Y(q['alt']) - Y(today['alt'])) < 18):
                     continue
                 lx, ly, anchor = _outward(q, 13)
                 p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono gridlab">%s</text>'
-                         % (lx, ly, anchor, mon))
+                         % (lx, ly, anchor, time.strftime('%b', tm)))
         p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="1.5">'
-                 '<title>This week &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
+                 '<title>%s</title></circle>'
                  % (X(today['az']), Y(today['alt']), pal['brass'], pal['halo'],
-                    today['alt'], today['az']))
+                    self._t('This week — alt {alt}°, az {az}°',
+                            alt='%.1f' % today['alt'], az='%.1f' % today['az'])))
         lx, ly, anchor = _outward(today, 17)
-        p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">today</text>'
-                 % (lx, ly, anchor))
+        p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">%s</text>'
+                 % (lx, ly, anchor, self._t('today')))
         p.append('</svg>')
         return ''.join(p)
 
@@ -773,7 +880,8 @@ class SkyPage:
         def Y(alt: float) -> float:
             return PY0 + (PY1 - PY0) * (top - alt) / (top - FLOOR)
 
-        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Sun path today">' % (S, S)]
+        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="%s">'
+             % (S, S, self._t('Sun path today'))]
         # Day above the horizon, then the twilight depths below it.
         bands = [(top, 0.0, 'day'), (0.0, -6.0, 'civil'), (-6.0, -12.0, 'naut'),
                  (-12.0, -18.0, 'astro'), (-18.0, FLOOR, 'night')]
@@ -797,9 +905,10 @@ class SkyPage:
         for az in range(45, 360, 45):
             p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
                      'stroke-width="1" opacity="0.25"/>' % (X(az), PY0, X(az), PY1, line))
-        for az, label in ((0, 'N'), (90, 'E'), (180, 'S'), (270, 'W'), (360, 'N')):
+        c_n, c_e, c_s, c_w = self._cardinals(alm)
+        for az, label in ((0, c_n), (90, c_e), (180, c_s), (270, c_w), (360, c_n)):
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono cardinal" '
-                     'style="font-size:12px">%s</text>' % (X(az), PY1 + 20, label))
+                     'style="font-size:12px">%s</text>' % (X(az), PY1 + 20, _esc(label)))
 
         def _paths(pts: List[Tuple[int, float, float]], style: str) -> None:
             seg: List[str] = []
@@ -851,13 +960,13 @@ class SkyPage:
                 if alt >= FLOOR]
         for i, alt, az in ends:
             x, y = X(az), Y(alt)
-            p.append('<g><title>Moon at %s &#8212; the day&#8217;s track is open '
-                     'here: a lunar day runs about 50 minutes longer than a '
-                     'calendar day</title>'
+            p.append('<g><title>%s</title>'
                      '<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>'
                      '<text x="%.1f" y="%.1f" text-anchor="%s" '
                      'class="mono moonlab">%s</text></g>'
-                     % ('00:00' if i == 0 else '24:00', x, y, moon_ink,
+                     % (self._t('Moon at {time} — the day’s track is open here: a lunar day runs about 50 minutes longer than a calendar day',
+                                time='00:00' if i == 0 else '24:00'),
+                        x, y, moon_ink,
                         x + (5 if i == 0 else -5), y - 5,
                         'start' if i == 0 else 'end', '00' if i == 0 else '24'))
         for kind, glyph in (('rise', '&#8599;'), ('set', '&#8600;'), ('transit', '')):
@@ -873,27 +982,32 @@ class SkyPage:
             if kind == 'transit':
                 if any(abs(x - X(eaz)) < 34 for _i, _a, eaz in ends):
                     continue
-                p.append('<g><title>Moon transit %s &#8212; altitude %.1f&#176;</title>'
+                p.append('<g><title>%s</title>'
                          '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'stroke="%s" stroke-width="1.3"/>'
                          '<text x="%.1f" y="%.1f" text-anchor="middle" '
                          'class="mono moonlab">%s</text></g>'
-                         % (vh, alt, x, y - 3, x, y - 8, moon_ink,
+                         % (self._t('Moon transit {time} — altitude {alt}°',
+                                    time=str(vh), alt='%.1f' % alt),
+                            x, y - 3, x, y - 8, moon_ink,
                             x, _dodge(x, y - 12, -12), vh))
             else:
-                p.append('<g><title>Moon%s %s</title>'
+                title = (self._t('Moonrise {time}', time=str(vh)) if kind == 'rise'
+                         else self._t('Moonset {time}', time=str(vh)))
+                p.append('<g><title>%s</title>'
                          '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'stroke="%s" stroke-width="1.3"/>'
                          '<text x="%.1f" y="%.1f" text-anchor="middle" '
                          'class="mono moonlab">%s%s</text></g>'
-                         % (kind, vh, x, y - 4, x, y + 4, moon_ink,
+                         % (title, x, y - 4, x, y + 4, moon_ink,
                             x, _dodge(x, y + 15, 12), glyph, vh))
         moon = self._body(alm, 'moon')
         if moon['alt'] >= FLOOR:
             x, y = X(moon['az']), Y(moon['alt'])
-            p.append('<g>%s<title>Moon now &#8212; alt %.1f&#176;, az %.1f&#176;</title></g>'
+            p.append('<g>%s<title>%s</title></g>'
                      % (self._moon_disc(alm, x, y, 7, pal, ring=False),
-                        moon['alt'], moon['az']))
+                        self._t('Moon now — alt {alt}°, az {az}°',
+                                alt='%.1f' % moon['alt'], az='%.1f' % moon['az'])))
         sun = self._body(alm, 'sun')
         if sun['alt'] >= FLOOR:
             x, y = X(sun['az']), Y(sun['alt'])
@@ -904,8 +1018,10 @@ class SkyPage:
                          % (x + 9 * math.cos(a), y + 9 * math.sin(a),
                             x + 13 * math.cos(a), y + 13 * math.sin(a), body_color['sun']))
             p.append('<circle cx="%.1f" cy="%.1f" r="7" fill="%s" stroke="%s" stroke-width="1.5">'
-                     '<title>Sun now &#8212; alt %.1f&#176;, az %.1f&#176;</title></circle>'
-                     % (x, y, body_color['sun'], _ring(pal, 'sun'), sun['alt'], sun['az']))
+                     '<title>%s</title></circle>'
+                     % (x, y, body_color['sun'], _ring(pal, 'sun'),
+                        self._t('Sun now — alt {alt}°, az {az}°',
+                                alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
         p.append('</svg>')
         return ''.join(p)
 
@@ -976,8 +1092,8 @@ class SkyPage:
             set_h.append(hod(sset) if sset is not None else None)
             noon_h.append(hod(noon) if noon is not None else None)
 
-        p = ['<svg viewBox="0 0 1080 %d" role="img" aria-label="Day length through the year">'
-             % H]
+        p = ['<svg viewBox="0 0 1080 %d" role="img" aria-label="%s">'
+             % (H, self._t('Day length through the year'))]
         for w, (ts, edges, rise, sset) in enumerate(cols):
             x = XW(w)
             for i, (h, shade) in enumerate(edges):
@@ -987,8 +1103,10 @@ class SkyPage:
                 rect = ('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"/>'
                         % (x, Y(h2), colw + 0.4, Y(h) - Y(h2), pal['twilight'][shade]))
                 if shade == 'day' and rise is not None and sset is not None:
-                    rect = rect[:-2] + ('><title>%s &#8212; daylight %s</title></rect>'
-                                        % (_t_date(ts), _dur_hm(max(0.0, sset - rise))))
+                    rect = rect[:-2] + ('><title>%s</title></rect>'
+                                        % self._t('{date} — daylight {duration}',
+                                                  date=_t_date(ts),
+                                                  duration=self._dur(max(0.0, sset - rise))))
                 p.append(rect)
         for h in range(0, 25, 3):
             p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
@@ -1024,8 +1142,8 @@ class SkyPage:
         wf_now = min(max((alm.time_ts - noon0) / (7 * 86400.0) + 0.5, 0.0), float(WEEKS))
         p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5"/>'
                  % (XW(wf_now), TOP - 8, XW(wf_now), TOP + PH, brass))
-        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">today</text>'
-                 % (XW(wf_now), TOP - 12))
+        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">%s</text>'
+                 % (XW(wf_now), TOP - 12, self._t('today')))
         p.append('</svg>')
         return ''.join(p)
 
@@ -1047,21 +1165,24 @@ class SkyPage:
         def X(ts: float) -> float:
             return M + W * (ts - prev_new) / span
 
-        p = ['<svg viewBox="0 0 1080 152" role="img" aria-label="The lunar month">']
+        p = ['<svg viewBox="0 0 1080 152" role="img" aria-label="%s">'
+             % self._t('The lunar month')]
         today_i = int(round((alm.time_ts - prev_new) / span * (N - 1)))
         today_i = min(max(today_i, 0), N - 1)
         for i in range(N):
             ts = prev_new + span * i / (N - 1)
             a = alm(almanac_time=ts)
             x = M + W * i / (N - 1.0)
-            p.append('<g>%s<title>%s &#8212; %d%% illuminated</title></g>'
-                     % (self._moon_disc(a, x, y_disc, r, pal), _t_date(ts), a.moon_fullness))
+            p.append('<g>%s<title>%s</title></g>'
+                     % (self._moon_disc(a, x, y_disc, r, pal),
+                        self._t('{date} — {pct}% illuminated', date=_t_date(ts),
+                                pct='%d' % a.moon_fullness)))
         aq = alm(almanac_time=prev_new + 3600)
-        quarters = ((prev_new, 'new'),
-                    (_raw(aq.next_first_quarter_moon), 'first quarter'),
-                    (_raw(aq.next_full_moon), 'full'),
-                    (_raw(aq.next_last_quarter_moon), 'last quarter'),
-                    (next_new, 'new'))
+        quarters = ((prev_new, self._t('new')),
+                    (_raw(aq.next_first_quarter_moon), self._t('first quarter')),
+                    (_raw(aq.next_full_moon), self._t('full')),
+                    (_raw(aq.next_last_quarter_moon), self._t('last quarter')),
+                    (next_new, self._t('new')))
         for ts_q, name in quarters:
             if ts_q is None or not prev_new <= ts_q <= next_new:
                 continue
@@ -1075,8 +1196,8 @@ class SkyPage:
         x_t = M + W * today_i / (N - 1.0)
         p.append('<circle cx="%.1f" cy="%d" r="%.1f" fill="none" stroke="%s" '
                  'stroke-width="1.5"/>' % (x_t, y_disc, r + 4.5, pal['brass']))
-        p.append('<text x="%.1f" y="40" text-anchor="middle" class="todaylab">today</text>'
-                 % x_t)
+        p.append('<text x="%.1f" y="40" text-anchor="middle" class="todaylab">%s</text>'
+                 % (x_t, self._t('today')))
         p.append('</svg>')
         return ''.join(p)
 
@@ -1098,36 +1219,45 @@ class SkyPage:
         tw = self._twilight(alm)
         rows.append(
             '<div class="chip"><span class="dot" style="%s"></span>'
-            '<div><div class="chipname">Daylight</div>'
-            '<div class="chipline mono">%s &#183; sun %s &#8594; %s</div>'
-            '<div class="chipsub mono">civil dusk %s &#183; astro dark %s</div></div></div>'
-            % (dot_style('sun'), _dur_hm(sun['visible']), _t_hm(sun['rise']),
-               _t_hm(sun['set']), _t_hm(tw['civil_dusk']), _t_hm(tw['astro_dusk'])))
+            '<div><div class="chipname">%s</div>'
+            '<div class="chipline mono">%s</div>'
+            '<div class="chipsub mono">%s</div></div></div>'
+            % (dot_style('sun'), self._t('Daylight'),
+               self._t('{duration} · sun {rise} → {set}',
+                       duration=self._dur(sun['visible']),
+                       rise=_t_hm(sun['rise']), set=_t_hm(sun['set'])),
+               self._t('civil dusk {dusk} · astro dark {dark}',
+                       dusk=_t_hm(tw['civil_dusk']), dark=_t_hm(tw['astro_dusk']))))
         for name in PLANETS:
             b = self._body(alm, name)
             if b['alt'] > 0:
-                line = 'up now &#8212; alt %.0f&#176; &#183; az %.0f&#176;' % (b['alt'], b['az'])
+                line = self._t('up now — alt {alt}° · az {az}°',
+                               alt='%.0f' % b['alt'], az='%.0f' % b['az'])
             elif b['rise'] is not None:
-                line = 'rises %s' % _t_hm(b['rise'])
+                line = self._t('rises {time}', time=_t_hm(b['rise']))
             else:
-                line = 'below the horizon'
-            sub = ('mag %+.1f &#183; %.2f au &#183; elong %.0f&#176;'
-                   % (b['mag'], b['dist_au'], b['elong']))
+                line = self._t('below the horizon')
+            sub = self._t('mag {mag} · {dist} au · elong {elong}°',
+                          mag='%+.1f' % b['mag'], dist='%.2f' % b['dist_au'],
+                          elong='%.0f' % b['elong'])
             if b['constellation']:
-                sub = 'in %s &#183; %s' % (_esc(b['constellation']), sub)
+                sub = '%s &#183; %s' % (self._t('in {constellation}',
+                                                constellation=_esc(b['constellation'])), sub)
             extra = ''
             if name == 'jupiter':
-                extra = ('<div class="chipsub mono">CML I %.0f&#176; &#183; II %.0f&#176;</div>'
-                         % (math.degrees(alm.jupiter.cmlI) % 360.0,
-                            math.degrees(alm.jupiter.cmlII) % 360.0))
+                extra = ('<div class="chipsub mono">%s</div>'
+                         % self._t('CML I {one}° · II {two}°',
+                                   one='%.0f' % (math.degrees(alm.jupiter.cmlI) % 360.0),
+                                   two='%.0f' % (math.degrees(alm.jupiter.cmlII) % 360.0)))
             elif name == 'saturn':
-                extra = ('<div class="chipsub mono">ring tilt %+.1f&#176;</div>'
-                         % math.degrees(alm.saturn.earth_tilt))
+                extra = ('<div class="chipsub mono">%s</div>'
+                         % self._t('ring tilt {tilt}°',
+                                   tilt='%+.1f' % math.degrees(alm.saturn.earth_tilt)))
             rows.append(
                 '<div class="chip"><span class="dot" style="%s"></span>'
                 '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
                 '<div class="chipsub mono">%s</div>%s</div></div>'
-                % (dot_style(name), _cap(name), line, sub, extra))
+                % (dot_style(name), _esc(self._label(alm, name)), line, sub, extra))
         return '\n'.join(rows)
 
     @_panel_guard()
@@ -1138,20 +1268,23 @@ class SkyPage:
         for name in ['sun', 'moon'] + PLANETS:
             b = self._body(alm, name)
             if name == 'moon':
-                dist = '{:,.0f} km'.format(b['dist_au'] * 149597870.7)
+                dist = self._t('{dist} km', dist='{:,.0f}'.format(b['dist_au'] * 149597870.7))
             else:
-                dist = '%.3f au' % b['dist_au']
+                dist = self._t('{dist} au', dist='%.3f' % b['dist_au'])
             ring = pal.get('ring', {}).get(name)
             edge = ';box-shadow:inset 0 0 0 1.5px %s' % ring if ring else ''
             rows.append('<tr><td class="tname"><span class="dot" style="background:%s%s">'
                         '</span>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
                         '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%+.1f</td><td>%s</td></tr>'
-                        % (body_color[name], edge, _cap(name), _t_hm(b['rise']),
-                           _t_hm(b['transit']), _t_hm(b['set']), _dur_hm(b['visible']),
-                           b['alt'], b['az'], b['mag'], dist))
-        return ('<table><thead><tr><th>Body</th><th>Rise</th><th>Transit</th><th>Set</th>'
-                '<th>Up for</th><th>Altitude</th><th>Azimuth</th><th>Mag</th><th>Distance</th>'
-                '</tr></thead><tbody>%s</tbody></table>' % '\n'.join(rows))
+                        % (body_color[name], edge, _esc(self._label(alm, name)),
+                           _t_hm(b['rise']), _t_hm(b['transit']), _t_hm(b['set']),
+                           self._dur(b['visible']), b['alt'], b['az'], b['mag'], dist))
+        return ('<table><thead><tr><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'
+                '<th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'
+                '</tr></thead><tbody>%s</tbody></table>'
+                % (self._t('Body'), self._t('Rise'), self._t('Transit'), self._t('Set'),
+                   self._t('Up for'), self._t('Altitude'), self._t('Azimuth'),
+                   self._t('Mag'), self._t('Distance'), '\n'.join(rows)))
 
 
 class SkyfieldSky(SearchList):
@@ -1161,4 +1294,6 @@ class SkyfieldSky(SearchList):
         SearchList.__init__(self, generator)
 
     def get_extension_list(self, timespan, db_lookup):
-        return [{'sky_page': SkyPage()}]
+        # The report's skin_dict carries [Texts] (and [Labels]) for this
+        # page's language -- each embedding report gets its own.
+        return [{'sky_page': SkyPage(self.generator.skin_dict)}]

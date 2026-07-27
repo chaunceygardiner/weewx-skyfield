@@ -1,6 +1,47 @@
 weewx-skyfield change history
 -----------------------------
 
+1.12 2026/07/27
+---------------
+- FIX: on stations running a non-English OS locale, the analemma panel's
+  month labels (Jan, Mar, Jun, Sep, Nov) silently vanished -- the months
+  to label were picked by comparing strftime('%b') output against the
+  English abbreviations.  Months are now picked by number, and the
+  labels render in the station's own locale, as the panel's dates
+  always have.
+- NEW tag $almanac.<body>.label: the body's display name, translated by
+  the skin.  Add the tag name to the skin's [Almanac] section (the same
+  section that holds moon_phases) in a lang file or skin.conf -- for
+  example "moon = Mond" -- and $almanac.moon.label renders Mond;
+  untranslated bodies fall back to the English name, so a partial list
+  is fine.  Works for every body and named star, follows each report's
+  own language, and (like constellation) needs no PyEphem.  This opens
+  the 1.12 internationalization work.
+- The Sky page is now translatable, entirely through WeeWX's own
+  mechanisms.  Every string the page renders -- captions, panel labels,
+  tooltips, chips, table headers, the footer -- is a gettext-style
+  [Texts] key: the English string IS the key, and a report falls back
+  to English one string at a time, so a partial translation is fine and
+  never blanks a panel.  Body names on the panels follow the [Almanac]
+  section (the same source as the new .label tag), compass cardinals
+  the report's [Units] [[Ordinates]] directions, and the header's
+  hemisphere letters [Labels] hemispheres -- the core-standard sources,
+  no invented keys.  The skin ships lang/en.conf, the reference
+  dictionary: a test now fails if a rendered string is missing from it,
+  or if it carries a string nothing renders, so the dictionary tracks
+  the page exactly.  Set the language per report with lang = <code> in
+  weewx.conf ([StdReport] [[SkyfieldReport]]); month and date names
+  already follow the station's OS locale.  Skins embedding the panels
+  get all of this through their own report's lang/[Texts] sections.
+- German ships with the skin (Beta): lang/de.conf is a complete
+  translation of the dictionary (a test keeps it complete, so new
+  strings cannot ship untranslated).  Set lang = de in the
+  [[SkyfieldReport]] section of weewx.conf.  Beta means the words,
+  not the machinery: the translation awaits native-speaker review,
+  and a clumsy phrase is the worst it can do -- corrections are
+  welcome, as are further languages; a lang file is a self-contained,
+  no-code contribution.
+
 1.11 2026/07/27
 ---------------
 - The Sun's Path panel now marks times on the moon's dashed curve:

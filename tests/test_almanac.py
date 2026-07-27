@@ -955,6 +955,34 @@ PYEPHEM_PARITY_EXPRESSIONS = [
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
 ]
 
+class TestBodyLabel:
+    """$almanac.<body>.label -- the body's display name, translated by the
+    skin's [Almanac] texts (key = the tag name, beside moon_phases; WeeWX
+    pipes the section into every almanac), falling back to the English
+    .name for bodies the skin does not translate."""
+
+    def test_untranslated_falls_back_to_name(self, almanac):
+        assert almanac.sun.label == 'Sun'
+        assert almanac.moon.label == 'Moon'
+
+    @needs_catalog
+    def test_star_label(self, almanac):
+        assert almanac.rigel.label == 'Rigel'
+        assert almanac.proxima_centauri.label == 'Proxima Centauri'
+
+    def test_translated(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter(),
+                texts={'moon': 'Mond', 'sun': 'Sonne'})
+            assert alm.moon.label == 'Mond'
+            assert alm.sun.label == 'Sonne'
+            # A body absent from the texts falls back to English.
+            assert alm.jupiter.label == 'Jupiter'
+
+
 class TestConstellations:
     """$almanac.<body>.constellation / .constellation_abbr, computed from
     the observer's topocentric apparent place against skyfield's bundled
@@ -1127,6 +1155,7 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
     "almanac.sun.constellation", "almanac.sun.constellation_abbr",
     "almanac.moon.constellation", "almanac.mars.constellation_abbr",
+    "almanac.sun.label", "almanac.moon.label",
     "almanac.next_lunar_eclipse", "almanac.next_lunar_eclipse_type",
     "almanac.previous_lunar_eclipse", "almanac.previous_lunar_eclipse_type",
     "almanac.next_solar_eclipse", "almanac.next_solar_eclipse_type",
@@ -1144,6 +1173,7 @@ SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.proxima_centauri.earth_distance", "almanac.barnards_star.mag",
     "almanac.hip_32349.mag",
     "almanac.rigel.constellation", "almanac.rigel.constellation_abbr",
+    "almanac.rigel.label",
 ]
 
 

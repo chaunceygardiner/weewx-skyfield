@@ -9,6 +9,7 @@ description: The $almanac tags weewx-skyfield computes natively — bodies, star
 [Installation](installation.md) ·
 [The Sky page](sky-page.md) ·
 [Sky panels in your skin](panels.md) ·
+[Translating (i18n)](i18n.md) ·
 [GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
 
 ---
@@ -53,6 +54,39 @@ for a topocentric overlap of the solar and lunar discs at the station.  When a s
 "the next eclipse, whichever kind", the combined `$almanac.next_eclipse` (and
 `previous_eclipse`) picks the sooner (later) of the two, with `_kind` ("lunar"/"solar") and
 `_type` companions — the Sky page's eclipse chip is written with exactly these three tags.
+
+## Translated body names
+
+Every body, stars included, carries a display name a skin can translate:
+`$almanac.moon.label` (new in 1.12).  Add the tag name to the report's `[Almanac]` section —
+the same section that holds `moon_phases`, so usually in a lang file — for example:
+
+```ini
+[Almanac]
+    moon = Mond
+    polaris = Polarstern
+```
+
+and `$almanac.moon.label` renders "Mond", `$almanac.polaris.label` "Polarstern".  Bodies the
+report does not translate fall back to the English name, so a partial list is fine, and the
+lookup follows each report's own language — the entry belongs in the report that uses the
+tag, in its lang file or `skin.conf`, or per report in `weewx.conf`:
+
+```ini
+[StdReport]
+    [[MyReport]]
+        [[[Almanac]]]
+            polaris = Polarstern
+```
+
+(the `weewx.conf` form survives skin and extension upgrades; under `[[Defaults]]` instead
+of `[[MyReport]]` it applies to every report at once — see
+[Your own reports and skins](i18n.md#your-own-reports-and-skins) and
+[One place for the whole station](i18n.md#one-place-for-the-whole-station-defaults) on the
+translation page).
+On [live-updating pages](index.md#live-updating-pages), a weewx-loopdata almanac field such
+as `almanac.moon.label` renders in the language of loopdata's target report — one language
+per loopdata instance.
 
 ## Stars
 

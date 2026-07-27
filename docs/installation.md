@@ -9,6 +9,7 @@ description: Installation, configuration and Skyfield-upgrade instructions for t
 [Almanac tags](tags.md) ·
 [The Sky page](sky-page.md) ·
 [Sky panels in your skin](panels.md) ·
+[Translating (i18n)](i18n.md) ·
 [GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
 
 ---

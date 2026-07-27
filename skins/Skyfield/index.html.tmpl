@@ -1,3 +1,4 @@
+#encoding UTF-8
 ## The Sky page: a one-page showcase of the weewx-skyfield almanac.
 ## Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 ## Distributed under the terms of the GNU Public License (GPLv3)
@@ -5,24 +6,29 @@
 ## Every dynamic block is produced by $sky_page (user.wxskyfield_sky), which
 ## computes it from the same $almanac tags available to any template.
 ##
+## Every English string is a $gettext key (the key IS the English text, so a
+## missing [Texts] entry falls back to it); the report's lang file translates
+## the page.  tests/test_sky_page.py reads these keys from this file and
+## enforces that lang/en.conf ships exactly the keys that render.
+##
 ## Layout: on wide screens (>= 1160px) .main is a two-track grid -- the
 ## primary track (dome, ribbons, day length, lunation, table) beside a right
 ## rail (planet chips, sun path, orrery, analemma).  Below that, sky.css
 ## flattens both tracks with display:contents and reorders the sections for
 ## a single column.
 <!DOCTYPE html>
-<html lang="en">
+<html lang="$lang">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Sky over $station.location</title>
+  <title>$gettext("The Sky over {location}").format(location=$station.location)</title>
   <link rel="stylesheet" href="sky.css">
 </head>
 <body>
 <div class="page">
 <header>
   <div>
-    <h1>The Sky <span class="over">over</span> $station.location</h1>
+    <h1>$gettext('The Sky <span class="over">over</span> {location}').format(location=$station.location)</h1>
     <div class="sub mono">$sky_page.header_sub($almanac)</div>
     <div class="countdown">
       $sky_page.countdown_html($almanac)
@@ -31,8 +37,8 @@
   <div class="moonbox">
     <div class="mlabel">
       <div class="mname">$almanac.moon_phase</div>
-      <div class="mpct mono">$almanac.moon_fullness% illuminated</div>
-      <div class="mpct mono">moonset $almanac.moon.set.format("%H:%M")</div>
+      <div class="mpct mono">$gettext("{pct}% illuminated").format(pct=$almanac.moon_fullness)</div>
+      <div class="mpct mono">$gettext("moonset {time}").format(time=$almanac.moon.set.format("%H:%M"))</div>
     </div>
     $sky_page.moon_svg($almanac)
   </div>
@@ -41,89 +47,68 @@
 <div class="main">
   <div class="primary">
     <section class="sec-dome">
-      <h2 class="eyebrow">The Sky Now &middot; looking up</h2>
+      <h2 class="eyebrow">$gettext("The Sky Now · looking up")</h2>
       $sky_page.dome_svg($almanac)
-      <p class="caption">North at the top, east at the left &mdash; the sky-chart
-      orientation, as if lying on your back looking up.  Altitude rings at 30&deg;
-      and 60&deg;; the rim is the horizon.
+      <p class="caption">$gettext("North at the top, east at the left — the sky-chart orientation, as if lying on your back looking up.  Altitude rings at 30° and 60°; the rim is the horizon.")
       #if $sky_page.sun_is_up($almanac)
-      The sun is up, so the plate shows the stars where they stand behind the
-      daylight &mdash; Skyfield knows, even when you cannot see them.
+      $gettext("The sun is up, so the plate shows the stars where they stand behind the daylight — Skyfield knows, even when you cannot see them.")
       #else
-      Dot size follows magnitude; the brighter the star, the larger the mark.
+      $gettext("Dot size follows magnitude; the brighter the star, the larger the mark.")
       #end if
-      Hover any mark for its coordinates.</p>
+      $gettext("Hover any mark for its coordinates.")</p>
     </section>
 
     <section class="sec-ribbons">
-      <h2 class="eyebrow">Rise &amp; Set &middot; today</h2>
+      <h2 class="eyebrow">$gettext("Rise & Set · today")</h2>
       $sky_page.ribbons_svg($almanac)
-      <p class="caption">Bars span each body's time above the horizon; the ivory tick
-      is the transit.  Background bands are tonight's darkness: civil, nautical and
-      astronomical twilight &mdash; the USNO geometric definitions.</p>
+      <p class="caption">$gettext("Bars span each body's time above the horizon; the ivory tick is the transit.  Background bands are tonight's darkness: civil, nautical and astronomical twilight — the USNO geometric definitions.")</p>
     </section>
 
     <section class="sec-daylength">
-      <h2 class="eyebrow">The Solar Year &middot; daylight week by week</h2>
+      <h2 class="eyebrow">$gettext("The Solar Year · daylight week by week")</h2>
       $sky_page.daylength_svg($almanac)
-      <p class="caption">Sunrise, sunset and solar noon (dashed) for every week of the
-      year, over the same twilight bands as the timeline above &mdash; in local clock
-      time, so the daylight-saving steps in spring and fall are real.  The brass line
-      is today.</p>
+      <p class="caption">$gettext("Sunrise, sunset and solar noon (dashed) for every week of the year, over the same twilight bands as the timeline above — in local clock time, so the daylight-saving steps in spring and fall are real.  The brass line is today.")</p>
     </section>
 
     <section class="sec-lunation">
-      <h2 class="eyebrow">The Lunar Month &middot; this lunation</h2>
+      <h2 class="eyebrow">$gettext("The Lunar Month · this lunation")</h2>
       $sky_page.lunation_svg($almanac)
-      <p class="caption">New moon to new moon in thirty steps, the principal phases
-      dated; the brass ring is today.  Hover any disc for its date and illumination.</p>
+      <p class="caption">$gettext("New moon to new moon in thirty steps, the principal phases dated; the brass ring is today.  Hover any disc for its date and illumination.")</p>
     </section>
 
     <section class="sec-table">
-      <h2 class="eyebrow">The Almanac Table</h2>
+      <h2 class="eyebrow">$gettext("The Almanac Table")</h2>
       <div class="tablewrap">
         $sky_page.table_html($almanac)
       </div>
-      <p class="caption">Every value on this page is a WeeWX report tag served by
-      weewx-skyfield &mdash; no PyEphem, no downloads at run time.</p>
+      <p class="caption">$gettext("Every value on this page is a WeeWX report tag served by weewx-skyfield — no PyEphem, no downloads at run time.")</p>
     </section>
   </div>
 
   <aside class="rail">
     <section class="sec-chips">
-      <h2 class="eyebrow">Sun &amp; Planets &middot; today</h2>
+      <h2 class="eyebrow">$gettext("Sun & Planets · today")</h2>
       <div class="chips">
         $sky_page.chips_html($almanac)
       </div>
     </section>
 
     <section class="sec-sunpath">
-      <h2 class="eyebrow">The Sun&#8217;s Path &middot; today</h2>
+      <h2 class="eyebrow">$gettext("The Sun’s Path · today")</h2>
       $sky_page.sunpath_svg($almanac)
-      <p class="caption">Altitude against azimuth from midnight to midnight, a dot
-      every hour.  The dashed curve is the moon&#8217;s path, its rise, set and
-      highest point marked with times; the 00 and 24 dots are the moon&#8217;s
-      positions at the day&#8217;s two midnights &#8212; the curve is open between
-      them because a lunar day runs about 50 minutes longer than a calendar day,
-      and near full moon that break sits right at the top of the arc.  The bands
-      below the horizon line are civil, nautical and astronomical twilight
-      depth.</p>
+      <p class="caption">$gettext("Altitude against azimuth from midnight to midnight, a dot every hour.  The dashed curve is the moon’s path, its rise, set and highest point marked with times; the 00 and 24 dots are the moon’s positions at the day’s two midnights — the curve is open between them because a lunar day runs about 50 minutes longer than a calendar day, and near full moon that break sits right at the top of the arc.  The bands below the horizon line are civil, nautical and astronomical twilight depth.")</p>
     </section>
 
     <section class="sec-orrery">
-      <h2 class="eyebrow">The Solar System &middot; today's positions</h2>
+      <h2 class="eyebrow">$gettext("The Solar System · today's positions")</h2>
       $sky_page.orrery_svg($almanac)
-      <p class="caption">Heliocentric longitudes, viewed from above the north
-      ecliptic pole; orbit spacing is logarithmic.  The dashed ray marks 0&deg;
-      (the direction of the vernal equinox).</p>
+      <p class="caption">$gettext("Heliocentric longitudes, viewed from above the north ecliptic pole; orbit spacing is logarithmic.  The dashed ray marks 0° (the direction of the vernal equinox).")</p>
     </section>
 
     <section class="sec-analemma">
-      <h2 class="eyebrow">Analemma &middot; the sun at noon</h2>
+      <h2 class="eyebrow">$gettext("Analemma · the sun at noon")</h2>
       $sky_page.analemma_svg($almanac)
-      <p class="caption">The sun's altitude and azimuth at local standard noon for
-      every week of the year.  The figure-eight is the sum of Earth's tilt and its
-      elliptical orbit; the brass point is this week.</p>
+      <p class="caption">$gettext("The sun's altitude and azimuth at local standard noon for every week of the year.  The figure-eight is the sum of Earth's tilt and its elliptical orbit; the brass point is this week.")</p>
     </section>
   </aside>
 </div>

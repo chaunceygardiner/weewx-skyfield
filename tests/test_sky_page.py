@@ -119,6 +119,30 @@ class TestPanels:
         assert_balanced(svg)
         assert svg.count('<circle') >= 54    # 53 weekly points + today
         assert 'today' in svg
+        assert '>Mar</text>' in svg and '>Nov</text>' in svg
+
+    def test_analemma_month_labels_non_english_locale(self, almanac, page, monkeypatch):
+        """Month labels are picked by month number and rendered with
+        strftime, so a non-English OS locale keeps its labels -- in its
+        own language.  Regression: through 1.11 the pick compared
+        strftime('%b') output against 'Jan'/'Mar'/... and every label
+        silently vanished on such stations."""
+        real_strftime = time.strftime
+        german = {1: 'Jan', 2: 'Feb', 3: 'Mär', 4: 'Apr', 5: 'Mai', 6: 'Jun',
+                  7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Okt', 11: 'Nov', 12: 'Dez'}
+
+        def strftime_de(fmt, tt=None):
+            if tt is None:
+                tt = time.localtime()
+            if fmt == '%b':
+                return german[tt.tm_mon]
+            return real_strftime(fmt, tt)
+
+        monkeypatch.setattr(time, 'strftime', strftime_de)
+        svg = page.analemma_svg(almanac)
+        assert_balanced(svg)
+        assert '>Mär</text>' in svg
+        assert '>Nov</text>' in svg
 
     def test_moon_svg(self, almanac, page):
         svg = page.moon_svg(almanac)
@@ -467,3 +491,213 @@ class TestSkinFiles:
         # that installs to public_html/public_html/skyfield.
         assert "'HTML_ROOT': 'skyfield'" in installer
         assert 'public_html' not in installer
+
+    def test_installer_lists_lang_files(self):
+        with open(os.path.join(REPO_ROOT, 'install.py')) as f:
+            installer = f.read()
+        lang_dir = os.path.join(self.SKIN_DIR, 'lang')
+        assert os.listdir(lang_dir), 'lang dir missing or empty'
+        for name in os.listdir(lang_dir):
+            assert 'skins/Skyfield/lang/%s' % name in installer
+
+
+class TestI18n:
+    """The Sky page's translation plumbing (1.12).  [Texts] is
+    gettext-style: the English string is the key, and a report falls back
+    to it one string at a time, so a partial translation is fine.  Body
+    display names come from the almanac's own texts (the [Almanac]
+    section, the same source as $almanac.<body>.label), compass cardinals
+    from the report formatter's [Units][[Ordinates]] directions, and the
+    coordinate hemisphere letters from [Labels] hemispheres."""
+
+    LANG_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'lang')
+
+    @staticmethod
+    def rendered_keys():
+        """Every translation key the page can render, read from the two
+        sources: self._t('...') calls in wxskyfield_sky.py (keys are
+        single-line, single-quoted literals by convention) and
+        $gettext("...") calls in the template."""
+        with open(os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_sky.py'),
+                  encoding='utf-8') as f:
+            sle = re.findall(r"self\._t\(\s*'([^']*)'", f.read())
+        with open(os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'index.html.tmpl'),
+                  encoding='utf-8') as f:
+            tmpl = re.findall(r'\$gettext\(\s*(?:"([^"]+)"|\'([^\']+)\')\s*\)', f.read())
+        assert sle and tmpl
+        return set(sle) | {a or b for a, b in tmpl}
+
+    def test_en_conf_ships_exactly_what_renders(self):
+        """Both directions: a rendered key missing from lang/en.conf fails,
+        and an en.conf key nothing renders fails -- the English file is the
+        reference dictionary for translators and embedding skins, and it
+        must grow and shrink with the features that render it."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'en.conf'),
+                                   encoding='utf-8', file_error=True)
+        shipped = dict(conf['Texts'])
+        rendered = self.rendered_keys()
+        assert sorted(rendered - set(shipped)) == [], 'rendered but not in en.conf'
+        assert sorted(set(shipped) - rendered) == [], 'in en.conf but never rendered'
+        # English is the identity translation: every value equals its key
+        # (so the file doubles as the untranslated reference).
+        assert [k for k, v in shipped.items() if v != k] == []
+        # Every English format string must itself format cleanly: _t falls
+        # back to it when a translation's placeholders are broken.
+        for k in rendered:
+            k.format(**{name: 'x' for name in set(re.findall(r'\{(\w+)\}', k))})
+
+    def test_en_conf_core_sections(self):
+        """The lang file is self-contained: it carries the core-standard
+        sections the panels read (hemispheres, ordinates, moon phases) and
+        a display name for every body the page draws, earth included."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'en.conf'),
+                                   encoding='utf-8', file_error=True)
+        assert list(conf['Labels']['hemispheres']) == ['N', 'S', 'E', 'W']
+        assert len(conf['Units']['Ordinates']['directions']) == 17
+        assert len(conf['Almanac']['moon_phases']) == 8
+        for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
+            assert conf['Almanac'][body] == body.title()
+
+    GERMAN_SKIN = {
+        'Texts': {
+            'today': 'heute',
+            'now {time}': 'jetzt {time}',
+            'Daylight': 'Tageslicht',
+            'Body': 'Körper',
+            'up now — alt {alt}° · az {az}°':
+                'jetzt sichtbar — Höhe {alt}° · Azimut {az}°',
+            'rises {time}': 'Aufgang {time}',
+            'below the horizon': 'unter dem Horizont',
+            'Computed with weewx-skyfield': 'Berechnet mit weewx-skyfield',
+        },
+        'Labels': {'hemispheres': ['Nord', 'Süd', 'Ost', 'West']},
+    }
+
+    def test_translated_rendering(self, sky):
+        """Translations reach the panels through all four channels --
+        [Texts], [Almanac] body names, formatter ordinates, [Labels]
+        hemispheres -- and untranslated strings stay English."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            ordinates = ['N', 'NNO', 'NO', 'ONO', 'O', 'OSO', 'SO', 'SSO',
+                         'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW', '-']
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(ordinate_names=ordinates),
+                texts={'moon': 'Mond'})
+            page = wxskyfield_sky.SkyPage(self.GERMAN_SKIN)
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            chips = page.chips_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            daylength = page.daylength_svg(alm)
+            header = page.header_sub(alm)
+            footer = page.footer_html()
+        assert '>O</text>' in dome                    # east cardinal, Ordinates
+        assert '</span>Mond</td>' in table            # body name, [Almanac]
+        assert '<th>Körper</th>' in table        # header, [Texts]
+        assert '<th>Rise</th>' in table               # untranslated: English
+        assert 'Tageslicht' in chips
+        assert 'jetzt sichtbar' in chips              # Mars is up at the fixture noon
+        assert '>jetzt 12:00</text>' in ribbons
+        assert '>heute</text>' in daylength
+        assert 'Nord' in header and 'West' in header  # lat >= 0, lon < 0
+        assert 'Berechnet mit weewx-skyfield' in footer
+        assert 'IAU-CSN star names' in footer         # untranslated: English
+
+    def test_star_name_translated(self, sky):
+        """Named stars translate through [Almanac] like the planets, keyed
+        by tag name; Polaris is circumpolar from the test latitude so it is
+        always on the dome."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter(),
+                                        texts={'polaris': 'Polarstern'})
+            svg = wxskyfield_sky.SkyPage().dome_svg(alm)
+        assert 'Polarstern' in svg
+
+    def test_translation_is_escaped(self, almanac):
+        """Translators control [Texts] values, so they are markup-escaped
+        at injection -- quotes included, the strings land in attributes."""
+        page = wxskyfield_sky.SkyPage({'Texts': {'today': 'to & day <b>"x"'}})
+        svg = page.daylength_svg(almanac)
+        assert_balanced(svg)
+        assert 'to &amp; day &lt;b&gt;&quot;x&quot;' in svg
+        assert '<b>' not in svg
+
+    def test_broken_placeholder_falls_back_to_english(self, almanac):
+        """A translation with a broken {placeholder} must not blank the
+        panel: _t falls back to the English key, which always formats."""
+        page = wxskyfield_sky.SkyPage({'Texts': {'now {time}': 'jetzt {tiem}'}})
+        svg = page.ribbons_svg(almanac)
+        assert_balanced(svg)
+        assert '>now 12:00</text>' in svg
+        assert 'tiem' not in svg
+
+    def test_shipped_lang_files_are_consistent(self):
+        """Every shipped lang file must parse, translate only keys en.conf
+        ships (a stale key would silently never render), keep each value's
+        placeholders exactly its key's set (a renamed one knocks the string
+        back to English at run time), and carry the core sections."""
+        configobj = pytest.importorskip('configobj')
+        rendered = self.rendered_keys()
+        names = sorted(os.listdir(self.LANG_DIR))
+        assert 'en.conf' in names and 'de.conf' in names
+        for name in names:
+            conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, name),
+                                       encoding='utf-8', file_error=True)
+            for key, val in dict(conf['Texts']).items():
+                assert key in rendered, (name, key)
+                assert isinstance(val, str), (name, key)
+                assert (set(re.findall(r'\{(\w+)\}', val))
+                        == set(re.findall(r'\{(\w+)\}', key))), (name, key)
+            assert len(conf['Labels']['hemispheres']) == 4, name
+            assert len(conf['Units']['Ordinates']['directions']) == 17, name
+            assert len(conf['Almanac']['moon_phases']) == 8, name
+            for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
+                assert conf['Almanac'][body], (name, body)
+
+    def test_de_conf_is_complete(self):
+        """German is a full translation: every rendered key is covered, so
+        a new feature's strings fail here until de.conf learns them (the
+        vocabulary grows only with the feature that renders it)."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'de.conf'),
+                                   encoding='utf-8', file_error=True)
+        assert sorted(self.rendered_keys() - set(conf['Texts'])) == []
+
+    def test_shipped_german_renders(self, sky):
+        """The shipped de.conf, fed through the same channels the report
+        engine uses, renders German panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'de.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons):
+            assert_balanced(markup)
+        assert '>O</text>' in dome                       # German east cardinal
+        assert '>Mond</text>' in dome
+        assert '<th>Körper</th>' in table
+        assert '</span>Neptun</td>' in table             # not "Neptune"
+        assert '<th>Aufgang</th>' in table and '<th>Untergang</th>' in table
+        assert '>jetzt 12:00</text>' in ribbons
+        assert 'Berechnet mit weewx-skyfield' in footer
+        assert 'IAU-CSN-Sternnamen' in footer
+        # German moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
