@@ -64,6 +64,7 @@ svg{width:100%; height:auto; display:block}
 svg text{fill:var(--ink)}
 .cardinal{font-size:14px; fill:var(--brass); letter-spacing:.1em}
 .gridlab{font-size:10px; fill:var(--muted)}
+.moonlab{font-size:10px; fill:#C9D0DA}
 .starlab{font-size:10px; fill:var(--muted); font-family:Georgia, serif; font-style:italic}
 .bodylab{font-size:11px; fill:var(--ink); font-family:Georgia, serif}
 .rowlab{font-size:13px; fill:var(--ink); font-family:Georgia, serif;

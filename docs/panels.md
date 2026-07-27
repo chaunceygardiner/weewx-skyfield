@@ -34,7 +34,10 @@ dropped into any skin's Cheetah template.  Three things to arrange:
    and block layout come from CSS classes in the bundled skin's stylesheet,
    `skins/Skyfield/sky.css` — `mono`, `cardinal`, `gridlab` and friends for the SVG labels;
    `count`, the `chip` family and the table rules for the HTML blocks.  Copy the rules you
-   need (or the whole file) into your skin's stylesheet.
+   need (or the whole file) into your skin's stylesheet.  If you copied individual rules,
+   re-check on each upgrade: a release that adds marks to a panel can add a class (1.10
+   added `moonlab`, the sun-path moon-time labels), and text with no rule renders at the
+   16px SVG default in the wrong color — changes.txt calls out new classes.
 
 The bundled template, `skins/Skyfield/index.html.tmpl`, shows every panel in use and is the
 reference for the wrapper markup mentioned below.  A failing panel never takes down report
@@ -90,7 +93,13 @@ $sky_page.sunpath_svg($almanac)
 Today's sun, midnight to midnight, as altitude against azimuth — a dot every hour, labels
 every third.  The dashed curve is the moon's path, with the moon drawn at its true phase when
 above the plot floor; the bands below the horizon line are civil, nautical and astronomical
-twilight depth.  The azimuth axis is the fixed full compass, north to north, so the arc's
+twilight depth.  Moonrise, moonset and the transit are ticked and labeled on the moon's curve
+with times in the skin's format, and the curve's two ends — the moon's positions at 00:00 and
+24:00 — get dots labeled 00 and 24 when they clear the plot floor.  The curve is open between
+those ends because a lunar day runs about 50 minutes longer than a calendar day, so a day's
+track never quite closes; near full moon, when the moon transits around midnight, the break
+sits right at the top of its arc (the endpoint dots' tooltips say so).  The azimuth axis is
+the fixed full compass, north to north, so the arc's
 seasonal swing between the solstices reads at a glance — and a circumpolar arctic sun needs no
 special casing.
 

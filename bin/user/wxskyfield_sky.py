@@ -819,14 +819,75 @@ class SkyPage:
         _paths(moon_pts, 'stroke="%s" stroke-width="1.3" stroke-dasharray="4 4" '
                'opacity="0.85"' % body_color['moon'])
         _paths(sun_pts, 'stroke="%s" stroke-width="2.2" opacity="0.95"' % body_color['sun'])
+        sun_labels: List[Tuple[float, float]] = []
         for i, alt, az in sun_pts[:-1]:
             if i % 4 or alt < FLOOR:
                 continue
             p.append('<circle cx="%.1f" cy="%.1f" r="1.9" fill="%s" opacity="0.9"/>'
                      % (X(az), Y(alt), ink))
             if i % 12 == 0 and alt > FLOOR + 4:
+                sun_labels.append((X(az), Y(alt) - 7))
                 p.append('<text x="%.1f" y="%.1f" text-anchor="middle" '
                          'class="mono gridlab">%02d</text>' % (X(az), Y(alt) - 7, i // 4))
+
+        # ── times on the moon's curve ────────────────────────────────────────
+        # The moon's 24-hour track is an open curve -- a lunar day outruns the
+        # calendar day by ~50 minutes, so the track ends where it began minus
+        # ~12 degrees of azimuth.  The two midnight endpoints get dots labeled
+        # 00/24 when they clear the plot floor (near full moon that break sits
+        # at the apex, where a user once reported it as a bug); rise, set and
+        # transit are ticked and labeled with skin-formatted times.  Labels
+        # dodge the sun's hour labels; the transit label yields to a nearby
+        # endpoint label rather than crowd it.
+        moon_ink = pal.get('ring', {}).get('moon', body_color['moon'])
+
+        def _dodge(x: float, y: float, dy: float) -> float:
+            for lx, ly in sun_labels:
+                if abs(x - lx) < 26 and abs(y - ly) < 11:
+                    return ly + dy
+            return y
+
+        ends = [(i, alt, az) for i, alt, az in (moon_pts[0], moon_pts[96])
+                if alt >= FLOOR]
+        for i, alt, az in ends:
+            x, y = X(az), Y(alt)
+            p.append('<g><title>Moon at %s &#8212; the day&#8217;s track is open '
+                     'here: a lunar day runs about 50 minutes longer than a '
+                     'calendar day</title>'
+                     '<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>'
+                     '<text x="%.1f" y="%.1f" text-anchor="%s" '
+                     'class="mono moonlab">%s</text></g>'
+                     % ('00:00' if i == 0 else '24:00', x, y, moon_ink,
+                        x + (5 if i == 0 else -5), y - 5,
+                        'start' if i == 0 else 'end', '00' if i == 0 else '24'))
+        for kind, glyph in (('rise', '&#8599;'), ('set', '&#8600;'), ('transit', '')):
+            vh = getattr(alm.moon, kind)
+            event_ts = vh.raw
+            if event_ts is None or not sod <= event_ts < sod + 86400:
+                continue
+            e = alm(almanac_time=event_ts)
+            alt, az = e.moon.alt, e.moon.az
+            if alt < FLOOR:
+                continue
+            x, y = X(az), Y(alt)
+            if kind == 'transit':
+                if any(abs(x - X(eaz)) < 34 for _i, _a, eaz in ends):
+                    continue
+                p.append('<g><title>Moon transit %s &#8212; altitude %.1f&#176;</title>'
+                         '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                         'stroke="%s" stroke-width="1.3"/>'
+                         '<text x="%.1f" y="%.1f" text-anchor="middle" '
+                         'class="mono moonlab">%s</text></g>'
+                         % (vh, alt, x, y - 3, x, y - 8, moon_ink,
+                            x, _dodge(x, y - 12, -12), vh))
+            else:
+                p.append('<g><title>Moon%s %s</title>'
+                         '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                         'stroke="%s" stroke-width="1.3"/>'
+                         '<text x="%.1f" y="%.1f" text-anchor="middle" '
+                         'class="mono moonlab">%s%s</text></g>'
+                         % (kind, vh, x, y - 4, x, y + 4, moon_ink,
+                            x, _dodge(x, y + 15, 12), glyph, vh))
         moon = self._body(alm, 'moon')
         if moon['alt'] >= FLOOR:
             x, y = X(moon['az']), Y(moon['alt'])

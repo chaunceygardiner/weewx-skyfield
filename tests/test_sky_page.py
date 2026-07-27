@@ -35,6 +35,7 @@ LATITUDE   = 37.4419
 LONGITUDE  = -122.143
 ALTITUDE_M = 9.0
 TIME_TS    = 1750532400      # 2025-06-21 12:00:00 PDT
+GAP_TS     = 1785178800      # 2026-07-27 12:00:00 PDT (moon transits ~midnight)
 
 
 @pytest.fixture(scope='module')
@@ -132,6 +133,38 @@ class TestPanels:
         assert '<title>Moon now' in svg
         for cardinal in ('N', 'E', 'S', 'W'):
             assert '>%s</text>' % cardinal in svg
+
+    def test_sunpath_moon_times(self, almanac, page):
+        """Moonrise, moonset and the transit are ticked on the moon's curve,
+        labeled with the report formatter's times.  On 2025-06-21 all three
+        fall inside the plotted day, and the midnight endpoints hide below
+        the plot floor, so no 00/24 open-track markers appear."""
+        svg = page.sunpath_svg(almanac)
+        assert_balanced(svg)
+        assert '<title>Moonrise %s</title>' % almanac.moon.rise in svg
+        assert '<title>Moonset %s</title>' % almanac.moon.set in svg
+        assert '<title>Moon transit %s' % almanac.moon.transit in svg
+        assert 'Moon at 00:00' not in svg
+        assert 'Moon at 24:00' not in svg
+
+    def test_sunpath_open_ends(self, sky, page):
+        """Near full moon the moon transits about midnight, so the plotted
+        24-hour track is visibly open at the apex (2026-07-27, the day a
+        user reported the open track as a gap-shaped bug): the midnight
+        endpoints get dots labeled 00/24 with the lunar-day tooltip, and
+        the transit -- outside the plotted day -- is not labeled."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(GAP_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = page.sunpath_svg(alm)
+        assert_balanced(svg)
+        assert 'Moon at 00:00' in svg
+        assert 'Moon at 24:00' in svg
+        assert '>00</text>' in svg and '>24</text>' in svg
+        assert 'lunar day' in svg
+        assert 'Moon transit' not in svg
+        assert '<title>Moonrise' in svg and '<title>Moonset' in svg
 
     def test_daylength(self, almanac, page):
         svg = page.daylength_svg(almanac)
