@@ -293,8 +293,12 @@ class SkyPage:
         # The constellation tag can legitimately be unserved (the boundary
         # map failed to load and there is no PyEphem to fall through to);
         # that must cost the chip its constellation, not the page its panels.
+        # .label is the translated display name (the report's [Almanac]
+        # [[Constellations]] entry, else Latin); an almanac serving the tag
+        # as a plain string shows it untranslated rather than lose the chip.
         try:
-            d['constellation'] = str(b.constellation)
+            c = b.constellation
+            d['constellation'] = str(getattr(c, 'label', c))
         except Exception:
             d['constellation'] = None
         if name != 'moon':

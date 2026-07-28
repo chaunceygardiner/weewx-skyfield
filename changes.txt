@@ -1,6 +1,27 @@
 weewx-skyfield change history
 -----------------------------
 
+1.13 2026/07/28
+---------------
+- The constellation a body stands in is now translatable.
+  $almanac.<body>.constellation still renders the Latin name -- the value
+  is the same string it has always been, so templates that compare it and
+  loopdata fields that publish it are untouched -- but it now carries the
+  other views of the same answer as attributes: .abbr the IAU
+  abbreviation, .label the report's translated display name, .name the
+  Latin name again.  Translate in the report's [Almanac]
+  [[Constellations]] section, keyed by IAU abbreviation ("Psc = Fische");
+  an untranslated constellation's .label falls back to Latin.  Works for
+  every body and named star, follows each report's own language, needs no
+  PyEphem, and the attribute chains work as loopdata fields
+  (almanac.mars.constellation.label renders in the language of loopdata's
+  target report).  $almanac.<body>.constellation_abbr remains as a legacy
+  alias for .constellation.abbr.  The Sky page's planet chips ("in Leo")
+  now render the .label, and the German lang file carries all 88
+  constellations (Beta with the rest of de.conf; alternatives a reviewer
+  may weigh are noted in the file); en.conf ships the Latin set as the
+  key reference for translators.
+
 1.12 2026/07/27
 ---------------
 - FIX: on stations running a non-English OS locale, the analemma panel's

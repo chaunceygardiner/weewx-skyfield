@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.12'
+WXSKYFIELD_VERSION = '1.13'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -1067,6 +1067,26 @@ ECLIPSE_ATTRS = (frozenset(ECLIPSE_EVENTS)
 # reaching the edge of the ephemeris when it has to.
 _ECLIPSE_CHUNK_DAYS = 400
 
+class Constellation(str):
+    """The constellation a body stands in, as $almanac.<body>.constellation
+    returns it: a plain str holding the Latin name -- so templates that
+    render or compare the 1.9 tag ($almanac.mars.constellation == 'Leo'),
+    and loopdata fields that serialize it, see exactly what they always
+    have -- that also carries the other views of the same answer as
+    attributes: .name the Latin name again, .abbr the IAU abbreviation,
+    and .label the report's translated display name."""
+    name: str
+    abbr: str
+    label: str
+
+    def __new__(cls, latin: str, abbr: str, label: str) -> 'Constellation':
+        self = super().__new__(cls, latin)
+        self.name = latin
+        self.abbr = abbr
+        self.label = label
+        return self
+
+
 # IAU constellation abbreviation -> nominative name, for
 # $almanac.<body>.constellation.  Skyfield's bundled boundary map answers
 # with the abbreviation ($almanac.<body>.constellation_abbr).
@@ -2049,8 +2069,18 @@ class SkyfieldAlmanacBinder:
             if abbr is None:
                 return self.pyephem_fallback(attr)
             if attr == 'constellation_abbr':
+                # Legacy alias (1.9) for .constellation.abbr.
                 return abbr
-            return CONSTELLATION_NAMES.get(abbr, abbr)
+            latin = CONSTELLATION_NAMES.get(abbr, abbr)
+            # .label is the localized display name.  Skins translate
+            # constellations in an [Almanac] [[Constellations]] subsection
+            # keyed by the IAU abbreviation (Psc = Fische); the value
+            # itself stays the Latin str so consumers reading the tag as
+            # data (loopdata fields, template comparisons) never see it
+            # shift with a report's language.
+            labels = self.almanac.texts.get('Constellations')
+            label = labels.get(abbr, latin) if isinstance(labels, dict) else latin
+            return Constellation(latin, abbr, label)
         elif attr == 'name':
             return self.heavenly_body.replace('_', ' ').title()
         elif attr == 'label':

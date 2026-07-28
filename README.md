@@ -89,9 +89,12 @@ required for any of these, nor for any tag used by WeeWX's standard skins.
 
 Two tag families (new in 1.9) have no PyEphem counterpart at all.  Every body, stars
 included, reports the constellation it currently stands in — `$almanac.saturn.constellation`
-gives "Pisces", `$almanac.saturn.constellation_abbr` gives "Psc" — judged from the
-observer's topocentric place against the IAU boundaries (the boundary map ships inside the
-Skyfield library; nothing is downloaded).  And the almanac finds eclipses:
+gives "Pisces", and (new in 1.13) the same tag carries the other views as attributes:
+`.abbr` gives "Psc", `.label` the report's translated name falling back to the Latin, and
+`.name` the Latin name again (`$almanac.saturn.constellation_abbr` remains as a legacy alias
+for `.abbr`) — judged from the observer's topocentric place against the IAU boundaries (the
+boundary map ships inside the Skyfield library; nothing is downloaded).  And the almanac
+finds eclipses:
 `$almanac.next_lunar_eclipse` and `$almanac.next_solar_eclipse` (with `previous_`
 counterparts) give the time of maximum eclipse of the nearest eclipse *visible from the
 station* — the eclipsed body must be above the horizon at maximum — and each has a `_type`
@@ -390,6 +393,15 @@ translated a WeeWX skin before, there is nothing new to learn.
   every body and named star, falling back to the English name, following each report's own
   language.  weewx-loopdata almanac fields (e.g. `almanac.moon.label`) render in the
   language of loopdata's target report.
+
+- **Constellations translate the same way** (new in 1.13).
+  `$almanac.saturn.constellation.label` renders the constellation's translated name, from
+  the `[Almanac]` `[[Constellations]]` section keyed by IAU abbreviation (`Psc = Fische`),
+  falling back to the Latin name; the planet chips on the Sky page use it, and the German
+  file carries all 88.  `$almanac.saturn.constellation` itself stays the Latin name in
+  every language — it is data, and templates comparing it or loopdata consumers reading it
+  see the same string as always; the translation lives on the `.label` attribute, beside
+  `.abbr` and `.name`.
 
 - **Your own skins get their own language.**  The panels and `.label` read the report being
   generated, never the bundled skin — copy the entries you need into your skin's lang file,

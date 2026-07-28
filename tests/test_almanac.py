@@ -16,6 +16,7 @@ regression values.
 """
 
 import contextlib
+import json
 import os
 import shutil
 import sys
@@ -984,9 +985,12 @@ class TestBodyLabel:
 
 
 class TestConstellations:
-    """$almanac.<body>.constellation / .constellation_abbr, computed from
-    the observer's topocentric apparent place against skyfield's bundled
-    IAU boundary map.  Values verified against a star atlas for
+    """$almanac.<body>.constellation, computed from the observer's
+    topocentric apparent place against skyfield's bundled IAU boundary
+    map.  The value is a str subclass: the Latin name (so rendering,
+    comparison and serialization see a plain string) carrying .name,
+    .abbr and .label attributes; .constellation_abbr is the 1.9 legacy
+    alias for .abbr.  Values verified against a star atlas for
     2025-06-21."""
 
     def test_planets(self, almanac):
@@ -1011,6 +1015,44 @@ class TestConstellations:
         assert almanac.antares.constellation == 'Scorpius'
         # Serpens, the one constellation in two pieces, maps to one name.
         assert almanac.unukalhai.constellation == 'Serpens'
+
+    def test_is_a_string_with_attributes(self, almanac):
+        """The tag IS the Latin-name string -- a template's equality
+        comparison and loopdata's json serialization both see a str --
+        with the other views as attributes."""
+        c = almanac.saturn.constellation
+        assert isinstance(c, str)
+        assert c == 'Pisces'
+        assert c.name == 'Pisces'
+        assert c.abbr == 'Psc'
+        assert c.label == 'Pisces'   # untranslated: Latin
+        assert json.dumps(c) == '"Pisces"'
+
+    def test_label_translated(self, sky):
+        """The [Almanac] [[Constellations]] subsection, keyed by IAU
+        abbreviation, translates .label; the value itself stays Latin
+        regardless (loopdata consumers read it as data)."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter(),
+                texts={'Constellations': {'Gem': 'Zwillinge'}})
+            assert alm.sun.constellation.label == 'Zwillinge'
+            assert alm.sun.constellation == 'Gemini'
+            # An abbreviation absent from the subsection falls back to Latin.
+            assert alm.mars.constellation.label == 'Leo'
+
+    def test_label_survives_scalar_constellations_key(self, sky):
+        """A malformed skin config (Constellations as a scalar, not a
+        subsection) must not break the tag."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter(),
+                texts={'Constellations': 'oops'})
+            assert alm.mars.constellation.label == 'Leo'
 
     def test_abbreviation_table_is_complete(self):
         assert len(wxskyfield.CONSTELLATION_NAMES) == 88
@@ -1155,6 +1197,7 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
     "almanac.sun.constellation", "almanac.sun.constellation_abbr",
     "almanac.moon.constellation", "almanac.mars.constellation_abbr",
+    "almanac.sun.constellation.label", "almanac.sun.constellation.abbr",
     "almanac.sun.label", "almanac.moon.label",
     "almanac.next_lunar_eclipse", "almanac.next_lunar_eclipse_type",
     "almanac.previous_lunar_eclipse", "almanac.previous_lunar_eclipse_type",
@@ -1173,7 +1216,7 @@ SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.proxima_centauri.earth_distance", "almanac.barnards_star.mag",
     "almanac.hip_32349.mag",
     "almanac.rigel.constellation", "almanac.rigel.constellation_abbr",
-    "almanac.rigel.label",
+    "almanac.rigel.constellation.label", "almanac.rigel.label",
 ]
 
 

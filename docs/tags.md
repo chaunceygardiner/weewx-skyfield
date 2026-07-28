@@ -38,9 +38,16 @@ PyEphem is *not* required for any of these, nor for any tag used by WeeWX's stan
 Two tag families (new in 1.9) have no PyEphem counterpart at all.
 
 Every body, stars included, reports the constellation it currently stands in —
-`$almanac.saturn.constellation` gives "Pisces", `$almanac.saturn.constellation_abbr` gives
-"Psc" — judged from the observer's topocentric place against the IAU boundaries (the boundary
-map ships inside the Skyfield library; nothing is downloaded).
+`$almanac.saturn.constellation` gives "Pisces" — judged from the observer's topocentric
+place against the IAU boundaries (the boundary map ships inside the Skyfield library;
+nothing is downloaded).  The value is the Latin name in every language (it is data:
+templates comparing it and loopdata fields publishing it always see the same string), and
+as of 1.13 it carries the other views of the answer as attributes:
+`$almanac.saturn.constellation.abbr` gives "Psc", `.label` the translated display name from
+the report's `[Almanac]` `[[Constellations]]` section keyed by IAU abbreviation
+(`Psc = Fische`) falling back to the Latin, and `.name` the Latin name again.
+`$almanac.saturn.constellation_abbr` remains as a legacy alias for `.abbr` — see
+[Translating the Sky page](i18n.md).
 
 And the almanac finds eclipses: `$almanac.next_lunar_eclipse` and
 `$almanac.next_solar_eclipse` (with `previous_` counterparts) give the time of maximum eclipse

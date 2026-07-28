@@ -559,6 +559,10 @@ class TestI18n:
         assert len(conf['Almanac']['moon_phases']) == 8
         for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
             assert conf['Almanac'][body] == body.title()
+        # English constellation names are the Latin ones -- the
+        # [[Constellations]] section is the key reference for translators
+        # and must mirror the engine's table exactly.
+        assert dict(conf['Almanac']['Constellations']) == wxskyfield.CONSTELLATION_NAMES
 
     GERMAN_SKIN = {
         'Texts': {
@@ -659,6 +663,10 @@ class TestI18n:
             assert len(conf['Almanac']['moon_phases']) == 8, name
             for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
                 assert conf['Almanac'][body], (name, body)
+            # Constellation keys are the IAU abbreviations; a key outside
+            # the engine's table would silently never be looked up.
+            for abbr in conf['Almanac']['Constellations']:
+                assert abbr in wxskyfield.CONSTELLATION_NAMES, (name, abbr)
 
     def test_de_conf_is_complete(self):
         """German is a full translation: every rendered key is covered, so
@@ -668,6 +676,9 @@ class TestI18n:
         conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'de.conf'),
                                    encoding='utf-8', file_error=True)
         assert sorted(self.rendered_keys() - set(conf['Texts'])) == []
+        # All 88 constellations, too.
+        assert (sorted(set(wxskyfield.CONSTELLATION_NAMES)
+                       - set(conf['Almanac']['Constellations'])) == [])
 
     def test_shipped_german_renders(self, sky):
         """The shipped de.conf, fed through the same channels the report
@@ -688,8 +699,9 @@ class TestI18n:
             dome = page.dome_svg(alm)
             table = page.table_html(alm)
             ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
             footer = page.footer_html()
-        for markup in (dome, table, ribbons):
+        for markup in (dome, table, ribbons, chips):
             assert_balanced(markup)
         assert '>O</text>' in dome                       # German east cardinal
         assert '>Mond</text>' in dome
@@ -697,6 +709,9 @@ class TestI18n:
         assert '</span>Neptun</td>' in table             # not "Neptune"
         assert '<th>Aufgang</th>' in table and '<th>Untergang</th>' in table
         assert '>jetzt 12:00</text>' in ribbons
+        # The chips' constellations carry the German names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'im Sternbild Löwe' in chips
         assert 'Berechnet mit weewx-skyfield' in footer
         assert 'IAU-CSN-Sternnamen' in footer
         # German moon phase names flow through the same texts dict.
