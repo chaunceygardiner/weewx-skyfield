@@ -367,7 +367,8 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **A complete German translation ships with the skin** (Beta).  One line turns it on:
+- **A complete, native-speaker-reviewed German translation ships with the skin.**  One
+  line turns it on:
 
   ```
   [StdReport]
@@ -375,9 +376,8 @@ translated a WeeWX skin before, there is nothing new to learn.
           lang = de
   ```
 
-  Beta means the words, not the machinery: the translation awaits native-speaker review,
-  and a clumsy phrase is the worst it can do.  Corrections are welcome — as are further
-  languages: a lang file is a self-contained, no-code contribution.
+  Corrections are welcome — as are further languages: a lang file is a self-contained,
+  no-code contribution.
 
 - **English fallback, one string at a time.**  Every string the page renders is a
   gettext-style `[Texts]` key — the English string *is* the key.  A missing entry falls

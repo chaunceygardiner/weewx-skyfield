@@ -1,6 +1,13 @@
 weewx-skyfield change history
 -----------------------------
 
+1.14 (release TBD)
+------------------
+- The German translation drops its Beta label: the native-speaker review
+  it was waiting for is complete and confirmed the translation as
+  shipped, including the constellation names (the alternatives noted in
+  de.conf stay as notes for future contributors).
+
 1.13 2026/07/28
 ---------------
 - The constellation a body stands in is now translatable.
