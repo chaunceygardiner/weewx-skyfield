@@ -1,12 +1,36 @@
 weewx-skyfield change history
 -----------------------------
 
-1.14 (release TBD)
-------------------
+1.14 2026/07/29
+---------------
+- FIX: on stations whose reports set a [Units] [[Groups]] preference for
+  durations or times (e.g. a station-wide group_deltatime = hour, a
+  customization some popular skins suggest), every duration on the Sky
+  page -- the Daylight line, the almanac table's Up for column, the
+  timeline tooltips -- rendered as 0h 00m (reported from the field).
+  A WeeWX ValueHelper converts to the report's preferred units when it
+  is built, so its .raw value honors those preferences; the panels'
+  arithmetic assumed seconds.  The page now pins the unit at every raw
+  read (durations to seconds, times to unix epoch), so panels render
+  identically whatever the report's unit preferences; formatted times
+  already honored them and are unchanged.  Skins embedding the panels
+  get the fix for free.
+- A complete French translation ships with the skin (Beta, awaiting
+  native-speaker review -- corrections welcome): lang/fr.conf covers the
+  page prose, every panel string, the body names and all 88
+  constellations, with the moon phases and compass points as in WeeWX's
+  own French lang file.  Select it with lang = fr in the report.  Tests
+  keep it complete the same way they keep the German.
 - The German translation drops its Beta label: the native-speaker review
   it was waiting for is complete and confirmed the translation as
   shipped, including the constellation names (the alternatives noted in
   de.conf stay as notes for future contributors).
+- Test suite: the moon's PyEphem magnitude-parity check now runs only
+  against PyEphem 4.2 or later.  Older PyEphem (e.g. Debian bookworm's
+  python3-ephem 4.1.x) uses a cruder lunar magnitude model that reports
+  -10.9 where PyEphem 4.2 and Skyfield agree on -8.4, failing the suite
+  on such systems (reported in the field).  The moon's own regression
+  value stays pinned independently of PyEphem.
 
 1.13 2026/07/28
 ---------------

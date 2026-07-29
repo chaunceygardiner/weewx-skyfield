@@ -85,6 +85,8 @@ td .dot{margin-right:8px; margin-top:0; vertical-align:baseline}
 footer{color:var(--muted); font-size:.82rem; border-top:1px solid var(--line);
        padding-top:16px; text-align:center}
 footer .sep{color:var(--brass); padding:0 6px}
+footer a{color:inherit; text-underline-offset:3px; text-decoration-color:var(--brass)}
+footer a:hover{color:var(--brass)}
 @media (prefers-reduced-motion: no-preference){
   .nowpulse{animation:pulse 3s ease-in-out infinite}
   @keyframes pulse{50%{opacity:.55}}

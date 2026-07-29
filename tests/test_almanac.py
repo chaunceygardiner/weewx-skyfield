@@ -648,8 +648,17 @@ class TestPhysicalAttributes:
     def test_magnitudes_agree_with_pyephem(self, almanac):
         ephem = pytest.importorskip('ephem')
         observer = pyephem_observer()
+        # PyEphem's lunar magnitude model before 4.2 is crude (-10.9 at this
+        # fixture's crescent, where 4.2 and Skyfield both say -8.4), so the
+        # moon comparison is meaningful only against 4.2 or later.  Field
+        # case: Debian bookworm's python3-ephem 4.1.x (issue #2 reporter).
+        # The moon's own regression value stays pinned in
+        # test_magnitudes_pinned regardless of PyEphem.
+        ephem_version = tuple(int(part) for part in ephem.__version__.split('.')[:2])
         for planet in ('mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune',
                        'sun', 'moon', 'pluto'):
+            if planet == 'moon' and ephem_version < (4, 2):
+                continue
             body = getattr(ephem, planet.title())()
             body.compute(observer)
             # PyEphem uses older magnitude models, so agreement is loose.

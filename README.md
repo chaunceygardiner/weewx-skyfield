@@ -28,8 +28,8 @@ upgrading this extension over a running WeeWX cannot disturb — or crash — th
 almanac; the new files take effect on the restart that follows the install.
 
 And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
-translatable through WeeWX's own lang-file mechanisms, and a complete German translation
-ships with the skin — see [Translations (i18n)](#translations-i18n) below.
+translatable through WeeWX's own lang-file mechanisms, and complete German and French
+translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
 
 ### The Sky page
 
@@ -73,7 +73,7 @@ entirely, set `enable = false` there.
 Every panel on the page can also be embedded individually in your own skin — see
 [Using the Sky panels in your own skin](#using-the-sky-panels-in-your-own-skin) below.
 
-The page is translatable, German translation included — see
+The page is translatable, German and French translations included — see
 [Translations (i18n)](#translations-i18n) below.
 
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
@@ -367,13 +367,13 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **A complete, native-speaker-reviewed German translation ships with the skin.**  One
-  line turns it on:
+- **Complete German and French translations ship with the skin** — the German
+  native-speaker reviewed, the French in Beta pending its review.  One line turns one on:
 
   ```
   [StdReport]
       [[SkyfieldReport]]
-          lang = de
+          lang = de                # or fr
   ```
 
   Corrections are welcome — as are further languages: a lang file is a self-contained,
@@ -386,7 +386,7 @@ translated a WeeWX skin before, there is nothing new to learn.
 
 - **The reference dictionary ships in the skin**, at `skins/Skyfield/lang/en.conf`: every
   string the page renders and nothing else.  Tests keep it exact in both directions, and
-  keep the German complete — new strings cannot ship untranslated.
+  keep the German and French complete — new strings cannot ship untranslated.
 
 - **Body names are report tags too.**  `$almanac.moon.label` renders the body's translated
   display name, from the report's `[Almanac]` section keyed by tag name (`moon = Mond`) —
@@ -398,7 +398,7 @@ translated a WeeWX skin before, there is nothing new to learn.
   `$almanac.saturn.constellation.label` renders the constellation's translated name, from
   the `[Almanac]` `[[Constellations]]` section keyed by IAU abbreviation (`Psc = Fische`),
   falling back to the Latin name; the planet chips on the Sky page use it, and the German
-  file carries all 88.  `$almanac.saturn.constellation` itself stays the Latin name in
+  and French files carry all 88.  `$almanac.saturn.constellation` itself stays the Latin name in
   every language — it is data, and templates comparing it or loopdata consumers reading it
   see the same string as always; the translation lives on the `.label` attribute, beside
   `.abbr` and `.name`.

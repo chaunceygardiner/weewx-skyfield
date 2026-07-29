@@ -159,10 +159,20 @@ SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
 STAR_MAG_LIMIT = 2.6          # dome shows stars at least this bright
 STAR_LABEL_MAG = 1.1          # ... and labels these
 
+REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
 
-def _raw(value_helper) -> Optional[float]:
+
+def _raw(value_helper, unit: str) -> Optional[float]:
+    """The tag's value as a float in the given unit, or None.
+
+    Never read .raw without pinning the unit: a ValueHelper converts to
+    the report's preferred units at construction, so .raw honors any
+    [Units] [[Groups]] override (field case: a station-wide
+    group_deltatime = hour turned every 'visible' into hours, and the
+    panels' seconds arithmetic rendered every duration as 0h 00m).
+    Times are 'unix_epoch', durations 'second'."""
     try:
-        return value_helper.raw
+        return value_helper.convert(unit).raw
     except Exception:
         return None
 
@@ -285,8 +295,9 @@ class SkyPage:
         b = getattr(alm, name)
         d: Dict[str, Any] = {
             'name': name, 'az': b.az, 'alt': b.alt, 'mag': b.mag,
-            'rise': _raw(b.rise), 'set': _raw(b.set), 'transit': _raw(b.transit),
-            'visible': _raw(b.visible),
+            'rise': _raw(b.rise, 'unix_epoch'), 'set': _raw(b.set, 'unix_epoch'),
+            'transit': _raw(b.transit, 'unix_epoch'),
+            'visible': _raw(b.visible, 'second'),
             'circumpolar': bool(b.circumpolar), 'neverup': bool(b.neverup),
             'dist_au': b.earth_distance,
         }
@@ -315,8 +326,8 @@ class SkyPage:
         tw: Dict[str, Optional[float]] = {}
         for label, hz in (('civil', -6), ('nautical', -12), ('astro', -18)):
             a = alm(horizon=hz)
-            tw[label + '_dawn'] = _raw(a.sun(use_center=1).rise)
-            tw[label + '_dusk'] = _raw(a.sun(use_center=1).set)
+            tw[label + '_dawn'] = _raw(a.sun(use_center=1).rise, 'unix_epoch')
+            tw[label + '_dusk'] = _raw(a.sun(use_center=1).set, 'unix_epoch')
         self._memo[key] = tw
         return tw
 
@@ -363,24 +374,30 @@ class SkyPage:
         problem or an unregistered almanac (the page then renders off the
         built-in almanac's fall-through) is named instead, with a pointer at
         the weewxd log -- the footer doubles as a diagnostic.  The ESA
-        acknowledgment is required exactly when Hipparcos data is shown."""
+        acknowledgment is required exactly when Hipparcos data is shown.
+        The extension's name becomes a link to the project page: it is a
+        proper noun every translation keeps verbatim, so the substitution
+        is done after translation (a translation that dropped it would
+        just render unlinked)."""
         sep = '<span class="sep">&#183;</span>'
         sky = _find_sky()
         if sky is None:
-            return sep.join([self._t('Computed with the station’s built-in almanac'),
-                             self._t('weewx-skyfield is not active — see the weewxd log'),
-                             self._t('Regenerated every report cycle')])
-        parts = [self._t('Computed with weewx-skyfield'),
-                 self._t('Skyfield and the JPL DE421 ephemeris')]
-        if sky.stars:
-            parts += [self._t('IAU-CSN star names'),
-                      self._t('Hipparcos star data Credit: ESA')]
-        elif sky.stars_requested:
-            parts.append(self._t('star catalog unavailable — see the weewxd log'))
+            parts = [self._t('Computed with the station’s built-in almanac'),
+                     self._t('weewx-skyfield is not active — see the weewxd log'),
+                     self._t('Regenerated every report cycle')]
         else:
-            parts.append(self._t('star catalog disabled'))
-        parts.append(self._t('Regenerated every report cycle'))
-        return sep.join(parts)
+            parts = [self._t('Computed with weewx-skyfield'),
+                     self._t('Skyfield and the JPL DE421 ephemeris')]
+            if sky.stars:
+                parts += [self._t('IAU-CSN star names'),
+                          self._t('Hipparcos star data Credit: ESA')]
+            elif sky.stars_requested:
+                parts.append(self._t('star catalog unavailable — see the weewxd log'))
+            else:
+                parts.append(self._t('star catalog disabled'))
+            parts.append(self._t('Regenerated every report cycle'))
+        return sep.join(parts).replace(
+            'weewx-skyfield', '<a href="%s">weewx-skyfield</a>' % REPO_URL)
 
     @_panel_guard()
     def countdown_html(self, alm, palette: str = 'night') -> str:
@@ -399,7 +416,7 @@ class SkyPage:
                           (self._t('full moon'), alm.next_full_moon),
                           (self._t('equinox'), alm.next_equinox),
                           (self._t('solstice'), alm.next_solstice)):
-            ts = _raw(vh)
+            ts = _raw(vh, 'unix_epoch')
             if ts is None:
                 continue
             chips.append('<div class="count"><span class="k">%s</span>'
@@ -412,7 +429,7 @@ class SkyPage:
         # the page) drops this chip, not the row.
         eclipse = None
         try:
-            ts = _raw(alm.next_eclipse)
+            ts = _raw(alm.next_eclipse, 'unix_epoch')
             if ts is not None:
                 eclipse = (ts, str(alm.next_eclipse_kind), str(alm.next_eclipse_type))
         except Exception:
@@ -975,7 +992,7 @@ class SkyPage:
                         'start' if i == 0 else 'end', '00' if i == 0 else '24'))
         for kind, glyph in (('rise', '&#8599;'), ('set', '&#8600;'), ('transit', '')):
             vh = getattr(alm.moon, kind)
-            event_ts = vh.raw
+            event_ts = _raw(vh, 'unix_epoch')
             if event_ts is None or not sod <= event_ts < sod + 86400:
                 continue
             e = alm(almanac_time=event_ts)
@@ -1079,8 +1096,8 @@ class SkyPage:
         for w in range(WEEKS):
             ts = noon0 + w * 7 * 86400
             a = alm(almanac_time=ts)
-            rise, sset = _raw(a.sun.rise), _raw(a.sun.set)
-            noon = _raw(a.sun.transit)
+            rise, sset = _raw(a.sun.rise, 'unix_epoch'), _raw(a.sun.set, 'unix_epoch')
+            noon = _raw(a.sun.transit, 'unix_epoch')
             tw = self._twilight(a)
             start = self._daylight_state(alm(almanac_time=ts - 43200).sun.alt)
             edges: List[Tuple[float, str]] = [(0.0, start)]
@@ -1158,8 +1175,8 @@ class SkyPage:
         thirty phase discs with the principal phases dated and today's disc
         ringed in brass."""
         pal = _palette(palette)
-        prev_new = _raw(alm.previous_new_moon)
-        next_new = _raw(alm.next_new_moon)
+        prev_new = _raw(alm.previous_new_moon, 'unix_epoch')
+        next_new = _raw(alm.next_new_moon, 'unix_epoch')
         if prev_new is None or next_new is None or next_new <= prev_new:
             raise ValueError('lunation anchors unavailable')
         span = float(next_new - prev_new)
@@ -1183,9 +1200,9 @@ class SkyPage:
                                 pct='%d' % a.moon_fullness)))
         aq = alm(almanac_time=prev_new + 3600)
         quarters = ((prev_new, self._t('new')),
-                    (_raw(aq.next_first_quarter_moon), self._t('first quarter')),
-                    (_raw(aq.next_full_moon), self._t('full')),
-                    (_raw(aq.next_last_quarter_moon), self._t('last quarter')),
+                    (_raw(aq.next_first_quarter_moon, 'unix_epoch'), self._t('first quarter')),
+                    (_raw(aq.next_full_moon, 'unix_epoch'), self._t('full')),
+                    (_raw(aq.next_last_quarter_moon, 'unix_epoch'), self._t('last quarter')),
                     (next_new, self._t('new')))
         for ts_q, name in quarters:
             if ts_q is None or not prev_new <= ts_q <= next_new:

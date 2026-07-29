@@ -37,6 +37,10 @@ ALTITUDE_M = 9.0
 TIME_TS    = 1750532400      # 2025-06-21 12:00:00 PDT
 GAP_TS     = 1785178800      # 2026-07-27 12:00:00 PDT (moon transits ~midnight)
 
+# The footer links the extension's name to the manual, in every language.
+LINKED_NAME = ('<a href="%s">weewx-skyfield</a>'
+               % wxskyfield_sky.REPO_URL)
+
 
 @pytest.fixture(scope='module')
 def sky():
@@ -216,6 +220,36 @@ class TestPanels:
         assert_balanced(table)
         assert table.count('<tr>') == 10     # header + 9 bodies
 
+    def test_unit_group_overrides(self, sky):
+        """A report's [Units] [[Groups]] preferences (e.g. a station-wide
+        group_deltatime = hour, group_time = unix_epoch_ms) reach the
+        almanac's ValueHelpers through the report converter, which
+        converts at construction -- .raw is unformatted, not unconverted.
+        Every panel must render identically to a default-units report.
+        Field case: group_deltatime = hour fed hours into the panels'
+        seconds arithmetic and every duration rendered as 0h 00m."""
+        groups = dict(weewx.units.MetricUnits,
+                      group_deltatime='hour', group_time='unix_epoch_ms')
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            formatter = weewx.units.get_default_formatter()
+            plain = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                          altitude=ALTITUDE_M, formatter=formatter)
+            overridden = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                               altitude=ALTITUDE_M, formatter=formatter,
+                                               converter=weewx.units.Converter(groups))
+            for method in ('header_sub', 'countdown_html', 'moon_svg', 'dome_svg',
+                           'ribbons_svg', 'orrery_svg', 'analemma_svg', 'sunpath_svg',
+                           'daylength_svg', 'lunation_svg', 'chips_html', 'table_html'):
+                # A fresh SkyPage per render: the per-page memo is keyed on
+                # the almanac's time, which both almanacs share.
+                want = getattr(wxskyfield_sky.SkyPage(), method)(plain)
+                got = getattr(wxskyfield_sky.SkyPage(), method)(overridden)
+                assert got == want, method
+            table = wxskyfield_sky.SkyPage().table_html(overridden)
+            assert '0h 00m' not in table
+            assert re.search(r'14h \d\dm', table)   # the solstice sun, up ~14h46m
+
     def test_header_bits(self, almanac, page):
         assert 'N' in page.header_sub(almanac)
         countdown = page.countdown_html(almanac)
@@ -266,7 +300,7 @@ class TestFooter:
 
     def test_full_credit_with_stars(self, almanac, page):
         html = page.footer_html()
-        assert 'Computed with weewx-skyfield' in html
+        assert 'Computed with ' + LINKED_NAME in html
         assert 'Skyfield and the JPL DE421 ephemeris' in html
         assert 'IAU-CSN star names' in html
         assert 'Hipparcos star data Credit: ESA' in html
@@ -308,7 +342,7 @@ class TestFooter:
             assert wxskyfield_sky._find_sky() is None
             html = page.footer_html()
         assert 'built-in almanac' in html
-        assert 'weewx-skyfield is not active' in html
+        assert LINKED_NAME + ' is not active' in html
         assert 'DE421' not in html and 'Hipparcos' not in html
 
 
@@ -608,7 +642,7 @@ class TestI18n:
         assert '>jetzt 12:00</text>' in ribbons
         assert '>heute</text>' in daylength
         assert 'Nord' in header and 'West' in header  # lat >= 0, lon < 0
-        assert 'Berechnet mit weewx-skyfield' in footer
+        assert 'Berechnet mit ' + LINKED_NAME in footer  # the link survives translation
         assert 'IAU-CSN star names' in footer         # untranslated: English
 
     def test_star_name_translated(self, sky):
@@ -672,8 +706,15 @@ class TestI18n:
         """German is a full translation: every rendered key is covered, so
         a new feature's strings fail here until de.conf learns them (the
         vocabulary grows only with the feature that renders it)."""
+        self.check_complete('de.conf')
+
+    def test_fr_conf_is_complete(self):
+        """French likewise ships complete."""
+        self.check_complete('fr.conf')
+
+    def check_complete(self, name):
         configobj = pytest.importorskip('configobj')
-        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'de.conf'),
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, name),
                                    encoding='utf-8', file_error=True)
         assert sorted(self.rendered_keys() - set(conf['Texts'])) == []
         # All 88 constellations, too.
@@ -712,7 +753,44 @@ class TestI18n:
         # The chips' constellations carry the German names, through the
         # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
         assert 'im Sternbild Löwe' in chips
-        assert 'Berechnet mit weewx-skyfield' in footer
+        assert 'Berechnet mit ' + LINKED_NAME in footer
         assert 'IAU-CSN-Sternnamen' in footer
         # German moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_french_renders(self, sky):
+        """The shipped fr.conf, fed through the same channels the report
+        engine uses, renders French panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'fr.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>E</text>' in dome                       # French east cardinal
+        assert '>Lune</text>' in dome
+        assert '<th>Astre</th>' in table
+        assert '</span>Mercure</td>' in table            # not "Mercury"
+        assert '<th>Lever</th>' in table and '<th>Coucher</th>' in table
+        assert '>maintenant 12:00</text>' in ribbons
+        # The chips' constellations carry the French names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'constellation : Lion' in chips
+        assert 'Calculé avec ' + LINKED_NAME in footer
+        assert "Noms d'étoiles IAU-CSN" in footer
+        # French moon phase names flow through the same texts dict.
         assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
