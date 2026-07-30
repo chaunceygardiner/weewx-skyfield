@@ -700,6 +700,50 @@ class TestPhysicalAttributes:
             assert getattr(almanac, planet).parallactic_angle() == pytest.approx(
                 float(body.parallactic_angle()), abs=0.01), planet
 
+    @pytest.mark.parametrize('body, attr', [
+        ('moon', 'libration_lat'), ('moon', 'libration_long'), ('moon', 'colong'),
+        ('jupiter', 'cmlI'), ('jupiter', 'cmlII'),
+        ('saturn', 'earth_tilt'), ('saturn', 'sun_tilt'),
+        ('venus', 'parallactic_angle'),
+    ])
+    def test_radians_tags_carry_degrees(self, almanac, body, attr):
+        """Every PyEphem-shaped radians attribute is a Radians float: the
+        value itself is unchanged (plain radians), and .degrees/.radians
+        carry the same answer."""
+        import math
+        value = getattr(getattr(almanac, body), attr)
+        assert isinstance(value, float)
+        assert value.degrees == pytest.approx(math.degrees(value))
+        assert value.radians == float(value)
+
+    def test_separation_carries_degrees(self, almanac):
+        import math
+        sep = almanac.separation(almanac.mars, almanac.venus)
+        assert sep.degrees == pytest.approx(math.degrees(sep))
+
+    def test_parallactic_angle_forms(self, almanac):
+        """The tag resolves to a callable value: the parens-free form, the
+        legacy PyEphem-style explicit call, and the .degrees chain all agree
+        -- as a plain getattr walk, the way loopdata evaluates almanac
+        fields (no Cheetah autocall involved)."""
+        value = almanac.venus.parallactic_angle
+        assert isinstance(value, float)
+        assert almanac.venus.parallactic_angle() == value
+        assert almanac.venus.parallactic_angle.degrees == value.degrees
+
+    def test_parallactic_angle_in_cheetah(self, almanac):
+        """Rendered through Cheetah itself: autocall must not intercept
+        .degrees, and the explicit-call template form must keep working."""
+        Template = pytest.importorskip('Cheetah.Template').Template
+        import math
+        bare = str(Template('$almanac.moon.parallactic_angle.degrees',
+                            searchList=[{'almanac': almanac}]))
+        assert float(bare) == pytest.approx(
+            math.degrees(almanac.moon.parallactic_angle))
+        called = str(Template('$almanac.moon.parallactic_angle()',
+                              searchList=[{'almanac': almanac}]))
+        assert float(called) == pytest.approx(float(almanac.moon.parallactic_angle))
+
     def test_circumpolar_neverup(self, almanac):
         # From 37N, the sun neither stays up nor stays down.
         assert not almanac.sun.circumpolar
@@ -1199,7 +1243,12 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.venus.phase", "almanac.mars.phase",
     "almanac.sun.size", "almanac.moon.size", "almanac.moon.radius", "almanac.moon.radius_size",
     "almanac.sun.circumpolar", "almanac.sun.neverup",
-    "almanac.venus.parallactic_angle()", "almanac.sun.name",
+    "almanac.venus.parallactic_angle()", "almanac.venus.parallactic_angle",
+    "almanac.venus.parallactic_angle.degrees",
+    "almanac.moon.libration_lat.degrees", "almanac.moon.colong.degrees",
+    "almanac.jupiter.cmlI.degrees", "almanac.saturn.sun_tilt.degrees",
+    "almanac.separation(almanac.mars, almanac.venus).degrees",
+    "almanac.sun.name",
     "almanac.mercury.elong", "almanac.mercury.elongation",
     "almanac.sun.hlong", "almanac.mars.hlongitude", "almanac.mars.hlatitude",
     "almanac.separation((0.1, 0.2), (0.3, 0.4))",
@@ -1226,6 +1275,7 @@ SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.hip_32349.mag",
     "almanac.rigel.constellation", "almanac.rigel.constellation_abbr",
     "almanac.rigel.constellation.label", "almanac.rigel.label",
+    "almanac.rigel.parallactic_angle.degrees",
 ]
 
 

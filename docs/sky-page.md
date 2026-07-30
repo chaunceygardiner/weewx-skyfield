@@ -53,6 +53,18 @@ Every panel on the page can also be embedded individually in your own skin — s
 The page is generated via the `[[SkyfieldReport]]` entry that the installer adds under
 `[StdReport]` in `weewx.conf`.
 
+The `theme` option selects the page's plate: `dark` (the default — the night plate), `light`
+(a paper-atlas plate), or `auto` — light while the sun is up at the moment the page is
+generated, dark otherwise.  The page regenerates each report cycle, so the auto flip follows
+sunrise and sunset within one archive interval; the colors are baked in at generation time,
+still with no JavaScript.
+
+```
+[StdReport]
+    [[SkyfieldReport]]
+        theme = auto
+```
+
 It is the most computation-hungry page in a typical install (the solar-year chart runs several
 hundred rise/set searches, the analemma evaluates the almanac 53 times).  The
 [result cache](tags.md#the-result-cache) absorbs most of that — the year-scale samples are

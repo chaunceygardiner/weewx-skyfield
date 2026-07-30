@@ -73,6 +73,12 @@ entirely, set `enable = false` there.
 Every panel on the page can also be embedded individually in your own skin — see
 [Using the Sky panels in your own skin](#using-the-sky-panels-in-your-own-skin) below.
 
+A `theme` option in the `[[SkyfieldReport]]` section selects the page's plate: `dark` (the
+default — the night plate), `light` (a paper-atlas plate), or `auto` — light while the sun is
+up at the moment the page is generated, dark otherwise.  The page regenerates each report
+cycle, so the auto flip follows sunrise and sunset within one archive interval; the colors are
+baked in at generation time, still with no JavaScript.
+
 The page is translatable, German and French translations included — see
 [Translations (i18n)](#translations-i18n) below.
 
@@ -86,6 +92,11 @@ illuminated (`$almanac.venus.phase`), apparent angular size (`$almanac.sun.size`
 moon's libration and selenographic colongitude, Jupiter's central meridian longitudes and Saturn's
 ring tilt; as well as equinoxes, solstices, moon phases and the moon index.  PyEphem is *not*
 required for any of these, nor for any tag used by WeeWX's standard skins.
+
+There is no `$almanac.earth`: Earth is the observer, not a served body (PyEphem, which this
+almanac replaces, has no Earth body either).  Earth's heliocentric coordinates are available
+all the same — `$almanac.sun.hlongitude` and `$almanac.sun.hlatitude` report them, per the
+XEphem convention (see [Differences from PyEphem](#differences-from-pyephem)).
 
 Two tag families (new in 1.9) have no PyEphem counterpart at all.  Every body, stars
 included, reports the constellation it currently stands in — `$almanac.saturn.constellation`
@@ -367,13 +378,14 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **Complete German and French translations ship with the skin** — the German
-  native-speaker reviewed, the French in Beta pending its review.  One line turns one on:
+- **Complete German, French and Dutch translations ship with the skin** — the German and
+  French native-speaker reviewed, the Dutch in Beta pending its review.  One line turns
+  one on:
 
   ```
   [StdReport]
       [[SkyfieldReport]]
-          lang = de                # or fr
+          lang = de                # or fr, or nl
   ```
 
   Corrections are welcome — as are further languages: a lang file is a self-contained,
@@ -434,7 +446,9 @@ definitions rather than PyEphem:
 - `hlongitude`/`hlatitude` are true heliocentric (sun-centered) ecliptic coordinates for every
   body, including the moon.  (PyEphem reports the moon's *geocentric* ecliptic longitude under
   this name.)  For the sun itself, heliocentric coordinates are undefined, so Earth's heliocentric
-  coordinates are reported, per the XEphem convention.
+  coordinates are reported, per the XEphem convention.  (Asked for Earth directly —
+  `$almanac.earth.hlongitude` — the almanac has no such body: Earth is the observer; ask the
+  sun.)
 - The default horizon honors the almanac's `pressure` and `temperature` for rise/set: refraction
   is scaled from the standard 34 arcminutes, and WeeWX's documented `pressure=0` idiom turns it
   off entirely.
@@ -448,7 +462,11 @@ definitions rather than PyEphem:
 - The moon's libration (`libration_lat`/`libration_long`) and selenographic colongitude
   (`colong`) are the optical libration per Meeus, Astronomical Algorithms ch. 53; the physical
   libration (at most 0.04 degrees) is neglected.  Saturn's ring tilt (`earth_tilt`/`sun_tilt`)
-  follows Meeus ch. 45.  All are in radians, like PyEphem's.
+  follows Meeus ch. 45.  All are in radians, like PyEphem's — and each of these, along with
+  `parallactic_angle` and `$almanac.separation()`, also carries the same answer in decimal
+  degrees: append `.degrees` (`$almanac.moon.parallactic_angle.degrees`); `.radians` names the
+  value itself.  The values are unchanged (plain floats in radians), so existing templates —
+  including the `math.degrees($...)` idiom — keep working.
 
 ### The result cache
 

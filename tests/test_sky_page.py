@@ -443,6 +443,80 @@ class TestPalettes:
                 getattr(page, name)(almanac, palette='sepia')
 
 
+class TestTheme:
+    """The report's theme option (skin.conf, overridable in the
+    [StdReport] [[SkyfieldReport]] stanza): dark (default -- existing
+    users see no change), light, or auto (light while the sun is up at
+    generation time, dark otherwise).  Resolved once per page, baked in:
+    no JavaScript, no prefers-color-scheme."""
+
+    SKIN_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield')
+
+    def test_default_is_dark(self, almanac, page):
+        assert page.theme(almanac) == 'dark'
+        assert page.palette(almanac) == 'night'
+
+    def test_light(self, almanac):
+        page = wxskyfield_sky.SkyPage({'theme': 'light'})
+        assert page.theme(almanac) == 'light'
+        assert page.palette(almanac) == 'light'
+
+    def test_case_insensitive(self, almanac):
+        assert wxskyfield_sky.SkyPage({'theme': 'Light'}).theme(almanac) == 'light'
+
+    def test_auto_follows_the_sun(self, sky):
+        auto = wxskyfield_sky.SkyPage({'theme': 'auto'})
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            fmt = weewx.units.get_default_formatter()
+            noon = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                         altitude=ALTITUDE_M, formatter=fmt)
+            midnight = weewx.almanac.Almanac(TIME_TS + 12 * 3600, LATITUDE,
+                                             LONGITUDE, altitude=ALTITUDE_M,
+                                             formatter=fmt)
+            assert auto.sun_is_up(noon)              # solstice noon
+            assert not auto.sun_is_up(midnight)
+            assert auto.theme(noon) == 'light'
+            assert auto.palette(noon) == 'light'
+            assert auto.theme(midnight) == 'dark'
+            assert auto.palette(midnight) == 'night'
+
+    def test_unknown_theme_raises(self, almanac):
+        page = wxskyfield_sky.SkyPage({'theme': 'sepia'})
+        with pytest.raises(ValueError, match='auto, dark, light'):
+            page.theme(almanac)
+        with pytest.raises(ValueError, match='auto, dark, light'):
+            page.palette(almanac)
+
+    def test_template_plumbs_the_theme(self):
+        """The template stamps the theme class on the root element and hands
+        the resolved palette to every panel call -- a call that forgets it
+        would render night colors onto the light plate."""
+        with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
+            text = f.read()
+        assert 'class="theme-$theme"' in text
+        assert '#set $theme = $sky_page.theme($almanac)' in text
+        assert '#set $palette = $sky_page.palette($almanac)' in text
+        for name, args in re.findall(r'\$sky_page\.(\w+)\(([^)]*)\)', text):
+            if name in TestPalettes.RENDERERS:
+                assert 'palette=$palette' in args, name
+
+    def test_sky_css_light_covers_every_variable(self):
+        """The :root.theme-light block must redefine every custom property
+        the dark :root defines (a missed one leaks a night color onto the
+        paper plate), and flip color-scheme."""
+        with open(os.path.join(self.SKIN_DIR, 'sky.css')) as f:
+            css = f.read()
+        root = re.search(r':root\{(.*?)\}', css, re.S)
+        light = re.search(r':root\.theme-light\{(.*?)\}', css, re.S)
+        assert root is not None and light is not None
+        dark_vars = set(re.findall(r'--([a-z]+):', root.group(1)))
+        light_vars = set(re.findall(r'--([a-z]+):', light.group(1)))
+        assert dark_vars and dark_vars == light_vars
+        assert 'color-scheme: dark' in root.group(1)
+        assert 'color-scheme: light' in light.group(1)
+
+
 class TestPanelGuard:
     """A failure inside one $sky_page method must cost only that panel:
     the guard logs the error and renders the panel blank instead of
@@ -712,6 +786,10 @@ class TestI18n:
         """French likewise ships complete."""
         self.check_complete('fr.conf')
 
+    def test_nl_conf_is_complete(self):
+        """Dutch likewise ships complete."""
+        self.check_complete('nl.conf')
+
     def check_complete(self, name):
         configobj = pytest.importorskip('configobj')
         conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, name),
@@ -793,4 +871,41 @@ class TestI18n:
         assert 'Calculé avec ' + LINKED_NAME in footer
         assert "Noms d'étoiles IAU-CSN" in footer
         # French moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_dutch_renders(self, sky):
+        """The shipped nl.conf, fed through the same channels the report
+        engine uses, renders Dutch panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'nl.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>O</text>' in dome                       # Dutch east cardinal
+        assert '>Maan</text>' in dome
+        assert '<th>Hemellichaam</th>' in table
+        assert '</span>Mercurius</td>' in table          # not "Mercury"
+        assert '<th>Opkomst</th>' in table and '<th>Ondergang</th>' in table
+        assert '>nu 12:00</text>' in ribbons
+        # The chips' constellations carry the Dutch names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'in het sterrenbeeld Leeuw' in chips
+        assert 'Berekend met ' + LINKED_NAME in footer
+        assert 'IAU-CSN-sternamen' in footer
+        # Dutch moon phase names flow through the same texts dict.
         assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])

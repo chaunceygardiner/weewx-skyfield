@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.14'
+WXSKYFIELD_VERSION = '1.15'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -1087,6 +1087,35 @@ class Constellation(str):
         return self
 
 
+class Radians(float):
+    """A PyEphem-shaped angle as the almanac returns it: a plain float in
+    radians -- templates and loopdata fields consuming the value numerically
+    see exactly what they always have -- that also carries the same answer
+    in decimal degrees as .degrees (and, for symmetry with Skyfield's own
+    angle objects, .radians)."""
+
+    @property
+    def degrees(self) -> float:
+        return math.degrees(self)
+
+    @property
+    def radians(self) -> float:
+        return float(self)
+
+
+class CallableRadians(Radians):
+    """Radians that may also be called, with no arguments, yielding itself.
+    $almanac.<body>.parallactic_angle was a bound method through 1.14
+    (PyEphem's is a method), so the explicit-call form
+    $almanac.venus.parallactic_angle() is in the wild and must keep working
+    now that the tag resolves to the value itself -- which it must, so that
+    .degrees works for consumers that walk attribute chains without
+    Cheetah's autocall (loopdata almanac fields, plain Python)."""
+
+    def __call__(self) -> 'CallableRadians':
+        return self
+
+
 # IAU constellation abbreviation -> nominative name, for
 # $almanac.<body>.constellation.  Skyfield's bundled boundary map answers
 # with the abbreviation ($almanac.<body>.constellation_abbr).
@@ -1487,7 +1516,8 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         raise weewx.UnknownType(attr)
 
     def separation(self, body1, body2):
-        """Angular separation, in radians.  Accepts (longitude, latitude)
+        """Angular separation, in radians (a Radians float, so .degrees is
+        also available).  Accepts (longitude, latitude)
         tuples in radians (same contract as weewx.almanac.AlmanacType.separation),
         this almanac's own body binders (e.g.,
         $almanac.separation($almanac.mars, $almanac.venus)), or a mix of the
@@ -1498,7 +1528,7 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             if isinstance(body1, SkyfieldAlmanacBinder) and isinstance(body2, SkyfieldAlmanacBinder):
                 p1 = self.sky.earth.at(self.skyfield_time(body1.almanac.time_ts)).observe(body1.target_body())
                 p2 = self.sky.earth.at(self.skyfield_time(body2.almanac.time_ts)).observe(body2.target_body())
-                return p1.separation_from(p2).radians
+                return Radians(p1.separation_from(p2).radians)
             coords1 = SkyfieldAlmanacType.separation_coordinates(body1)
             coords2 = SkyfieldAlmanacType.separation_coordinates(body2)
         except skyfield.errors.EphemerisRangeError:
@@ -1508,7 +1538,7 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             raise weewx.UnknownType('separation')
         # Meeus 17.1, delegated to the WeeWX base class (only reachable on
         # WeeWX 5.2+, where the base class exists).
-        return super().separation(coords1, coords2)
+        return Radians(super().separation(coords1, coords2))
 
     @staticmethod
     def separation_coordinates(body):
@@ -1841,10 +1871,13 @@ class SkyfieldAlmanacBinder:
         position = observer.at(t).observe(self.target_body()).apparent()
         return self.almanac_type.sky.constellation_abbr_at(position)
 
-    def parallactic_angle(self) -> float:
-        """Parallactic angle of the body in radians (a method, like PyEphem's,
-        so that both $almanac.venus.parallactic_angle and an explicit call
-        work in a template)."""
+    def _parallactic_angle(self) -> float:
+        """Parallactic angle of the body in radians.  Dispatched by _evaluate
+        as a CallableRadians -- NOT a real method named after the tag (a real
+        attribute would shadow __getattr__, and the tag must resolve to the
+        value itself so .degrees works without Cheetah's autocall); the
+        callable value keeps the explicit PyEphem-style call
+        $almanac.venus.parallactic_angle() working."""
         _, observer = self.almanac_type.location(self.almanac)
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
         ha, dec, _ = observer.at(t).observe(self.target_body()).apparent().hadec()
@@ -2058,12 +2091,14 @@ class SkyfieldAlmanacBinder:
         elif attr in ('circumpolar', 'neverup'):
             circumpolar, neverup = self.circumpolar_neverup()
             return circumpolar if attr == 'circumpolar' else neverup
+        elif attr == 'parallactic_angle':
+            return CallableRadians(self._parallactic_angle())
         elif attr in ('libration_lat', 'libration_long', 'colong') and self.heavenly_body == 'moon':
-            return self.moon_libration(attr)
+            return Radians(self.moon_libration(attr))
         elif attr in ('cmlI', 'cmlII') and self.heavenly_body == 'jupiter':
-            return self.jupiter_cml(attr)
+            return Radians(self.jupiter_cml(attr))
         elif attr in ('earth_tilt', 'sun_tilt') and self.heavenly_body == 'saturn':
-            return self.saturn_ring_tilt(attr)
+            return Radians(self.saturn_ring_tilt(attr))
         elif attr in ('constellation', 'constellation_abbr'):
             abbr = self.constellation_lookup()
             if abbr is None:

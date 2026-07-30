@@ -231,6 +231,9 @@ class SkyPage:
         # expensive tags and three panels need them.
         self._memo: Dict[Tuple[float, str], Dict[str, Any]] = {}
         sd: Dict[str, Any] = skin_dict if skin_dict is not None else {}
+        # The report's theme option (dark | light | auto); resolved by
+        # .theme() -- auto needs the almanac.
+        self._theme_conf: str = str(sd.get('theme', 'dark')).lower()
         self._texts: Dict[str, Any] = sd.get('Texts', {}) or {}
         hemis = (sd.get('Labels', {}) or {}).get('hemispheres', ())
         if isinstance(hemis, str):
@@ -355,6 +358,27 @@ class SkyPage:
     @_panel_guard(fallback=False)
     def sun_is_up(self, alm) -> bool:
         return bool(self._body(alm, 'sun')['alt'] > 0)
+
+    @_panel_guard(fallback='dark')
+    def theme(self, alm) -> str:
+        """The page's resolved theme, 'dark' or 'light', from the report's
+        theme option (dark | light | auto; default dark).  auto follows the
+        sun at generation time: light while it is up, dark otherwise.  The
+        page regenerates each report cycle, so the auto flip lags
+        sunrise/sunset by at most one archive interval -- the palette is
+        baked into the page; nothing shifts in the browser."""
+        if self._theme_conf not in ('auto', 'dark', 'light'):
+            raise SkyPageUsageError('unknown theme %r; valid themes: auto, dark, light'
+                                    % self._theme_conf)
+        if self._theme_conf == 'auto':
+            return 'light' if self.sun_is_up(alm) else 'dark'
+        return self._theme_conf
+
+    @_panel_guard(fallback='night')
+    def palette(self, alm) -> str:
+        """The palette name matching .theme -- 'light' on the light theme,
+        'night' otherwise -- for the template to hand every panel call."""
+        return 'light' if self.theme(alm) == 'light' else 'night'
 
     @_panel_guard()
     def header_sub(self, alm, palette: str = 'night') -> str:

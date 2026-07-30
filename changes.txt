@@ -1,6 +1,50 @@
 weewx-skyfield change history
 -----------------------------
 
+1.15 2026/07/30
+---------------
+- A complete Dutch translation ships with the skin (Beta, awaiting
+  native-speaker review -- corrections welcome): lang/nl.conf covers the
+  page prose, every panel string, the body names and all 88
+  constellations, with the moon phases and compass points as in WeeWX's
+  own Dutch lang file.  Select it with lang = nl in the report.  Tests
+  keep it complete the same way they keep the German and French.
+- The French translation drops its Beta label: the native-speaker review
+  it was waiting for is complete and confirmed the translation as
+  shipped.
+- Every PyEphem-shaped radians angle now also carries the same answer in
+  decimal degrees: $almanac.moon.parallactic_angle.degrees -- likewise
+  the moon's libration_lat/libration_long/colong, Jupiter's cmlI/cmlII,
+  Saturn's earth_tilt/sun_tilt, and $almanac.separation(...); .radians
+  names the value itself, for symmetry with Skyfield's own angles.  The
+  values are unchanged (plain floats in radians, matching PyEphem's
+  numeric scale), so existing templates -- including the
+  math.degrees($...) idiom -- keep working.  Asked for by a user, for
+  the parallactic angle.
+- Under the hood, $almanac.<body>.parallactic_angle is no longer a bound
+  method but the value itself, made callable so the PyEphem-style
+  explicit call $almanac.venus.parallactic_angle() keeps working.  The
+  parens-free form now also resolves outside Cheetah: a loopdata almanac
+  field can read almanac.moon.parallactic_angle.degrees.
+- The Sky page gains a theme option ([StdReport] [[SkyfieldReport]]
+  theme = dark | light | auto): dark is the night plate and stays the
+  default (existing pages are unchanged); light renders the page on
+  the panels' paper-atlas plate; auto picks light while the sun is up
+  at generation time and dark otherwise -- the page regenerates each
+  report cycle, so the flip follows sunrise/sunset within one archive
+  interval, still with no JavaScript.  Asked for by a Belchertown user
+  (issue #3) whose skin switches themes the same way.
+- The Rise & Set caption no longer names its tick's color ("the tick
+  across each bar is the transit"): on the light plate the tick is
+  navy, not ivory.  Reworded in all three languages.
+- Docs: the body lists now say explicitly that there is no
+  $almanac.earth -- Earth is the observer, not a served body (PyEphem
+  has no Earth body either) -- and point to
+  $almanac.sun.hlongitude/hlatitude, which report Earth's heliocentric
+  coordinates per the XEphem convention.  (A user tried
+  $almanac.earth.hlongitude and found nothing pointing them to the
+  right tag.)
+
 1.14 2026/07/29
 ---------------
 - FIX: on stations whose reports set a [Units] [[Groups]] preference for

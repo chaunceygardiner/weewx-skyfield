@@ -3,6 +3,16 @@
   --brass:#D3A94C; --line:#2A3358;
   color-scheme: dark;
 }
+/* The light theme (theme = light, or auto with the sun up): the paper-atlas
+   plate, matching the panels' 'light' palette.  The template resolves the
+   report's theme option at generation time into this class on <html> -- it
+   must sit on the root element so color-scheme (and the canvas backdrop it
+   governs) flips with it. */
+:root.theme-light{
+  --night:#EFECE2; --vault:#FFFFFF; --ink:#1D2C4E; --muted:#5C6672;
+  --brass:#B45309; --line:#C9CFD8;
+  color-scheme: light;
+}
 *{box-sizing:border-box}
 body{
   background:var(--night); color:var(--ink);
@@ -65,6 +75,7 @@ svg text{fill:var(--ink)}
 .cardinal{font-size:14px; fill:var(--brass); letter-spacing:.1em}
 .gridlab{font-size:10px; fill:var(--muted)}
 .moonlab{font-size:10px; fill:#C9D0DA}
+:root.theme-light .moonlab{fill:#767E8A}
 .starlab{font-size:10px; fill:var(--muted); font-family:Georgia, serif; font-style:italic}
 .bodylab{font-size:11px; fill:var(--ink); font-family:Georgia, serif}
 .rowlab{font-size:13px; fill:var(--ink); font-family:Georgia, serif;

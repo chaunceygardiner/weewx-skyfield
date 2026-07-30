@@ -33,6 +33,11 @@ The Skyfield almanac natively computes, for the sun, the moon and all planets (p
 
 PyEphem is *not* required for any of these, nor for any tag used by WeeWX's standard skins.
 
+There is no `$almanac.earth`: Earth is the observer, not a served body (PyEphem, which this
+almanac replaces, has no Earth body either).  Earth's heliocentric coordinates are available
+all the same — `$almanac.sun.hlongitude` and `$almanac.sun.hlatitude` report them, per the
+XEphem convention (see [Differences from PyEphem](#differences-from-pyephem)).
+
 ## Constellations and eclipses
 
 Two tag families (new in 1.9) have no PyEphem counterpart at all.
@@ -147,7 +152,9 @@ standard definitions rather than PyEphem:
 - `hlongitude`/`hlatitude` are true heliocentric (sun-centered) ecliptic coordinates for every
   body, including the moon.  (PyEphem reports the moon's *geocentric* ecliptic longitude under
   this name.)  For the sun itself, heliocentric coordinates are undefined, so Earth's
-  heliocentric coordinates are reported, per the XEphem convention.
+  heliocentric coordinates are reported, per the XEphem convention.  (Asked for Earth directly
+  — `$almanac.earth.hlongitude` — the almanac has no such body: Earth is the observer; ask the
+  sun.)
 - The default horizon honors the almanac's `pressure` and `temperature` for rise/set:
   refraction is scaled from the standard 34 arcminutes, and WeeWX's documented `pressure=0`
   idiom turns it off entirely.
@@ -161,7 +168,11 @@ standard definitions rather than PyEphem:
 - The moon's libration (`libration_lat`/`libration_long`) and selenographic colongitude
   (`colong`) are the optical libration per Meeus, Astronomical Algorithms ch. 53; the physical
   libration (at most 0.04 degrees) is neglected.  Saturn's ring tilt (`earth_tilt`/`sun_tilt`)
-  follows Meeus ch. 45.  All are in radians, like PyEphem's.
+  follows Meeus ch. 45.  All are in radians, like PyEphem's — and each of these, along with
+  `parallactic_angle` and `$almanac.separation()`, also carries the same answer in decimal
+  degrees: append `.degrees` (`$almanac.moon.parallactic_angle.degrees`); `.radians` names the
+  value itself.  The values are unchanged (plain floats in radians), so existing templates —
+  including the `math.degrees($...)` idiom — keep working.
 
 ## The result cache
 

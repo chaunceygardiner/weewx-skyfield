@@ -50,8 +50,8 @@ values.
   [embed its panels in your own skin](panels.md).
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are fully translatable through WeeWX's own lang files, with
-  per-string English fallback; complete German (native-speaker reviewed) and French (Beta)
-  translations ship with the skin.
+  per-string English fallback; complete German and French (both native-speaker reviewed)
+  and Dutch (Beta) translations ship with the skin.
   1.13 adds the constellations (`$almanac.saturn.constellation.label`), all 88 in each.
   [How to translate](i18n.md).
 - **Safe to upgrade over a running WeeWX.**  The ephemeris is read fully into memory at
