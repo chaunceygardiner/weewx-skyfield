@@ -790,6 +790,10 @@ class TestI18n:
         """Dutch likewise ships complete."""
         self.check_complete('nl.conf')
 
+    def test_es_conf_is_complete(self):
+        """Spanish likewise ships complete."""
+        self.check_complete('es.conf')
+
     def check_complete(self, name):
         configobj = pytest.importorskip('configobj')
         conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, name),
@@ -908,4 +912,42 @@ class TestI18n:
         assert 'Berekend met ' + LINKED_NAME in footer
         assert 'IAU-CSN-sternamen' in footer
         # Dutch moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_spanish_renders(self, sky):
+        """The shipped es.conf, fed through the same channels the report
+        engine uses, renders Spanish panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'es.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>E</text>' in dome                       # Spanish east cardinal
+        assert '>Luna</text>' in dome
+        assert '<th>Astro</th>' in table
+        assert '</span>Mercurio</td>' in table           # not "Mercury"
+        assert '<th>Salida</th>' in table and '<th>Puesta</th>' in table
+        assert '>ahora 12:00</text>' in ribbons
+        # The chips' constellations carry the Spanish names, through the
+        # [[Constellations]] subsection: Saturn stands in Pisces on
+        # 2025-06-21, and "Piscis" differs from the Latin fallback.
+        assert 'constelación: Piscis' in chips
+        assert 'Calculado con ' + LINKED_NAME in footer
+        assert 'Nombres de estrellas IAU-CSN' in footer
+        # Spanish moon phase names flow through the same texts dict.
         assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])

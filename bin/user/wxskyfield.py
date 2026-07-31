@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.15'
+WXSKYFIELD_VERSION = '1.16'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -1184,7 +1184,7 @@ HIP_TAG_RE = re.compile(r'hip_(\d+)$')
 # PyEphem, they ARE supported for stars with a measured parallax (e.g.,
 # $almanac.proxima_centauri.earth_distance).
 STAR_UNSUPPORTED = {'phase', 'moon_fullness',
-                    'hlong', 'hlat', 'hlongitude', 'hlatitude'}
+                    'hlong', 'hlat', 'hlon', 'hlongitude', 'hlatitude'}
 
 # Base class for almanac extensions.  WeeWX versions earlier than 5.2 do not
 # have weewx.almanac.AlmanacType, in which case register_almanac declines to
@@ -1568,13 +1568,16 @@ class SkyfieldAlmanacBinder:
         'astro_dec' : ('a_dec', 'angle'),
         'geo_ra'    : ('g_ra',  'direction'),
         'geo_dec'   : ('g_dec', 'angle'),
+        'hour_angle': ('ha',    'angle'),
         'hlongitude': ('hlong', 'direction'),
         'hlatitude' : ('hlat',  'angle'),
         'elongation': ('elong', 'angle'),
     }
 
     # Attributes that are returned as plain floats in decimal degrees.
-    FLOAT_ANGLES = ('az', 'alt', 'ra', 'dec', 'a_ra', 'a_dec', 'g_ra', 'g_dec', 'hlong', 'hlat', 'elong')
+    # hlon is PyEphem's spelling of hlong; ha is the hour angle.
+    FLOAT_ANGLES = ('az', 'alt', 'ra', 'dec', 'a_ra', 'a_dec', 'g_ra', 'g_dec',
+                    'ha', 'hlong', 'hlat', 'hlon', 'elong')
 
     def __init__(self, almanac_type: SkyfieldAlmanacType, almanac, heavenly_body: str):
         self.almanac_type = almanac_type
@@ -1776,15 +1779,24 @@ class SkyfieldAlmanacBinder:
             # Apparent geocentric right ascension/declination of date.
             g_ra, g_dec = self.geocentric_radec_degrees()
             return g_ra if attr == 'g_ra' else g_dec
-        elif attr in ('hlong', 'hlat'):
+        elif attr == 'ha':
+            # Local apparent hour angle, signed: 0 at transit, negative east
+            # of the meridian (rising toward transit), positive west -- the
+            # standard convention.  PyEphem's ha is the same angle in radians,
+            # usually wrapped to [0, 2*pi).
+            _, observer = self.almanac_type.location(self.almanac)
+            ha, _, _ = observer.at(t).observe(orb).apparent().hadec()
+            return ha._degrees
+        elif attr in ('hlong', 'hlat', 'hlon'):
             # Heliocentric ecliptic longitude/latitude.  For the sun itself
             # these are undefined (it sits at the origin); report Earth's
             # heliocentric coordinates instead, per the XEphem convention.
             # For the moon this is its true heliocentric longitude, where
             # PyEphem reports the moon's GEOcentric ecliptic longitude.
+            # hlon is PyEphem's own spelling of hlong.
             target = sky.earth if self.heavenly_body == 'sun' else orb
             lat, lon, _ = sky.sun.at(t).observe(target).frame_latlon(skyfield.framelib.ecliptic_frame)
-            return lon.degrees if attr == 'hlong' else lat.degrees
+            return lat.degrees if attr == 'hlat' else lon.degrees
         elif attr == 'elong':
             # Elongation (angular separation from the sun).
             e = sky.earth.at(t)
@@ -1888,10 +1900,10 @@ class SkyfieldAlmanacBinder:
 
     def moon_libration(self, attr: str) -> float:
         """Geocentric optical libration of the moon (libration_lat,
-        libration_long) and selenographic colongitude of the sun (colong),
-        in radians like PyEphem's, per Meeus, Astronomical Algorithms,
-        chapter 53.  The physical libration (at most 0.04 degrees) is
-        neglected."""
+        libration_long) and the selenographic position of the sun -- its
+        colongitude (colong) and latitude (subsolar_lat) -- in radians
+        like PyEphem's, per Meeus, Astronomical Algorithms, chapter 53.
+        The physical libration (at most 0.04 degrees) is neglected."""
         sky = self.almanac_type.sky
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
         T = (t.tt - 2451545.0) / 36525.0
@@ -1905,10 +1917,10 @@ class SkyfieldAlmanacBinder:
 
         moon_lat, moon_lon, moon_dist = sky.earth.at(t).observe(sky.moon).apparent().frame_latlon(
             skyfield.framelib.ecliptic_frame)
-        if attr == 'colong':
-            # The colongitude derives from the selenographic position of
-            # the sun: the same formulas, fed the sun's coordinates as seen
-            # from the moon (Meeus 53.5).
+        if attr in ('colong', 'subsolar_lat'):
+            # These derive from the selenographic position of the sun: the
+            # same formulas, fed the sun's coordinates as seen from the
+            # moon (Meeus 53.5).
             sun_lat, sun_lon, sun_dist = sky.earth.at(t).observe(sky.sun).apparent().frame_latlon(
                 skyfield.framelib.ecliptic_frame)
             ratio = moon_dist.au / sun_dist.au
@@ -1920,7 +1932,9 @@ class SkyfieldAlmanacBinder:
             lam = moon_lon.degrees
             beta = moon_lat.radians
         W = math.radians(lam - omega)
-        if attr == 'libration_lat':
+        if attr in ('libration_lat', 'subsolar_lat'):
+            # The latitude formula: the moon's coordinates give the
+            # libration in latitude, the sun's give its subsolar latitude.
             return math.asin(-math.sin(W) * math.cos(beta) * math.sin(inc)
                              - math.sin(beta) * math.cos(inc))
         A = math.atan2(math.sin(W) * math.cos(beta) * math.cos(inc)
@@ -2093,8 +2107,12 @@ class SkyfieldAlmanacBinder:
             return circumpolar if attr == 'circumpolar' else neverup
         elif attr == 'parallactic_angle':
             return CallableRadians(self._parallactic_angle())
-        elif attr in ('libration_lat', 'libration_long', 'colong') and self.heavenly_body == 'moon':
+        elif attr in ('libration_lat', 'libration_long', 'colong',
+                      'subsolar_lat') and self.heavenly_body == 'moon':
             return Radians(self.moon_libration(attr))
+        elif attr == 'moon_phase' and self.heavenly_body == 'moon':
+            # PyEphem's raw illuminated fraction, 0..1 (phase is percent).
+            return self.phase / 100.0
         elif attr in ('cmlI', 'cmlII') and self.heavenly_body == 'jupiter':
             return Radians(self.jupiter_cml(attr))
         elif attr in ('earth_tilt', 'sun_tilt') and self.heavenly_body == 'saturn':
@@ -2127,9 +2145,9 @@ class SkyfieldAlmanacBinder:
             return self.almanac.texts.get(self.heavenly_body,
                                           self.heavenly_body.replace('_', ' ').title())
 
-        # Something Skyfield does not compute (e.g., the moon's subsolar
-        # latitude).  Fall back to the built-in PyEphem almanac if PyEphem
-        # is installed.
+        # Something Skyfield does not compute (e.g., a_epoch, or PyEphem's
+        # deprecated rise_time family).  Fall back to the built-in PyEphem
+        # almanac if PyEphem is installed.
         return self.pyephem_fallback(attr)
 
 

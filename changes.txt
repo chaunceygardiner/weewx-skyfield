@@ -1,6 +1,48 @@
 weewx-skyfield change history
 -----------------------------
 
+1.16 2026/07/31
+---------------
+- ACTION REQUIRED only if a template read $almanac.<body>.ha or .hlon
+  through the PyEphem fallback: both are now computed natively and
+  return decimal degrees, like az/alt/hlong -- PyEphem returned radians
+  (ha usually wrapped to 0..2*pi).  Drop any math.degrees() conversion.
+- A concerted effort to compute everything natively in Skyfield: after
+  1.16, everything astronomical the built-in PyEphem almanac ever
+  answered is computed natively.  Added:
+    - $almanac.<body>.ha: the local apparent hour angle, stars included
+      ($almanac.rigel.ha).  A plain float in signed decimal degrees --
+      0 at transit, negative east of the meridian, the standard
+      convention.
+    - $almanac.<body>.hour_angle: its unit-aware sibling, a ValueHelper
+      honoring the report's unit settings and formatting, beside
+      azimuth/altitude/hlongitude.
+    - $almanac.<body>.hlon: PyEphem's own spelling of hlong, decimal
+      degrees, the XEphem sun-reports-Earth convention included.
+    - $almanac.moon.subsolar_lat: the selenographic latitude of the
+      subsolar point, the natural partner of colong, from the same
+      Meeus ch. 53 machinery -- a radians float like the librations,
+      carrying .degrees.
+    - $almanac.moon.moon_phase: PyEphem's raw 0..1 illuminated
+      fraction (exactly phase/100; the top-level $almanac.moon_phase,
+      the phase NAME, is unchanged).
+  What still falls through to PyEphem, deliberately: a_epoch (the
+  epoch stamp of PyEphem's astrometric coordinates -- data plumbing,
+  not astronomy) and PyEphem's deprecated rise_time/rise_az/
+  transit_time/transit_alt/set_time/set_az body attributes
+  (rise/set/transit and friends are the supported, native vocabulary).
+  With PyEphem installed these still work through the fallback;
+  without it they are per-tag errors, never a broken report.  All
+  documented under Differences from PyEphem.
+- A complete Spanish translation ships with the skin (Beta, awaiting
+  native-speaker review -- corrections welcome): lang/es.conf covers the
+  page prose, every panel string, the body names and all 88
+  constellations, with the moon phases and compass points as in WeeWX's
+  own Spanish lang file and the constellation names as in the Spanish
+  Wikipedia's Anexo:Constelaciones.  Select it with lang = es in the
+  report.  Tests keep it complete the same way they keep the German,
+  French and Dutch.
+
 1.15 2026/07/30
 ---------------
 - A complete Dutch translation ships with the skin (Beta, awaiting

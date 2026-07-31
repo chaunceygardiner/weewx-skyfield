@@ -307,9 +307,25 @@ class TestPositions:
         assert almanac.sun.altitude.raw == pytest.approx(almanac.sun.alt, abs=ANGLE_TOL)
         assert almanac.sun.topo_dec.raw == pytest.approx(almanac.sun.dec, abs=ANGLE_TOL)
         assert almanac.sun.topo_ra.raw == pytest.approx(almanac.sun.ra, abs=ANGLE_TOL)
+        assert almanac.sun.hour_angle.raw == pytest.approx(almanac.sun.ha, abs=ANGLE_TOL)
         # And they can be formatted (as done in the Seasons skin).
         assert str(almanac.sun.azimuth.format("%.1f"))
         assert str(almanac.moon.altitude.format("%.1f"))
+        assert str(almanac.sun.hour_angle.format("%.1f"))
+
+    def test_value_helper_angles_honor_unit_overrides(self, almanac):
+        """The ValueHelper family participates in the unit system: a report
+        converter that prefers radians for group_angle gets radians from
+        .raw -- hour_angle like altitude (the plain-float ha stays decimal
+        degrees regardless).  The almanac fixture keeps the Skyfield
+        almanac registered while this one is built with its own converter."""
+        import math
+        radians_converter = weewx.units.Converter({'group_angle': 'radian'})
+        alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                    formatter=weewx.units.get_default_formatter(),
+                                    converter=radians_converter)
+        assert alm.sun.hour_angle.raw == pytest.approx(math.radians(alm.sun.ha), abs=1e-6)
+        assert alm.sun.altitude.raw == pytest.approx(math.radians(alm.sun.alt), abs=1e-6)
 
     def test_compute_angle_unknown_key_raises(self, almanac):
         """A key not wired into compute_angle must fail loudly, not
@@ -515,6 +531,37 @@ class TestConventions:
         with pytest.raises(ValueError):
             skyfield_only_almanac.separation(NotATuple(), NotATuple())
 
+    def test_hour_angle_convention(self, skyfield_only_almanac):
+        """$almanac.<body>.ha is the local apparent hour angle in signed
+        decimal degrees: 0 at transit, negative east of the meridian,
+        positive west.  Fixed regression values for the standard fixture;
+        at local noon the sun is shortly before its transit, so slightly
+        negative."""
+        alm = skyfield_only_almanac
+        assert alm.sun.ha == pytest.approx(-17.6239, abs=0.01)
+        assert alm.saturn.ha == pytest.approx(70.7862, abs=0.01)
+        assert alm.rigel.ha == pytest.approx(-5.8527, abs=0.01)
+        assert -180.0 <= alm.moon.ha < 180.0
+
+    def test_hour_angle_agrees_with_pyephem(self, almanac):
+        """Same angle as PyEphem's ha, modulo the wrapping convention
+        (PyEphem usually wraps to [0, 2*pi))."""
+        ephem = pytest.importorskip('ephem')
+        import math
+        observer = pyephem_observer()
+        for name, body in [('sun', ephem.Sun()), ('moon', ephem.Moon()),
+                           ('mars', ephem.Mars())]:
+            body.compute(observer)
+            diff = getattr(almanac, name).ha - math.degrees(body.ha)
+            assert (diff + 180.0) % 360.0 - 180.0 == pytest.approx(0.0, abs=0.01)
+
+    def test_hlon_is_pyephem_spelling_of_hlong(self, skyfield_only_almanac):
+        """hlon (PyEphem's spelling) reports the same decimal degrees as
+        hlong, the XEphem sun convention included."""
+        alm = skyfield_only_almanac
+        assert alm.mars.hlon == alm.mars.hlong
+        assert alm.sun.hlon == alm.sun.hlong
+
     def test_sun_hlong_is_earths_heliocentric_longitude(self, almanac):
         """Heliocentric coordinates of the sun itself are undefined; Earth's
         are reported, per the XEphem convention (and never 0.0)."""
@@ -606,6 +653,39 @@ class TestNativePhysicalEphemeris:
         # Librations never exceed about 8 degrees.
         assert abs(math.degrees(almanac.moon.libration_lat)) < 8.0
         assert abs(math.degrees(almanac.moon.libration_long)) < 8.5
+
+    def test_subsolar_lat(self, skyfield_only_almanac):
+        """The selenographic latitude of the subsolar point, from the same
+        Meeus ch. 53 machinery as colong; radians carrying .degrees, like
+        the librations.  It can never exceed the mean lunar equator's
+        inclination to the ecliptic (1.54 deg) plus the sun's tiny ecliptic
+        latitude as seen from the moon."""
+        alm = skyfield_only_almanac
+        # Regression value for the standard fixture (2025-06-21 12:00 PDT).
+        assert alm.moon.subsolar_lat.degrees == pytest.approx(1.5171, abs=0.001)
+        assert abs(alm.moon.subsolar_lat.degrees) < 1.6
+
+    def test_subsolar_lat_agrees_with_pyephem(self, almanac):
+        import math
+        ephem = pytest.importorskip('ephem')
+        observer = pyephem_observer()
+        moon = ephem.Moon(observer)
+        assert math.degrees(almanac.moon.subsolar_lat) == pytest.approx(
+            math.degrees(moon.subsolar_lat), abs=0.01)
+
+    def test_moon_phase_is_raw_fraction(self, skyfield_only_almanac):
+        """$almanac.moon.moon_phase is PyEphem's raw illuminated fraction,
+        0..1 -- exactly phase/100 (the top-level $almanac.moon_phase, the
+        phase NAME, is a different tag served by the almanac itself)."""
+        alm = skyfield_only_almanac
+        assert alm.moon.moon_phase == pytest.approx(alm.moon.phase / 100.0, abs=1e-12)
+        assert 0.0 <= alm.moon.moon_phase <= 1.0
+
+    def test_moon_phase_agrees_with_pyephem(self, almanac):
+        ephem = pytest.importorskip('ephem')
+        observer = pyephem_observer()
+        moon = ephem.Moon(observer)
+        assert almanac.moon.moon_phase == pytest.approx(moon.moon_phase, abs=0.001)
 
     def test_jupiter_cml(self, almanac):
         """Pinned against the rigorous IAU rotation model (pole + System
@@ -949,6 +1029,8 @@ class TestStars:
             almanac.rigel.phase
         with pytest.raises(AttributeError):
             almanac.rigel.hlong
+        with pytest.raises(AttributeError):
+            almanac.rigel.hlon
 
     def test_star_earth_distance(self, almanac):
         """Unlike PyEphem, earth_distance and sun_distance work for stars
@@ -996,12 +1078,14 @@ PYEPHEM_PARITY_EXPRESSIONS = [
     "almanac.venus.mag", "almanac.venus.phase",
     "almanac.sun.size", "almanac.moon.radius_size",
     "almanac.moon.libration_lat", "almanac.moon.libration_long", "almanac.moon.colong",
+    "almanac.moon.subsolar_lat", "almanac.moon.moon_phase",
     "almanac.saturn.earth_tilt",
     "almanac.mercury.elong", "almanac.mercury.elongation",
     "almanac.sun.hlong", "almanac.mars.hlongitude", "almanac.mars.hlatitude",
+    "almanac.sun.ha", "almanac.mars.hlon",
     "almanac.sun.a_ra", "almanac.sun.a_dec", "almanac.sun.g_ra", "almanac.sun.g_dec",
     "almanac.sun.astro_ra", "almanac.sun.geo_dec",
-    "almanac.sun.topo_ra", "almanac.sun.topo_dec",
+    "almanac.sun.topo_ra", "almanac.sun.topo_dec", "almanac.sun.hour_angle",
     "almanac.sun.name", "almanac.venus.circumpolar", "almanac.venus.neverup",
     "almanac.sun.parallactic_angle()",
     "almanac.polaris.az", "almanac.polaris.alt",
@@ -1246,11 +1330,13 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.venus.parallactic_angle()", "almanac.venus.parallactic_angle",
     "almanac.venus.parallactic_angle.degrees",
     "almanac.moon.libration_lat.degrees", "almanac.moon.colong.degrees",
+    "almanac.moon.subsolar_lat.degrees", "almanac.moon.moon_phase",
     "almanac.jupiter.cmlI.degrees", "almanac.saturn.sun_tilt.degrees",
     "almanac.separation(almanac.mars, almanac.venus).degrees",
     "almanac.sun.name",
     "almanac.mercury.elong", "almanac.mercury.elongation",
     "almanac.sun.hlong", "almanac.mars.hlongitude", "almanac.mars.hlatitude",
+    "almanac.sun.ha", "almanac.mars.hlon", "almanac.sun.hour_angle",
     "almanac.separation((0.1, 0.2), (0.3, 0.4))",
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
     "almanac.sun.constellation", "almanac.sun.constellation_abbr",
@@ -1268,6 +1354,7 @@ SKYFIELD_ONLY_EXPRESSIONS = [
 SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.rigel.rise", "almanac.rigel.set", "almanac.rigel.transit",
     "almanac.rigel.az", "almanac.rigel.alt", "almanac.rigel.mag",
+    "almanac.rigel.ha", "almanac.sirius.hour_angle",
     "almanac.polaris.circumpolar", "almanac.sirius.azimuth",
     "almanac.vega.next_rising", "almanac.rigel.visible",
     "almanac.rigel.earth_distance", "almanac.rigel.sun_distance",
@@ -1300,9 +1387,11 @@ class TestSkyfieldOnlyAudit:
 
     def test_pyephem_only_attributes_raise(self, skyfield_only_almanac):
         # Without PyEphem, its exclusive attributes raise AttributeError
-        # (a per-tag error in a report, not a crash).
+        # (a per-tag error in a report, not a crash).  a_epoch -- the epoch
+        # stamp of PyEphem's astrometric coordinates -- is a deliberate
+        # fallthrough, as is its deprecated rise_time family.
         with pytest.raises(AttributeError):
-            skyfield_only_almanac.moon.subsolar_lat
+            skyfield_only_almanac.moon.a_epoch
 
 
 # Every almanac tag used by WeeWX's Seasons skin, as template-shaped

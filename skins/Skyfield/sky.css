@@ -1,3 +1,6 @@
+/* The Sky page: a one-page showcase of the weewx-skyfield almanac.
+   Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
+   Distributed under the terms of the GNU Public License (GPLv3) */
 :root{
   --night:#0A0F22; --vault:#111834; --ink:#E9E4D4; --muted:#8B93B8;
   --brass:#D3A94C; --line:#2A3358;

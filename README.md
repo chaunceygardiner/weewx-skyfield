@@ -28,8 +28,8 @@ upgrading this extension over a running WeeWX cannot disturb — or crash — th
 almanac; the new files take effect on the restart that follows the install.
 
 And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
-translatable through WeeWX's own lang-file mechanisms, and complete German and French
-translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
+translatable through WeeWX's own lang-file mechanisms, and complete German, French, Dutch
+and Spanish translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
 
 ### The Sky page
 
@@ -79,17 +79,18 @@ up at the moment the page is generated, dark otherwise.  The page regenerates ea
 cycle, so the auto flip follows sunrise and sunset within one archive interval; the colors are
 baked in at generation time, still with no JavaScript.
 
-The page is translatable, German and French translations included — see
+The page is translatable, German, French, Dutch and Spanish translations included — see
 [Translations (i18n)](#translations-i18n) below.
 
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
 rise/set/transit (including `next_`/`previous_` rising, setting, transit and antitransit), custom
 horizons and `use_center` (for twilight tags), azimuth/altitude, right ascension/declination
-(topocentric, astrometric and geocentric), heliocentric longitude/latitude, elongation, earth and
+(topocentric, astrometric and geocentric), hour angle, heliocentric longitude/latitude, elongation, earth and
 sun distance, visible time and its day-over-day change, magnitude (`$almanac.venus.mag`), percent
-illuminated (`$almanac.venus.phase`), apparent angular size (`$almanac.sun.size`,
+illuminated (`$almanac.venus.phase`, plus the moon's PyEphem-style 0–1 fraction,
+`$almanac.moon.moon_phase`), apparent angular size (`$almanac.sun.size`,
 `$almanac.moon.radius_size`), `circumpolar`/`neverup`, parallactic angle and sidereal time; the
-moon's libration and selenographic colongitude, Jupiter's central meridian longitudes and Saturn's
+moon's libration, selenographic colongitude and subsolar latitude, Jupiter's central meridian longitudes and Saturn's
 ring tilt; as well as equinoxes, solstices, moon phases and the moon index.  PyEphem is *not*
 required for any of these, nor for any tag used by WeeWX's standard skins.
 
@@ -143,7 +144,7 @@ computed from the star's Hipparcos parallax.  Star support can be turned off by 
 
 Anything this extension does not compute falls through to the next almanac in WeeWX's list —
 the built-in PyEphem almanac when PyEphem is installed (e.g., named stars when the star catalog
-is disabled, or direct PyEphem body attributes such as `$almanac.moon.subsolar_lat`).  Almanac
+is disabled, or direct PyEphem data attributes such as `$almanac.moon.a_epoch`).  Almanac
 times outside the span of the bundled DE421 ephemeris (mid-1899 through 2053) fall through the
 same way.  Without PyEphem, such tags simply report per-tag errors rather than breaking report
 generation.
@@ -378,14 +379,14 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **Complete German, French and Dutch translations ship with the skin** — the German and
-  French native-speaker reviewed, the Dutch in Beta pending its review.  One line turns
-  one on:
+- **Complete German, French, Dutch and Spanish translations ship with the skin** — the
+  German and French native-speaker reviewed, the Dutch and Spanish in Beta pending their
+  reviews.  One line turns one on:
 
   ```
   [StdReport]
       [[SkyfieldReport]]
-          lang = de                # or fr, or nl
+          lang = de                # or fr, nl, or es
   ```
 
   Corrections are welcome — as are further languages: a lang file is a self-contained,
@@ -398,7 +399,7 @@ translated a WeeWX skin before, there is nothing new to learn.
 
 - **The reference dictionary ships in the skin**, at `skins/Skyfield/lang/en.conf`: every
   string the page renders and nothing else.  Tests keep it exact in both directions, and
-  keep the German and French complete — new strings cannot ship untranslated.
+  keep every shipped translation complete — new strings cannot ship untranslated.
 
 - **Body names are report tags too.**  `$almanac.moon.label` renders the body's translated
   display name, from the report's `[Almanac]` section keyed by tag name (`moon = Mond`) —
@@ -409,8 +410,8 @@ translated a WeeWX skin before, there is nothing new to learn.
 - **Constellations translate the same way** (new in 1.13).
   `$almanac.saturn.constellation.label` renders the constellation's translated name, from
   the `[Almanac]` `[[Constellations]]` section keyed by IAU abbreviation (`Psc = Fische`),
-  falling back to the Latin name; the planet chips on the Sky page use it, and the German
-  and French files carry all 88.  `$almanac.saturn.constellation` itself stays the Latin name in
+  falling back to the Latin name; the planet chips on the Sky page use it, and every
+  shipped language file carries all 88.  `$almanac.saturn.constellation` itself stays the Latin name in
   every language — it is data, and templates comparing it or loopdata consumers reading it
   see the same string as always; the translation lives on the `.label` attribute, beside
   `.abbr` and `.name`.
@@ -449,6 +450,15 @@ definitions rather than PyEphem:
   coordinates are reported, per the XEphem convention.  (Asked for Earth directly —
   `$almanac.earth.hlongitude` — the almanac has no such body: Earth is the observer; ask the
   sun.)
+- `$almanac.<body>.ha`, the local apparent hour angle (new in 1.16, stars included), is a
+  signed angle in decimal degrees like the almanac's other plain coordinates: 0 at transit,
+  negative east of the meridian, positive west — the standard convention.  PyEphem reports
+  the same angle in radians, usually wrapped to [0, 2π), so a template that read `ha`
+  through the PyEphem fallback must drop its `math.degrees()` conversion.  `hlon` — PyEphem's
+  own spelling of `hlong` — is likewise served natively in decimal degrees (radians via the
+  old fallback), sun-reports-Earth convention included.  Like every plain-float angle, `ha`
+  has a unit-aware sibling: `$almanac.<body>.hour_angle` is a ValueHelper honoring the
+  report's unit settings and formatting, beside `azimuth`, `altitude` and `hlongitude`.
 - The default horizon honors the almanac's `pressure` and `temperature` for rise/set: refraction
   is scaled from the standard 34 arcminutes, and WeeWX's documented `pressure=0` idiom turns it
   off entirely.
@@ -459,9 +469,10 @@ definitions rather than PyEphem:
 - Jupiter's central meridian longitudes (`$almanac.jupiter.cmlI`/`cmlII`) are computed from the
   IAU rotation elements (pole and System I/II rotation rates) and the light-time corrected
   geometry.  PyEphem's values differ from the IAU definition by about 0.8 degrees.
-- The moon's libration (`libration_lat`/`libration_long`) and selenographic colongitude
-  (`colong`) are the optical libration per Meeus, Astronomical Algorithms ch. 53; the physical
-  libration (at most 0.04 degrees) is neglected.  Saturn's ring tilt (`earth_tilt`/`sun_tilt`)
+- The moon's libration (`libration_lat`/`libration_long`) and the selenographic position of
+  the sun — its colongitude (`colong`) and latitude (`subsolar_lat`, new in 1.16) — follow
+  Meeus, Astronomical Algorithms ch. 53 (optical libration; the physical libration, at most
+  0.04 degrees, is neglected).  Saturn's ring tilt (`earth_tilt`/`sun_tilt`)
   follows Meeus ch. 45.  All are in radians, like PyEphem's — and each of these, along with
   `parallactic_angle` and `$almanac.separation()`, also carries the same answer in decimal
   degrees: append `.degrees` (`$almanac.moon.parallactic_angle.degrees`); `.radians` names the
@@ -630,7 +641,7 @@ A pytest test suite lives in the `tests` directory.  It exercises the Skyfield a
 (sun/moon rise/set/transit, twilight horizons, equinoxes/solstices, moon phases, positions,
 magnitudes/sizes/phases, named stars, and polar day/night edge cases).  It also contains two
 permanent audits: one verifying that, with PyEphem installed, everything WeeWX's built-in almanac
-can do still works (including direct PyEphem attributes such as `$almanac.moon.subsolar_lat`);
+can do still works (including direct PyEphem attributes such as `$almanac.moon.a_epoch`);
 and one verifying that on a system *without* PyEphem, all standard-skin tags (and much more) work
 with Skyfield alone.  Run the suite from the root of this repository with the Python from your
 WeeWX virtual environment (WeeWX, Skyfield and pytest must be installed in that environment):
