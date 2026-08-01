@@ -13,6 +13,7 @@ eclipses, and a planetarium-style Sky page.
 [The Sky page](sky-page.md) ·
 [Sky panels in your skin](panels.md) ·
 [Translating (i18n)](i18n.md) ·
+[Known Skyfield issues](known-skyfield-issues.md) ·
 [GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
 
 ---

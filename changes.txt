@@ -1,6 +1,15 @@
 weewx-skyfield change history
 -----------------------------
 
+1.16.1 (in progress)
+--------------------
+- Docs only: a new "Known Skyfield Issues" section in the README and page
+  in the user manual, covering the rare benign RuntimeWarning from
+  Skyfield's almanac.py line 339 (upstream skyfield issue #1114).  The
+  weewx-skyfield's author diagnosed the root cause and contributed a
+  proposed one-line fix upstream; this extension already discards the
+  affected NaN event, so reports render complete.
+
 1.16 2026/07/31
 ---------------
 - ACTION REQUIRED only if a template read $almanac.<body>.ha or .hlon

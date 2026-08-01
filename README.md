@@ -653,6 +653,30 @@ WeeWX virtual environment (WeeWX, Skyfield and pytest must be installed in that 
 The star tests use the bundled Hipparcos catalog excerpt (`bin/user/wxskyfield_stars.dat`),
 which is part of this repository, so no additional downloads are needed.
 
+## Known Skyfield Issues
+
+Issues in the underlying Skyfield library that you might notice while running this
+extension.  None require action.
+
+**A rare `RuntimeWarning` from Skyfield's `almanac.py` line 339.**  Very occasionally,
+report generation prints:
+
+```
+skyfield/almanac.py:339: RuntimeWarning: invalid value encountered in divide
+  return - 2*c / (b + sign * sqrt(discriminant))
+```
+
+This is an upstream bug in recent Skyfield versions (through at least 1.54,
+[skyfield issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114)):
+the rise/set solver's final refinement can divide 0/0 when its iteration lands, to the
+last bit, exactly on the horizon — a floating-point coincidence that can strike any
+body, any latitude, any date, and that even varies with the machine's math libraries.
+Inside Skyfield the affected event's time becomes NaN; this extension detects and
+discards it, so the worst case is a single rise or set tag coming up empty for a
+while — in practice pages render complete.  weewx-skyfield's author diagnosed the
+root cause and contributed a proposed one-line fix in issue #1114; the warning will
+disappear once a Skyfield release newer than 1.54 ships a fix.
+
 ## Why require Python 3.9 or later?
 
 weewx-skyfield uses timezone aware date features which do not work with Python 2, nor in
