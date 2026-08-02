@@ -1,6 +1,14 @@
 weewx-skyfield change history
 -----------------------------
 
+1.17.1 (in progress)
+--------------------
+- Docs only: the Known Skyfield Issues section in the README and page in
+  the user manual now note that weewx-skyfield's author has submitted
+  pull request #1140 upstream, with the fix and a regression test, for
+  the rare benign RuntimeWarning from Skyfield's almanac.py line 339
+  (skyfield issue #1114).
+
 1.17 2026/08/02
 ---------------
 - A complete Danish translation ships with the skin, contributed by

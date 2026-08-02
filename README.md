@@ -680,8 +680,9 @@ body, any latitude, any date, and that even varies with the machine's math libra
 Inside Skyfield the affected event's time becomes NaN; this extension detects and
 discards it, so the worst case is a single rise or set tag coming up empty for a
 while — in practice pages render complete.  weewx-skyfield's author diagnosed the
-root cause and contributed a proposed one-line fix in issue #1114; the warning will
-disappear once a Skyfield release newer than 1.54 ships a fix.
+root cause in issue #1114 and has submitted
+[pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140) to fix
+it; the warning will disappear once a Skyfield release newer than 1.54 ships the fix.
 
 ## Why require Python 3.9 or later?
 

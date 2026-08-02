@@ -46,9 +46,10 @@ or set tag coming up empty for a while — and in practice pages render complete
 one production occurrence that prompted this page, every rise, set, transit and twilight
 value was present.  No configuration change, downgrade or workaround is needed.
 
-weewx-skyfield's author diagnosed the root cause and contributed a proposed one-line
-fix — along with a deterministic reproduction — to
-[issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114).  The
-warning will disappear once a Skyfield release newer
-than 1.54 ships a fix; upgrading Skyfield is routine — see
+weewx-skyfield's author diagnosed the root cause — with a deterministic
+reproduction — in
+[issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114), and has
+submitted [pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140)
+to fix it, along with a regression test.  The warning will disappear once a Skyfield
+release newer than 1.54 ships the fix; upgrading Skyfield is routine — see
 [Upgrading Skyfield](installation.md#upgrading-skyfield).
