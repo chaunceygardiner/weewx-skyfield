@@ -51,8 +51,8 @@ values.
   [embed its panels in your own skin](panels.md).
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are fully translatable through WeeWX's own lang files, with
-  per-string English fallback; complete German and French (both native-speaker reviewed)
-  and Dutch and Spanish (Beta) translations ship with the skin.
+  per-string English fallback; complete German, French and Danish (all from native
+  speakers) and Dutch and Spanish (Beta) translations ship with the skin.
   1.13 adds the constellations (`$almanac.saturn.constellation.label`), all 88 in each.
   [How to translate](i18n.md).
 - **Safe to upgrade over a running WeeWX.**  The ephemeris is read fully into memory at
@@ -126,7 +126,8 @@ Working Group on Star Names, whose Catalog of Star Names supplies the named-star
 **U.S. Naval Observatory (USNO)** and **Jean Meeus**, whose published definitions and
 algorithms are the reference for rise/set, twilight, and other almanac conventions; and
 **Tom Keffer, Matthew Wall, and the WeeWX project**, whose almanac framework this extension
-plugs into.
+plugs into.  **Gert Andersen** contributed the Danish translation; **Christian (peters77)**
+reviewed the German, and **Jacques Terrettaz** the French.
 
 ## Licensing
 

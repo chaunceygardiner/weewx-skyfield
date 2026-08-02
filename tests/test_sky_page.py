@@ -794,6 +794,10 @@ class TestI18n:
         """Spanish likewise ships complete."""
         self.check_complete('es.conf')
 
+    def test_da_conf_is_complete(self):
+        """Danish likewise ships complete."""
+        self.check_complete('da.conf')
+
     def check_complete(self, name):
         configobj = pytest.importorskip('configobj')
         conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, name),

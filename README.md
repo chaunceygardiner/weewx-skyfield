@@ -28,8 +28,8 @@ upgrading this extension over a running WeeWX cannot disturb — or crash — th
 almanac; the new files take effect on the restart that follows the install.
 
 And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
-translatable through WeeWX's own lang-file mechanisms, and complete German, French, Dutch
-and Spanish translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
+translatable through WeeWX's own lang-file mechanisms, and complete German, French, Danish,
+Dutch and Spanish translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
 
 ### The Sky page
 
@@ -79,7 +79,7 @@ up at the moment the page is generated, dark otherwise.  The page regenerates ea
 cycle, so the auto flip follows sunrise and sunset within one archive interval; the colors are
 baked in at generation time, still with no JavaScript.
 
-The page is translatable, German, French, Dutch and Spanish translations included — see
+The page is translatable, German, French, Danish, Dutch and Spanish translations included — see
 [Translations (i18n)](#translations-i18n) below.
 
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
@@ -379,14 +379,15 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **Complete German, French, Dutch and Spanish translations ship with the skin** — the
-  German and French native-speaker reviewed, the Dutch and Spanish in Beta pending their
-  reviews.  One line turns one on:
+- **Complete German, French, Danish, Dutch and Spanish translations ship with the skin** —
+  the German and French native-speaker reviewed, the Danish contributed by native speaker
+  Gert Andersen, the Dutch and Spanish in Beta pending their reviews.  One line turns one
+  on:
 
   ```
   [StdReport]
       [[SkyfieldReport]]
-          lang = de                # or fr, nl, or es
+          lang = de                # or fr, da, nl, or es
   ```
 
   Corrections are welcome — as are further languages: a lang file is a self-contained,
@@ -415,6 +416,11 @@ translated a WeeWX skin before, there is nothing new to learn.
   every language — it is data, and templates comparing it or loopdata consumers reading it
   see the same string as always; the translation lives on the `.label` attribute, beside
   `.abbr` and `.name`.
+
+- **Dates follow the language too** (new in 1.17).  The page's strftime date formats are
+  `[Texts]` keys, so a translation reorders day and month ("2. aug" where English says
+  "Aug 2"); the month and weekday names come from the report's locale, WeeWX-standard.
+  [Details](https://chaunceygardiner.github.io/weewx-skyfield/i18n.html).
 
 - **Your own skins get their own language.**  The panels and `.label` read the report being
   generated, never the bundled skin — copy the entries you need into your skin's lang file,
@@ -722,6 +728,8 @@ weewx-skyfield stands on the work of others:
    algorithms are the reference for rise/set, twilight, and other almanac conventions.
  * **Tom Keffer, Matthew Wall, and the WeeWX project**, whose almanac framework this
    extension plugs into.
+ * **Gert Andersen**, who contributed the Danish translation; **Christian (peters77)**,
+   who reviewed the German; and **Jacques Terrettaz**, who reviewed the French.
 
 ## Licensing
 

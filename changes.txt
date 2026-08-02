@@ -1,8 +1,23 @@
 weewx-skyfield change history
 -----------------------------
 
-1.16.1 (in progress)
---------------------
+1.17 2026/08/02
+---------------
+- A complete Danish translation ships with the skin, contributed by
+  native speaker Gert Andersen: lang/da.conf covers
+  the page prose, every panel string, the body names and all 88
+  constellations.  Select it with lang = da in the report.  Tests keep
+  it complete the same way they keep the German, French, Dutch and
+  Spanish.
+- The Sky page's dates now follow the report's language.  The three
+  strftime date formats (the header date, the countdown chips, the
+  panel tooltip dates) are [Texts] keys, so a translation reorders day
+  and month -- "2. aug" for Danish and German, "2 aug" for French,
+  Dutch and Spanish -- where every language used to get the English
+  "Aug 2".  The month and weekday NAMES follow the report's locale as
+  before, WeeWX-standard: set lang to a full installed locale (e.g.
+  lang = da_DK.UTF-8 -- WeeWX still loads da.conf) to render them in
+  the report's language too.
 - Docs only: a new "Known Skyfield Issues" section in the README and page
   in the user manual, covering the rare benign RuntimeWarning from
   Skyfield's almanac.py line 339 (upstream skyfield issue #1114).  The

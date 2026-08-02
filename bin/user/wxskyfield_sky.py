@@ -181,10 +181,6 @@ def _t_hm(ts: Optional[float]) -> str:
     return time.strftime('%H:%M', time.localtime(ts)) if ts else '&#8212;'
 
 
-def _t_date(ts: float) -> str:
-    return time.strftime('%b %-d', time.localtime(ts))
-
-
 def _esc(s: str) -> str:
     # Quotes too: translated text lands inside attribute values (titles,
     # aria-labels), and translators control that text.
@@ -290,6 +286,13 @@ class SkyPage:
         return self._t('{h}h {m}m', h=int(seconds // 3600),
                        m='%02d' % int(seconds % 3600 // 60))
 
+    def _date(self, ts: float) -> str:
+        """A short panel date.  The strftime format itself is a [Texts]
+        key, so a language reorders it (day-month for Danish or German);
+        the month and weekday NAMES come from strftime, i.e. the weewxd
+        process locale, like the panels' month axis labels."""
+        return time.strftime(self._t('%b %-d'), time.localtime(ts))
+
     # ── shared data access (plain $almanac tags) ─────────────────────────────
     def _body(self, alm, name: str) -> Dict[str, Any]:
         key = (alm.time_ts, name)
@@ -388,7 +391,8 @@ class SkyPage:
         return '%.2f&#176; %s &#183; %.2f&#176; %s &#183; %s' % (
             abs(lat), _esc(hemi[0] if lat >= 0 else hemi[1]),
             abs(lon), _esc(hemi[2] if lon >= 0 else hemi[3]),
-            time.strftime('%A, %B %-d %Y, %-H:%M %Z', time.localtime(alm.time_ts)))
+            time.strftime(self._t('%A, %B %-d %Y, %-H:%M %Z'),
+                          time.localtime(alm.time_ts)))
 
     @_panel_guard()
     def footer_html(self) -> str:
@@ -445,7 +449,7 @@ class SkyPage:
                 continue
             chips.append('<div class="count"><span class="k">%s</span>'
                          '<span class="v mono">%s</span><span class="d">%s</span></div>'
-                         % (label, _t_date(ts), when_str(ts)))
+                         % (label, self._date(ts), when_str(ts)))
         # The next eclipse visible from the station, via the combined tag
         # (which already picks the sooner of lunar/solar).  Unlike the
         # chips above, an eclipse can be years out, so its date carries
@@ -470,7 +474,8 @@ class SkyPage:
                           'annular': self._t('annular')}.get(etype, _esc(etype))
             chips.append('<div class="count"><span class="k">%s</span>'
                          '<span class="v mono">%s</span><span class="d">%s &#183; %s</span></div>'
-                         % (kind_label, time.strftime('%b %-d %Y', time.localtime(ts)),
+                         % (kind_label,
+                            time.strftime(self._t('%b %-d %Y'), time.localtime(ts)),
                             type_label, when_str(ts)))
         return '\n'.join(chips)
 
@@ -877,7 +882,7 @@ class SkyPage:
             p.append('<circle cx="%.1f" cy="%.1f" r="2" fill="%s">'
                      '<title>%s</title></circle>'
                      % (X(q['az']), Y(q['alt']), muted,
-                        self._t('{date} — alt {alt}°, az {az}°', date=_t_date(q['ts']),
+                        self._t('{date} — alt {alt}°, az {az}°', date=self._date(q['ts']),
                                 alt='%.1f' % q['alt'], az='%.1f' % q['az'])))
             if first and tm.tm_mon in (1, 3, 6, 9, 11):
                 if (abs(X(q['az']) - X(today['az'])) < 30
@@ -1150,7 +1155,7 @@ class SkyPage:
                 if shade == 'day' and rise is not None and sset is not None:
                     rect = rect[:-2] + ('><title>%s</title></rect>'
                                         % self._t('{date} — daylight {duration}',
-                                                  date=_t_date(ts),
+                                                  date=self._date(ts),
                                                   duration=self._dur(max(0.0, sset - rise))))
                 p.append(rect)
         for h in range(0, 25, 3):
@@ -1220,7 +1225,7 @@ class SkyPage:
             x = M + W * i / (N - 1.0)
             p.append('<g>%s<title>%s</title></g>'
                      % (self._moon_disc(a, x, y_disc, r, pal),
-                        self._t('{date} — {pct}% illuminated', date=_t_date(ts),
+                        self._t('{date} — {pct}% illuminated', date=self._date(ts),
                                 pct='%d' % a.moon_fullness)))
         aq = alm(almanac_time=prev_new + 3600)
         quarters = ((prev_new, self._t('new')),
@@ -1237,7 +1242,7 @@ class SkyPage:
             p.append('<text x="%.1f" y="115" text-anchor="middle" class="rowlab">%s</text>'
                      % (x, name))
             p.append('<text x="%.1f" y="133" text-anchor="middle" class="mono gridlab">%s</text>'
-                     % (x, _t_date(ts_q)))
+                     % (x, self._date(ts_q)))
         x_t = M + W * today_i / (N - 1.0)
         p.append('<circle cx="%.1f" cy="%d" r="%.1f" fill="none" stroke="%s" '
                  'stroke-width="1.5"/>' % (x_t, y_disc, r + 4.5, pal['brass']))
