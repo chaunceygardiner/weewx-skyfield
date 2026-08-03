@@ -1,8 +1,31 @@
 weewx-skyfield change history
 -----------------------------
 
-1.17.1 (in progress)
---------------------
+1.18 2026/08/03
+---------------
+- The Sky page's dome becomes a full sky map when the full Hipparcos
+  catalog is installed: with hip_main.dat in WeeWX's user directory
+  (the same install that already enables $almanac.hip_<number> tags),
+  the dome plots EVERY catalog star down to its magnitude limit --
+  automatically, no options needed -- instead of drawing only from the
+  ~400 named stars.  Labels stay on named stars; an unnamed star's
+  hover tooltip gives its Hipparcos number ("HIP 4427").  The whole
+  field is computed in one vectorized Skyfield observe, so the page
+  stays cheap: a few milliseconds per render once the catalog scan is
+  cached.  Thanks to Jacques Terrettaz for pointing out that bright
+  unnamed stars -- gamma Cassiopeiae, the middle of Cassiopeia's W,
+  brightest among them -- left holes in the constellations.
+- The dome's magnitude cutoffs are now report options: star_mag_limit
+  (default 2.6 -- stars at least this bright are plotted) and
+  star_label_mag (default 1.1 -- named stars at least this bright are
+  labeled), set in the [[SkyfieldReport]] section of weewx.conf.  They
+  were constants in wxskyfield_sky.py, editable only by patching the
+  source.
+- The service now logs a warning for any option in the [Skyfield]
+  section of weewx.conf it does not recognize (it has exactly two:
+  enable and stars) -- a report option like star_mag_limit landing
+  there was silently ignored, and the warning names the right home
+  ([StdReport] [[SkyfieldReport]]).
 - Docs only: the Known Skyfield Issues section in the README and page in
   the user manual now note that weewx-skyfield's author has submitted
   pull request #1140 upstream, with the fix and a regression test, for

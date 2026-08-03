@@ -97,6 +97,10 @@ The installer adds a `[Skyfield]` section to `weewx.conf` with the defaults:
   the report almanac, computed from the bundled Hipparcos catalog excerpt
   (`wxskyfield_stars.dat`).
 
+These are the section's only options — anything else there draws a log warning and is
+ignored.  The Sky page's options (`theme`, `star_mag_limit`, `star_label_mag`, `lang`) are
+*report* options and belong under `[StdReport]` `[[SkyfieldReport]]`.
+
 (This is weewx-skyfield's own top-level `[Skyfield]` section.  It is unrelated to the
 `[[Skyfield]]` subsection of `[Almanac]` used by the independent weewx-skyfield-almanac
 extension.)
@@ -113,6 +117,10 @@ place it in WeeWX's user directory (e.g., `/home/weewx/bin/user/hip_main.dat`). 
 `hip_<number>` lookups read it and all 118,218 stars are served.  (The named stars are still
 loaded from the bundled excerpt at startup — its records are identical to the full catalog's,
 and reading the excerpt keeps startup fast.)
+
+The full catalog also upgrades [The Sky page's dome](sky-page.md#configuring-the-page): it
+plots every catalog star down to `star_mag_limit` — a true sky map — instead of drawing from
+the named stars alone.
 
 ## Why require Python 3.9 or later?
 

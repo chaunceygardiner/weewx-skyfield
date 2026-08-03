@@ -17,6 +17,7 @@ regression values.
 
 import contextlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -183,6 +184,26 @@ class TestService:
             del config['Skyfield']
             wxskyfield.WxSkyfield(StubEngine(), config)
             assert type(weewx.almanac.almanacs[0]).__name__ == 'SkyfieldAlmanacType'
+
+    def test_unrecognized_option_warns(self, caplog):
+        """A key [Skyfield] does not read must be called out, not silently
+        ignored -- a report option (star_mag_limit) landing there looks
+        plausible next to stars = true and otherwise just does nothing."""
+        with saved_almanacs(), caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            wxskyfield.WxSkyfield(StubEngine(), make_config(star_mag_limit='5.0'))
+        assert 'unrecognized [Skyfield] option: star_mag_limit' in caplog.text
+        assert '[StdReport] [[SkyfieldReport]]' in caplog.text
+
+    def test_unrecognized_option_warns_without_hint(self, caplog):
+        with saved_almanacs(), caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            wxskyfield.WxSkyfield(StubEngine(), make_config(star='true'))
+        assert 'unrecognized [Skyfield] option: star' in caplog.text
+        assert '[StdReport]' not in caplog.text
+
+    def test_recognized_options_do_not_warn(self, caplog):
+        with saved_almanacs(), caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            wxskyfield.WxSkyfield(StubEngine(), make_config(stars='true'))
+        assert 'unrecognized' not in caplog.text
 
     def test_old_skyfield_declines(self, monkeypatch):
         """Skyfield earlier than 1.47 lacks find_risings/find_settings; the
@@ -1092,6 +1113,109 @@ PYEPHEM_PARITY_EXPRESSIONS = [
     "almanac.separation((almanac.venus.a_ra, almanac.venus.a_dec), (almanac.mars.a_ra, almanac.mars.a_dec))",
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
 ]
+
+HIP_MAIN_PRESENT = os.path.exists(os.path.join(REPO_ROOT, 'bin', 'user', 'hip_main.dat'))
+
+# The real hip_main.dat record for HIP 4427 (gamma Cassiopeiae, mag 2.15) --
+# the brightest star with neither an IAU-CSN nor a PyEphem name, so it can
+# only ever come from a full catalog, never from NAMED_STARS.
+GAMMA_CAS_RECORD = (
+    'H|        4427| |00 56 42.50|+60 43 00.3| 2.15|1|H|014.17708808|+60.71674966| '
+    '|   5.32|   25.65|   -3.82|  0.35|  0.38|  0.56|  0.42|  0.44|-0.24| 0.19| 0.04'
+    '| 0.24| 0.06|-0.01| 0.08|-0.03| 0.18|-0.26|  0|-1.19|  4427| 2.112|0.002| 2.168'
+    '|0.003| |-0.046|0.003|T|-.02|0.00|L| | 2.1379|0.0008|0.009|154| | 2.12| 2.16|  '
+    '     |U|2| |00567+6043|I| 1| 1| | | |  |   |       |     |     |    |S| |P|  '
+    '5394|B+59  144 |          |          |0.01|B0IV:evar   |X \n')
+GAMMA_CAS_HIP = 4427
+
+
+def make_full_catalog_root(tmp_path, extra_records: str = GAMMA_CAS_RECORD) -> str:
+    """A user_root whose hip_main.dat stands in for the full catalog: the
+    bundled excerpt's real records plus extra_records.  The ephemeris and
+    excerpt are symlinked from the repo."""
+    for f in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
+        os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', f), os.path.join(tmp_path, f))
+    with open(os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE)) as f:
+        excerpt = f.read()
+    with open(os.path.join(tmp_path, 'hip_main.dat'), 'w') as f:
+        f.write(excerpt + extra_records)
+    return str(tmp_path)
+
+
+@needs_catalog
+class TestCatalogStarField:
+    """star_field/catalog_stars: with a full hip_main.dat the dome plots
+    every catalog star to a magnitude limit, positions computed in one
+    vectorized observe that must agree with the binder's scalar path."""
+
+    @pytest.fixture()
+    def full_almanac(self, tmp_path):
+        s = wxskyfield.Sky(make_full_catalog_root(tmp_path), load_stars=True)
+        assert s.is_valid()
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            yield weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+
+    @staticmethod
+    def almanac_type():
+        return [a for a in weewx.almanac.almanacs
+                if isinstance(a, wxskyfield.SkyfieldAlmanacType)][0]
+
+    def test_field_matches_binder(self, full_almanac):
+        field = {hip: (az, alt, mag) for hip, az, alt, mag
+                 in self.almanac_type().star_field(full_almanac, 5.0)}
+        # Gamma Cas is circumpolar at the test latitude, so it must be up.
+        assert GAMMA_CAS_HIP in field
+        for name, hip in (('rigel', 24436), ('polaris', 11767),
+                          ('hip_%d' % GAMMA_CAS_HIP, GAMMA_CAS_HIP)):
+            az, alt, mag = field[hip]
+            b = getattr(full_almanac, name)
+            assert abs(alt - b.alt) < 1e-6
+            assert abs(az - b.az) < 1e-6
+        for hip, (az, alt, mag) in field.items():
+            assert alt > 0.0
+            assert mag <= 5.0
+
+    def test_limit_filters(self, full_almanac):
+        field = self.almanac_type().star_field(full_almanac, 2.0)
+        hips = {hip for hip, _az, _alt, _mag in field}
+        # Rigel (0.18) passes a 2.0 limit; gamma Cas (2.15) must not.
+        assert 24436 in hips
+        assert GAMMA_CAS_HIP not in hips
+
+    def test_empty_field(self, full_almanac):
+        # Nothing is brighter than magnitude -2 (Sirius is -1.44).
+        assert self.almanac_type().star_field(full_almanac, -2.0) == []
+
+    def test_cached_per_limit(self, full_almanac):
+        sky = self.almanac_type().sky
+        assert sky.catalog_stars(5.0) is sky.catalog_stars(5.0)
+
+    @pytest.mark.skipif(HIP_MAIN_PRESENT, reason='a full hip_main.dat is installed in bin/user')
+    def test_none_without_full_catalog(self, almanac, sky):
+        # Only the bundled excerpt: the dome must fall back to named stars.
+        assert sky.catalog_stars(2.6) is None
+        assert self.almanac_type().star_field(almanac, 2.6) is None
+
+    def test_malformed_record_skipped(self, tmp_path):
+        root = make_full_catalog_root(
+            tmp_path, extra_records=GAMMA_CAS_RECORD + 'H|garbage|record\n')
+        s = wxskyfield.Sky(root, load_stars=True)
+        assert s.is_valid()
+        hips, star, mags = s.catalog_stars(5.0)
+        assert GAMMA_CAS_HIP in hips
+
+    def test_corrupt_catalog_degrades(self, tmp_path):
+        for f in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
+            os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', f), os.path.join(tmp_path, f))
+        with open(os.path.join(tmp_path, 'hip_main.dat'), 'wb') as f:
+            f.write(b'\x1f\x8b\x00\x00not really text\xff\xfe')
+        s = wxskyfield.Sky(str(tmp_path), load_stars=True)
+        assert s.is_valid()
+        # Not text at all: catalog_stars must return None, not raise.
+        assert s.catalog_stars(2.6) is None
+
 
 class TestBodyLabel:
     """$almanac.<body>.label -- the body's display name, translated by the

@@ -76,6 +76,15 @@ daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally ta
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
 smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
 
+With only the bundled catalog excerpt installed, the dome draws from the 412 named stars.
+Install the full Hipparcos catalog (see
+[Serving every Hipparcos star](installation.md#serving-every-hipparcos-star)) and it plots
+*every* catalog star down to the magnitude limit instead — automatically, nothing to
+configure.  Labels stay on named stars; an unnamed star's hover tooltip gives its Hipparcos
+number.  The `star_mag_limit` and `star_label_mag` options set the cutoffs — see
+[Configuring the page](sky-page.md#configuring-the-page); when embedding the panels in your
+own skin, set them in that skin's report section the same way.
+
 ## Rise & set ribbons — `ribbons_svg`
 
 ```

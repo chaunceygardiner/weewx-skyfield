@@ -156,8 +156,8 @@ PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
 SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
                  'jupiter': 5.203, 'saturn': 9.537, 'uranus': 19.19, 'neptune': 30.07}
 
-STAR_MAG_LIMIT = 2.6          # dome shows stars at least this bright
-STAR_LABEL_MAG = 1.1          # ... and labels these
+STAR_MAG_LIMIT = 2.6          # dome shows stars at least this bright (default)
+STAR_LABEL_MAG = 1.1          # ... and labels these (default)
 
 REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
 
@@ -199,13 +199,47 @@ def _wxskyfield():
     return m
 
 
+def _find_almanac_type():
+    """The registered Skyfield almanac type, or None."""
+    for a in getattr(weewx.almanac, 'almanacs', []):
+        if isinstance(a, _wxskyfield().SkyfieldAlmanacType):
+            return a
+    return None
+
+
 def _find_sky():
     """The Sky engine of the registered Skyfield almanac (for the star
     catalog and its magnitudes), or None."""
-    for a in getattr(weewx.almanac, 'almanacs', []):
-        if isinstance(a, _wxskyfield().SkyfieldAlmanacType):
-            return a.sky
-    return None
+    a = _find_almanac_type()
+    return a.sky if a is not None else None
+
+
+_HIP_NAMES: Optional[Dict[int, str]] = None
+
+
+def _hip_names() -> Dict[int, str]:
+    """NAMED_STARS reversed: Hipparcos number to tag name.  The first
+    name in NAMED_STARS order wins, matching the named-star dome's
+    dedup, so a star labels identically on both paths."""
+    global _HIP_NAMES
+    if _HIP_NAMES is None:
+        names: Dict[int, str] = {}
+        for name, hip in _wxskyfield().NAMED_STARS.items():
+            names.setdefault(hip, name)
+        _HIP_NAMES = names
+    return _HIP_NAMES
+
+
+def _opt_float(sd: Dict[str, Any], key: str, default: float) -> float:
+    """The skin option as a float, clamped to the magnitudes the dome
+    can sensibly draw (-2, brighter than Sirius, through 6.5, the
+    naked-eye limit); the default on a missing or malformed value -- a
+    bad option must never blank the page."""
+    try:
+        v = float(sd.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(v, -2.0), 6.5)
 
 
 class SkyPage:
@@ -230,6 +264,10 @@ class SkyPage:
         # The report's theme option (dark | light | auto); resolved by
         # .theme() -- auto needs the almanac.
         self._theme_conf: str = str(sd.get('theme', 'dark')).lower()
+        # The dome's magnitude cutoffs (skin.conf star_mag_limit /
+        # star_label_mag, overridable per report).
+        self._star_mag_limit: float = _opt_float(sd, 'star_mag_limit', STAR_MAG_LIMIT)
+        self._star_label_mag: float = _opt_float(sd, 'star_label_mag', STAR_LABEL_MAG)
         self._texts: Dict[str, Any] = sd.get('Texts', {}) or {}
         hemis = (sd.get('Labels', {}) or {}).get('hemispheres', ())
         if isinstance(hemis, str):
@@ -341,20 +379,56 @@ class SkyPage:
         sky = _find_sky()
         if sky is None or not sky.stars:
             return []
+        catalog = self._catalog_stars(alm, sky)
+        if catalog is not None:
+            return catalog
         seen, out = set(), []
         for name, hip in _wxskyfield().NAMED_STARS.items():
             if hip in seen or name not in sky.stars:
                 continue
             mag = sky.stars[name][1]
-            if mag is None or (mag > STAR_MAG_LIMIT and name != 'polaris'):
+            if mag is None or (mag > self._star_mag_limit and name != 'polaris'):
                 continue
             seen.add(hip)
             b = getattr(alm, name)
             alt = b.alt
             if alt <= 0:
                 continue
-            out.append({'name': self._label(alm, name),
+            out.append({'name': self._label(alm, name), 'named': True,
                         'az': b.az, 'alt': alt, 'mag': mag})
+        return out
+
+    def _catalog_stars(self, alm, sky) -> Optional[List[Dict[str, Any]]]:
+        """The dome's stars from a full, user-installed hip_main.dat:
+        every catalog star above the horizon at least star_mag_limit
+        bright, dimmest first so the bright dots paint on top.  Stars
+        with a NAMED_STARS name keep their translated label; the rest
+        are anonymous dots whose tooltip names the Hipparcos number.
+        None when only the bundled excerpt is installed -- the dome then
+        falls back to the named stars."""
+        amt = _find_almanac_type()
+        if amt is None:
+            return None
+        field = amt.star_field(alm, self._star_mag_limit)
+        if field is None:
+            return None
+        names = _hip_names()
+        out = []
+        for hip, az, alt, mag in field:
+            name = names.get(hip)
+            out.append({'name': self._label(alm, name) if name else 'HIP %d' % hip,
+                        'named': name is not None,
+                        'az': az, 'alt': alt, 'mag': mag})
+        polaris_hip = _wxskyfield().NAMED_STARS.get('polaris')
+        if not any(hip == polaris_hip for hip, _az, _alt, _mag in field):
+            # The named-star dome shows Polaris regardless of the limit --
+            # the pole star anchors the chart; keep that promise here.
+            mag = sky.stars.get('polaris', (None, None))[1]
+            b = getattr(alm, 'polaris')
+            if mag is not None and b.alt > 0:
+                out.append({'name': self._label(alm, 'polaris'), 'named': True,
+                            'az': b.az, 'alt': b.alt, 'mag': mag})
+        out.sort(key=lambda s: -s['mag'])
         return out
 
     # ── template conveniences ─────────────────────────────────────────────────
@@ -610,7 +684,7 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(s['name']), alt='%.1f' % s['alt'],
                                 az='%.1f' % s['az'], mag='%.2f' % s['mag'])))
-            if s['mag'] <= STAR_LABEL_MAG:
+            if s['named'] and s['mag'] <= self._star_label_mag:
                 star_labels.append((x, y - 8, _esc(s['name'])))
         for name in PLANETS:
             b = self._body(alm, name)

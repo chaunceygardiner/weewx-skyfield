@@ -291,6 +291,67 @@ class TestPanels:
         assert len(page._memo) == n
 
 
+class TestCatalogDome:
+    """With a full hip_main.dat installed the dome plots every catalog
+    star to star_mag_limit -- named or not -- while labels stay on named
+    stars; without one it keeps the named-star chart."""
+
+    @pytest.fixture()
+    def full_almanac(self, tmp_path):
+        from test_almanac import make_full_catalog_root
+        s = wxskyfield.Sky(make_full_catalog_root(tmp_path), load_stars=True)
+        assert s.is_valid()
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            yield weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+
+    def test_unnamed_stars_plotted_never_labeled(self, full_almanac):
+        page = wxskyfield_sky.SkyPage({'star_mag_limit': '5.0'})
+        svg = page.dome_svg(full_almanac)
+        assert_balanced(svg)
+        # Gamma Cas (HIP 4427, mag 2.15, circumpolar here) has no
+        # IAU-CSN/PyEphem name: a dot with a HIP tooltip, never a label.
+        assert 'HIP 4427' in svg
+        assert not re.search(r'<text[^>]*>HIP \d', svg)
+        assert 'starlab' in svg              # named stars still label
+
+    def test_default_limit_includes_gamma_cas(self, full_almanac, page):
+        # 2.15 is brighter than the default 2.6 limit: the star Jacques
+        # missed appears with no settings at all once the catalog is in.
+        assert 'HIP 4427' in page.dome_svg(full_almanac)
+
+    def test_raised_limit_adds_stars(self, full_almanac):
+        few = wxskyfield_sky.SkyPage().dome_svg(full_almanac)
+        many = wxskyfield_sky.SkyPage({'star_mag_limit': '5.0'}).dome_svg(full_almanac)
+        assert many.count('<circle') > few.count('<circle')
+
+
+class TestStarOptions:
+    """star_mag_limit/star_label_mag skin options: parsed, clamped, and
+    a bad value must fall back to the default, never blank the page."""
+
+    def test_parsed(self):
+        p = wxskyfield_sky.SkyPage({'star_mag_limit': '5.0', 'star_label_mag': '2.5'})
+        assert p._star_mag_limit == 5.0
+        assert p._star_label_mag == 2.5
+
+    def test_defaults(self):
+        p = wxskyfield_sky.SkyPage()
+        assert p._star_mag_limit == wxskyfield_sky.STAR_MAG_LIMIT
+        assert p._star_label_mag == wxskyfield_sky.STAR_LABEL_MAG
+
+    def test_garbage_falls_back(self):
+        p = wxskyfield_sky.SkyPage({'star_mag_limit': 'bright', 'star_label_mag': None})
+        assert p._star_mag_limit == wxskyfield_sky.STAR_MAG_LIMIT
+        assert p._star_label_mag == wxskyfield_sky.STAR_LABEL_MAG
+
+    def test_clamped(self):
+        p = wxskyfield_sky.SkyPage({'star_mag_limit': '99', 'star_label_mag': '-99'})
+        assert p._star_mag_limit == 6.5
+        assert p._star_label_mag == -2.0
+
+
 class TestFooter:
     """footer_html must be true for what actually computed the page: the
     full Skyfield/DE421/Hipparcos credit only when the registered almanac's

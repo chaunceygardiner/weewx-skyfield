@@ -43,7 +43,8 @@ it is computed for *your* station's location and elevation, taken automatically 
 - a **sky dome** of everything above your horizon right now — the sun, the moon drawn at its
   true phase, the planets, and the bright IAU-named stars sized by magnitude, with hover
   coordinates on every mark (when the sun is up, the stars are shown dimmed, standing where
-  they are behind the daylight);
+  they are behind the daylight); install the full Hipparcos catalog and the dome plots
+  *every* star down to a configurable magnitude limit — a true sky map;
 - today's **rise & set ribbons** for the sun, moon and planets, over civil/nautical/
   astronomical twilight bands, with transit ticks and a "now" line;
 - today's **sun path** — the altitude/azimuth arc hour by hour, the moon's path dashed
@@ -212,6 +213,26 @@ daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally ta
 `label_scale` (default 1.0), which grows every label by that factor with the collision layout
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
 smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
+
+With only the bundled catalog excerpt installed, the dome draws from the 412 named stars.
+Install the full Hipparcos catalog (see
+[Serving every Hipparcos star](#serving-every-hipparcos-star)) and it plots *every* catalog
+star down to the magnitude limit instead — automatically, nothing to configure — so the
+bright-but-unnamed stars (γ Cassiopeiae, the middle of Cassiopeia's W, brightest among them)
+no longer leave holes in the constellations.  Labels stay on named stars; an unnamed star's
+hover tooltip gives its Hipparcos number.  Two report options set the cutoffs (magnitudes run
+backwards: 6.5 is the naked-eye limit, Sirius is −1.4):
+
+```
+[StdReport]
+    [[SkyfieldReport]]
+        star_mag_limit = 2.6     # plot stars at least this bright (default 2.6)
+        star_label_mag = 1.1     # label named stars at least this bright (default 1.1)
+```
+
+The cost stays modest: the whole field is computed in one vectorized Skyfield observe (a few
+milliseconds per render once the catalog scan is cached), and at `star_mag_limit = 5.0` the
+dome draws roughly 800 stars.
 
 #### Rise & set ribbons — `ribbons_svg`
 
@@ -631,6 +652,10 @@ extension.)
    in the report almanac, computed from the bundled Hipparcos catalog excerpt
    (`wxskyfield_stars.dat`).
 
+These are the section's only options — anything else there draws a log warning and is
+ignored.  The Sky page's options (`theme`, `star_mag_limit`, `star_label_mag`, `lang`) are
+*report* options and belong under `[StdReport]` `[[SkyfieldReport]]`.
+
 ## Serving every Hipparcos star
 
 The bundled `wxskyfield_stars.dat` covers the 412 named stars.  To address *any* Hipparcos star
@@ -640,6 +665,10 @@ WeeWX's user directory (e.g., `/home/weewx/bin/user/hip_main.dat`).  When presen
 lookups read it and all 118,218 stars are served.  (The named stars are still loaded from the
 bundled excerpt at startup — its records are identical to the full catalog's, and reading the
 excerpt keeps startup fast.)
+
+The full catalog also upgrades [The Sky page's dome](#the-sky-dome--dome_svg): it plots every
+catalog star down to `star_mag_limit` — a true sky map — instead of drawing from the named
+stars alone.
 
 ## Testing
 

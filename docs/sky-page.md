@@ -22,7 +22,8 @@ it is computed for *your* station's location and elevation, taken automatically 
 - a **sky dome** of everything above your horizon right now — the sun, the moon drawn at its
   true phase, the planets, and the bright IAU-named stars sized by magnitude, with hover
   coordinates on every mark (when the sun is up, the stars are shown dimmed, standing where
-  they are behind the daylight);
+  they are behind the daylight); install the full Hipparcos catalog and the dome plots
+  *every* star down to a configurable magnitude limit — a true sky map;
 - today's **rise & set ribbons** for the sun, moon and planets, over civil/nautical/
   astronomical twilight bands, with transit ticks and a "now" line;
 - today's **sun path** — the altitude/azimuth arc hour by hour, the moon's path dashed
@@ -63,6 +64,25 @@ still with no JavaScript.
 [StdReport]
     [[SkyfieldReport]]
         theme = auto
+```
+
+The `star_mag_limit` and `star_label_mag` options set the dome's magnitude cutoffs
+(magnitudes run backwards: 6.5 is the naked-eye limit, Sirius is −1.4).  Stars at least
+`star_mag_limit` bright are plotted (default 2.6); named stars at least `star_label_mag`
+bright are labeled (default 1.1).  With only the bundled catalog excerpt the dome draws from
+the 412 named stars; install the full Hipparcos catalog (see
+[Serving every Hipparcos star](installation.md#serving-every-hipparcos-star)) and it plots
+*every* catalog star down to the limit — automatically, nothing to configure — with labels
+still on named stars and an unnamed star's hover tooltip giving its Hipparcos number.  The
+whole field is computed in one vectorized Skyfield observe, so even a
+`star_mag_limit = 5.0` sky of several hundred stars costs only a few milliseconds per
+render.
+
+```
+[StdReport]
+    [[SkyfieldReport]]
+        star_mag_limit = 5.0     # plot stars at least this bright (default 2.6)
+        star_label_mag = 1.1     # label named stars at least this bright (default 1.1)
 ```
 
 It is the most computation-hungry page in a typical install (the solar-year chart runs several

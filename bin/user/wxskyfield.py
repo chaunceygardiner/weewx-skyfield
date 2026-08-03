@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.17'
+WXSKYFIELD_VERSION = '1.18'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -85,6 +85,16 @@ class WxSkyfield(StdService):
 
         # Only continue if the plugin is enabled.
         skyfield_config_dict = config_dict.get('Skyfield', {})
+        # [Skyfield] has exactly two options.  Anything else here is a
+        # mistake -- most likely a report option that belongs under
+        # [StdReport] [[SkyfieldReport]] -- and would otherwise be
+        # silently ignored.
+        for key in skyfield_config_dict:
+            if key not in ('enable', 'stars'):
+                hint = (' (a report option: put it under [StdReport] [[SkyfieldReport]])'
+                        if key in ('star_mag_limit', 'star_label_mag', 'theme', 'lang')
+                        else '')
+                log.warning('Ignoring unrecognized [Skyfield] option: %s%s' % (key, hint))
         enable = to_bool(skyfield_config_dict.get('enable', True))
         if enable:
             log.info("WxSkyfield status: enabled...continuing.")
@@ -804,6 +814,8 @@ class Sky():
         self.stars_requested: bool = load_stars
         self.load_stars: bool = load_stars
         self.hip_misses: set = set()
+        # catalog_stars results, keyed by magnitude limit.
+        self._catalog_fields: Dict[float, Optional[Tuple[List[int], Any, List[float]]]] = {}
         if load_stars:
             try:
                 self.stars = Sky.load_named_stars(user_root)
@@ -874,10 +886,6 @@ class Sky():
         if not os.path.exists(path):
             path = '%s/%s' % (user_root, second)
 
-        def parse_float(field: str) -> float:
-            field = field.strip()
-            return float(field) if field else 0.0
-
         by_hip: Dict[int, Tuple[Any, Optional[float]]] = {}
         with open(path) as f:
             for line in f:
@@ -890,33 +898,127 @@ class Sky():
                     continue
                 # A malformed record disables only this star, not the catalog.
                 try:
-                    if fields[8].strip() and fields[9].strip():
-                        ra_degrees = float(fields[8])
-                        dec_degrees = float(fields[9])
-                    else:
-                        # A few Hipparcos entries (e.g., HIP 55203, Alula
-                        # Australis, a close binary) have no astrometric
-                        # solution; fall back to the identification columns
-                        # (right ascension h m s, declination sign-d m s).
-                        h, m, s = fields[3].split()
-                        ra_degrees = (int(h) + int(m) / 60.0 + float(s) / 3600.0) * 15.0
-                        d, dm, ds = fields[4].split()
-                        sign = -1.0 if d.startswith('-') else 1.0
-                        dec_degrees = sign * (abs(int(d)) + int(dm) / 60.0 + float(ds) / 3600.0)
-                    star = skyfield.api.Star(
-                        ra_hours=ra_degrees / 15.0,
-                        dec_degrees=dec_degrees,
-                        ra_mas_per_year=parse_float(fields[12]),
-                        dec_mas_per_year=parse_float(fields[13]),
-                        parallax_mas=parse_float(fields[11]),
-                        epoch=HIPPARCOS_EPOCH_JD)
-                    magnitude = float(fields[5]) if fields[5].strip() else None
+                    ra_hours, dec_degrees, pm_ra, pm_dec, plx, magnitude = \
+                        Sky._star_astrometry(fields)
                 except (ValueError, IndexError):
                     continue
+                star = skyfield.api.Star(
+                    ra_hours=ra_hours,
+                    dec_degrees=dec_degrees,
+                    ra_mas_per_year=pm_ra,
+                    dec_mas_per_year=pm_dec,
+                    parallax_mas=plx,
+                    epoch=HIPPARCOS_EPOCH_JD)
                 by_hip[hip] = (star, magnitude)
                 if len(by_hip) == len(wanted_hips):
                     break
         return by_hip
+
+    @staticmethod
+    def _star_astrometry(fields: List[str]) -> Tuple[float, float, float, float, float, Optional[float]]:
+        """(ra_hours, dec_degrees, ra_mas_per_year, dec_mas_per_year,
+        parallax_mas, magnitude) from one hip_main.dat record, already
+        split on '|'.  Raises ValueError or IndexError on a malformed
+        record; the caller decides how much that disables."""
+        def parse_float(field: str) -> float:
+            field = field.strip()
+            return float(field) if field else 0.0
+
+        if fields[8].strip() and fields[9].strip():
+            ra_degrees = float(fields[8])
+            dec_degrees = float(fields[9])
+        else:
+            # A few Hipparcos entries (e.g., HIP 55203, Alula
+            # Australis, a close binary) have no astrometric
+            # solution; fall back to the identification columns
+            # (right ascension h m s, declination sign-d m s).
+            h, m, s = fields[3].split()
+            ra_degrees = (int(h) + int(m) / 60.0 + float(s) / 3600.0) * 15.0
+            d, dm, ds = fields[4].split()
+            sign = -1.0 if d.startswith('-') else 1.0
+            dec_degrees = sign * (abs(int(d)) + int(dm) / 60.0 + float(ds) / 3600.0)
+        magnitude = float(fields[5]) if fields[5].strip() else None
+        return (ra_degrees / 15.0, dec_degrees, parse_float(fields[12]),
+                parse_float(fields[13]), parse_float(fields[11]), magnitude)
+
+    def catalog_stars(self, mag_limit: float) -> Optional[Tuple[List[int], Any, List[float]]]:
+        """Every star in a full, user-installed hip_main.dat that is at
+        least mag_limit bright: (hip numbers, ONE Star carrying all their
+        coordinates as arrays, magnitudes) -- or None when only the
+        bundled named-star excerpt is installed, or stars are disabled,
+        or the catalog cannot be read.  The Sky page's dome uses this to
+        plot the whole visible sky; the single array-valued Star makes
+        the per-render cost one vectorized observe instead of thousands
+        of scalar ones.  The scan reads all 118,218 records, so results
+        are cached for the life of the engine; an extension install
+        replacing the file under a running weewxd is served from this
+        cache, by design.  A missing file is NOT cached: the user may
+        drop a catalog in later."""
+        if not self.load_stars:
+            return None
+        key = round(mag_limit, 3)
+        if key in self._catalog_fields:
+            return self._catalog_fields[key]
+        path = '%s/hip_main.dat' % self.user_root
+        if not os.path.exists(path):
+            return None
+        hips: List[int] = []
+        mags: List[float] = []
+        ra_h: List[float] = []
+        dec_d: List[float] = []
+        pm_ra: List[float] = []
+        pm_dec: List[float] = []
+        plx: List[float] = []
+        try:
+            with open(path) as f:
+                for line in f:
+                    fields = line.split('|')
+                    # Test magnitude before the full astrometric parse:
+                    # nearly every record fails this test.
+                    try:
+                        hip = int(fields[1])
+                        mag = float(fields[5]) if fields[5].strip() else None
+                    except (ValueError, IndexError):
+                        continue
+                    if mag is None or mag > mag_limit:
+                        continue
+                    # A malformed record disables only this star.
+                    try:
+                        r, d, pr, pd, px, _ = Sky._star_astrometry(fields)
+                    except (ValueError, IndexError):
+                        continue
+                    hips.append(hip)
+                    mags.append(mag)
+                    ra_h.append(r)
+                    dec_d.append(d)
+                    pm_ra.append(pr)
+                    pm_dec.append(pd)
+                    plx.append(px)
+        except Exception as e:
+            # An unreadable catalog (permission-denied, or not text at all:
+            # a corrupt or still-compressed hip_main.dat raises
+            # UnicodeDecodeError) must degrade to the named-star dome,
+            # never into report generation.  Cached: retrying every report
+            # cycle would log the same error forever.
+            log.error('catalog_stars: could not read the star catalog: %s' % e)
+            self._catalog_fields[key] = None
+            return None
+        field: Optional[Tuple[List[int], Any, List[float]]]
+        if hips:
+            star = skyfield.api.Star(
+                ra_hours=numpy.array(ra_h),
+                dec_degrees=numpy.array(dec_d),
+                ra_mas_per_year=numpy.array(pm_ra),
+                dec_mas_per_year=numpy.array(pm_dec),
+                parallax_mas=numpy.array(plx),
+                epoch=HIPPARCOS_EPOCH_JD)
+            field = (hips, star, mags)
+            log.info('Loaded %d stars to magnitude %.2f from the full Hipparcos catalog.'
+                     % (len(hips), mag_limit))
+        else:
+            field = ([], None, [])
+        self._catalog_fields[key] = field
+        return field
 
     @staticmethod
     def get_weewx_config_info(config_dict: Dict[str, Any]) -> str:
@@ -1214,6 +1316,30 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
 
     def skyfield_time(self, time_ts: float) -> skyfield.timelib.Time:
         return self.ts.from_datetime(datetime.fromtimestamp(time_ts, timezone.utc))
+
+    def star_field(self, almanac_obj, mag_limit: float) -> Optional[List[Tuple[int, float, float, float]]]:
+        """Every star of a full, user-installed hip_main.dat that is at
+        least mag_limit bright and above the horizon, as (hip, azimuth
+        degrees, altitude degrees, magnitude) tuples -- or None when only
+        the bundled named-star excerpt is installed (the Sky page's dome
+        then falls back to the named stars).  Alt/az are computed exactly
+        as the binder's .alt/.az -- apparent, refracted with the almanac's
+        temperature and pressure -- in one vectorized observe covering the
+        whole field."""
+        field = self.sky.catalog_stars(mag_limit)
+        if field is None:
+            return None
+        hips, star, mags = field
+        if not hips:
+            return []
+        _, observer = self.location(almanac_obj)
+        t = self.skyfield_time(almanac_obj.time_ts)
+        alt, az, _ = observer.at(t).observe(star).apparent().altaz(
+            temperature_C=almanac_obj.temperature,
+            pressure_mbar=almanac_obj.pressure)
+        alt_d, az_d = alt.degrees, az.degrees
+        return [(hips[i], az_d[i], alt_d[i], mags[i])
+                for i in range(len(hips)) if alt_d[i] > 0.0]
 
     def time_value(self, almanac_obj, time_ts: Optional[float], context: str) -> ValueHelper:
         return ValueHelper(ValueTuple(time_ts, 'unix_epoch', 'group_time'),
