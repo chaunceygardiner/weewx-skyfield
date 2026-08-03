@@ -59,6 +59,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
         'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
         'dome_rim': '#D3A94C',
+        'conline': '#6C82C4',
         'orrery_sun': '#FFD75E',
         'earth_fill': '#4FA3E3', 'earth_stroke': '#E9E4D4',
     },
@@ -75,6 +76,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
         'dome_stops': (('0%', '#ffffff'), ('100%', '#efece2')),
         'dome_rim': '#8a94a6',
+        'conline': '#93A5C4',
         'orrery_sun': '#FACC15',
         'earth_fill': '#2E7DBE', 'earth_stroke': '#1B5C8F',
     },
@@ -91,6 +93,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
         'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
         'dome_rim': '#D3A94C',
+        'conline': '#5F7BB8',
         'orrery_sun': '#D3A94C',
         'earth_fill': '#E9E4D4', 'earth_stroke': '#D3A94C',
     },
@@ -107,6 +110,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
         'dome_stops': (('0%', '#ffffff'), ('100%', '#efece2')),
         'dome_rim': '#8a94a6',
+        'conline': '#93A5C4',
         'orrery_sun': '#B8860B',
         'earth_fill': '#2e6e8e', 'earth_stroke': '#ffffff',
     },
@@ -158,6 +162,11 @@ SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
 
 STAR_MAG_LIMIT = 2.6          # dome shows stars at least this bright (default)
 STAR_LABEL_MAG = 1.1          # ... and labels these (default)
+# The dome keeps constellation line vertices down to this altitude: a
+# just-set star still anchors its segment (the dome's clipPath trims it at
+# the rim), while the polar projection's blowup toward the antipode stays
+# far away from the chart.
+CON_ALT_FLOOR = -15.0
 
 REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
 
@@ -268,6 +277,12 @@ class SkyPage:
         # star_label_mag, overridable per report).
         self._star_mag_limit: float = _opt_float(sd, 'star_mag_limit', STAR_MAG_LIMIT)
         self._star_label_mag: float = _opt_float(sd, 'star_label_mag', STAR_LABEL_MAG)
+        # The dome's constellation figures (skin.conf constellation_lines,
+        # overridable per report).  Only an explicit "off" value turns them
+        # off: a malformed value must never change the page's look.
+        self._constellation_lines: bool = (
+            str(sd.get('constellation_lines', True)).strip().lower()
+            not in ('false', 'no', '0', 'off'))
         self._texts: Dict[str, Any] = sd.get('Texts', {}) or {}
         hemis = (sd.get('Labels', {}) or {}).get('hemispheres', ())
         if isinstance(hemis, str):
@@ -431,6 +446,75 @@ class SkyPage:
         out.sort(key=lambda s: -s['mag'])
         return out
 
+    def _constellation_layer(self, alm, cx: float, cy: float, R: float
+                             ) -> Tuple[List[str], List[Tuple[float, float, str]]]:
+        """The dome's constellation figures: the line segments as SVG
+        polyline fragments (projected but unclipped -- the caller wraps
+        them in the dome's clipPath, which trims a setting figure at the
+        rim), and a (x, y, name) label for each constellation at least
+        half risen, anchored at the centroid of its visible stars.  A
+        vertex missing from the field drops only the segments touching
+        it; a segment is drawn when both endpoints are at least
+        CON_ALT_FLOOR high and at least one is above the horizon --
+        both-below chords would otherwise cut across the dome even
+        though the segment is below the horizon its whole length."""
+        amt, sky = _find_almanac_type(), _find_sky()
+        if amt is None or sky is None:
+            return [], []
+        polylines = sky.constellation_lines()
+        field = amt.constellation_field(alm) if polylines else None
+        if not polylines or not field:
+            return [], []
+        segs: List[str] = []
+        vis: Dict[str, Dict[int, Tuple[float, float]]] = {}
+        tot: Dict[str, set] = {}
+        for abbr, hips in polylines:
+            tot.setdefault(abbr, set()).update(hips)
+            pts: List[Optional[Tuple[float, float, float]]] = []
+            for hip in hips:
+                azalt = field.get(hip)
+                if azalt is None or azalt[1] < CON_ALT_FLOOR:
+                    pts.append(None)
+                    continue
+                x, y = self._dome_xy(cx, cy, R, azalt[0], azalt[1])
+                pts.append((x, y, azalt[1]))
+                if azalt[1] > 0.0:
+                    vis.setdefault(abbr, {})[hip] = (x, y)
+            run: List[Tuple[float, float, float]] = []
+            for i in range(len(pts) - 1):
+                a, b = pts[i], pts[i + 1]
+                if a is not None and b is not None and max(a[2], b[2]) > 0.0:
+                    if not run:
+                        run.append(a)
+                    run.append(b)
+                elif run:
+                    segs.append(self._con_polyline(run))
+                    run = []
+            if run:
+                segs.append(self._con_polyline(run))
+        labels: List[Tuple[float, float, str]] = []
+        texts = getattr(alm, 'texts', None)
+        con_names = texts.get('Constellations') if isinstance(texts, dict) else None
+        if not isinstance(con_names, dict):
+            con_names = {}
+        latin = _wxskyfield().CONSTELLATION_NAMES
+        for abbr, seen in vis.items():
+            # Label constellations substantially risen: rising and setting
+            # figures keep their lines, but a name centered on a sliver of
+            # a figure would crowd the rim.
+            if len(seen) < 2 or 2 * len(seen) < len(tot[abbr]):
+                continue
+            name = str(con_names.get(abbr, latin.get(abbr, abbr)))
+            xs = [xy[0] for xy in seen.values()]
+            ys = [xy[1] for xy in seen.values()]
+            labels.append((sum(xs) / len(xs), sum(ys) / len(ys), name))
+        return segs, labels
+
+    @staticmethod
+    def _con_polyline(run: List[Tuple[float, float, float]]) -> str:
+        return ('<polyline points="%s"/>'
+                % ' '.join('%.1f,%.1f' % (pt[0], pt[1]) for pt in run))
+
     # ── template conveniences ─────────────────────────────────────────────────
     @_panel_guard(fallback=False)
     def sun_is_up(self, alm) -> bool:
@@ -476,7 +560,11 @@ class SkyPage:
         problem or an unregistered almanac (the page then renders off the
         built-in almanac's fall-through) is named instead, with a pointer at
         the weewxd log -- the footer doubles as a diagnostic.  The ESA
-        acknowledgment is required exactly when Hipparcos data is shown.
+        acknowledgment is required exactly when Hipparcos data is shown,
+        and the Stellarium credit (its skyculture data draws the dome's
+        constellation figures, CC BY-SA 4.0) exactly when the figures are:
+        the option on and the lines file loaded -- a failed load draws
+        nothing and credits nothing.
         The extension's name becomes a link to the project page: it is a
         proper noun every translation keeps verbatim, so the substitution
         is done after translation (a translation that dropped it would
@@ -493,6 +581,8 @@ class SkyPage:
             if sky.stars:
                 parts += [self._t('IAU-CSN star names'),
                           self._t('Hipparcos star data Credit: ESA')]
+                if self._constellation_lines and sky.constellation_lines():
+                    parts.append(self._t('Constellation figures: Stellarium'))
             elif sky.stars_requested:
                 parts.append(self._t('star catalog unavailable — see the weewxd log'))
             else:
@@ -607,9 +697,10 @@ class SkyPage:
         star_op = 0.55 if sun['alt'] > 0 else 0.95
         p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="%s">'
              % (S, self._t('Sky dome chart'))]
-        p.append('<defs><radialGradient id="skyg">%s</radialGradient></defs>'
-                 % ''.join('<stop offset="%s" stop-color="%s"/>' % s
-                           for s in pal['dome_stops']))
+        p.append('<defs><radialGradient id="skyg">%s</radialGradient>'
+                 '<clipPath id="domec"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
+                 % (''.join('<stop offset="%s" stop-color="%s"/>' % s
+                            for s in pal['dome_stops']), cx, cy, R))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#skyg)"/>' % (cx, cy, R))
         for alt in (30, 60):
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
@@ -633,6 +724,14 @@ class SkyPage:
         p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
                  'style="font-size:%.1fpx">60&#176;</text>'
                  % (int(cx + 8 + R * 2 / 3), cy - 6, grid_px))
+        con_labels: List[Tuple[float, float, str]] = []
+        if self._constellation_lines:
+            segs, con_labels = self._constellation_layer(alm, cx, cy, R)
+            if segs:
+                p.append('<g clip-path="url(#domec)" fill="none" stroke="%s" '
+                         'stroke-width="1" stroke-linecap="round" opacity="%.2f">%s</g>'
+                         % (pal['conline'], 0.40 if sun['alt'] > 0 else 0.55,
+                            ''.join(segs)))
         # Labels are placed after every mark is drawn: body labels first (each
         # nudged vertically until it clears the ones already placed), then
         # star labels, which are simply dropped on a collision -- their dots
@@ -725,6 +824,22 @@ class SkyPage:
             _try_label(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True)
         for x, y, name in star_labels:
             _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + 0.05)
+        # Constellation names go last: background context that yields to
+        # every body and star label (a collision simply drops the name --
+        # its figure still shows).
+        con_px = 10.0 * label_scale
+        for x, y, name in con_labels:
+            # Wider glyph estimate than the star labels': .conlab renders
+            # uppercase with letter-spacing.
+            est_w = 0.85 * con_px * len(name)
+            box = (x - est_w / 2, y - con_px, x + est_w / 2, y + 3)
+            if any(box[0] < o[2] and box[2] > o[0] and
+                   box[1] < o[3] and box[3] > o[1] for o in placed):
+                continue
+            placed.append(box)
+            deferred.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="conlab" '
+                            'style="font-size:%.1fpx" opacity="%.2f">%s</text>'
+                            % (x, y, con_px, star_op, _esc(name)))
         p.extend(deferred)
         p.append('</svg>')
         return ''.join(p)

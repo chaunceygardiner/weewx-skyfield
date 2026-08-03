@@ -81,7 +81,10 @@ Install the full Hipparcos catalog (see
 [Serving every Hipparcos star](installation.md#serving-every-hipparcos-star)) and it plots
 *every* catalog star down to the magnitude limit instead — automatically, nothing to
 configure.  Labels stay on named stars; an unnamed star's hover tooltip gives its Hipparcos
-number.  The `star_mag_limit` and `star_label_mag` options set the cutoffs — see
+number.  The dome also draws the 88 constellations' stick figures, each substantially-risen
+figure labeled with the constellation's (translated) name, setting figures clipped at the
+horizon rim.  The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
+`constellation_lines = false` turns the figures off — see
 [Configuring the page](sky-page.md#configuring-the-page); when embedding the panels in your
 own skin, set them in that skin's report section the same way.
 

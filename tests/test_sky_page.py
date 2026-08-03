@@ -327,6 +327,67 @@ class TestCatalogDome:
         assert many.count('<circle') > few.count('<circle')
 
 
+class TestConstellationDome:
+    """The dome's constellation figures (1.19): clipped stick figures
+    under the stars, a centroid label on each substantially-risen
+    constellation, and the constellation_lines option."""
+
+    def test_lines_and_labels_render(self, almanac, page):
+        svg = page.dome_svg(almanac)
+        assert_balanced(svg)
+        assert svg.count('<polyline') > 50
+        # The figures clip at the horizon rim, planetarium-style.
+        assert 'clip-path="url(#domec)"' in svg
+        assert '<clipPath id="domec">' in svg
+        # Ursa Minor is circumpolar at the test latitude: always up,
+        # always labeled (its centroid sits in the dome's quiet middle).
+        assert '>Ursa Minor</text>' in svg
+        assert 'class="conlab"' in svg
+
+    def test_off_restores_plain_dome(self, almanac):
+        svg = wxskyfield_sky.SkyPage(
+            {'constellation_lines': 'false'}).dome_svg(almanac)
+        assert_balanced(svg)
+        assert '<polyline' not in svg
+        assert 'conlab' not in svg
+        assert 'starlab' in svg              # the stars are untouched
+
+    def test_option_parsing(self):
+        assert wxskyfield_sky.SkyPage()._constellation_lines
+        assert not wxskyfield_sky.SkyPage(
+            {'constellation_lines': 'false'})._constellation_lines
+        assert not wxskyfield_sky.SkyPage(
+            {'constellation_lines': 'Off'})._constellation_lines
+        # A malformed value must never change the page's look: still on.
+        assert wxskyfield_sky.SkyPage(
+            {'constellation_lines': 'maybe'})._constellation_lines
+
+    def test_labels_translate(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter(),
+                texts={'Constellations': {'UMi': 'Kleiner Bär'}})
+            svg = wxskyfield_sky.SkyPage().dome_svg(alm)
+        # UMi reads its [Almanac] [[Constellations]] translation; an
+        # untranslated constellation keeps its Latin name.
+        assert '>Kleiner Bär</text>' in svg
+        assert '>Ursa Major</text>' in svg
+
+    def test_without_stars_no_lines(self, page):
+        starless = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                                  load_stars=False)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(starless)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = page.dome_svg(alm)
+        assert_balanced(svg)
+        assert '<polyline' not in svg
+
+
 class TestStarOptions:
     """star_mag_limit/star_label_mag skin options: parsed, clamped, and
     a bad value must fall back to the default, never blank the page."""
@@ -365,7 +426,31 @@ class TestFooter:
         assert 'Skyfield and the JPL DE421 ephemeris' in html
         assert 'IAU-CSN star names' in html
         assert 'Hipparcos star data Credit: ESA' in html
+        assert 'Constellation figures: Stellarium' in html
         assert 'Regenerated every report cycle' in html
+
+    def test_no_stellarium_credit_when_lines_off(self, almanac):
+        """constellation_lines = false draws no figures, so the footer
+        must not credit Stellarium; everything else is unchanged."""
+        html = wxskyfield_sky.SkyPage({'constellation_lines': 'false'}).footer_html()
+        assert 'Hipparcos star data Credit: ESA' in html
+        assert 'Stellarium' not in html
+
+    def test_no_stellarium_credit_when_lines_file_missing(self, page, tmp_path):
+        """A live star catalog but an unreadable wxskyfield_lines.dat: no
+        figures are drawn, so no Stellarium credit -- but the star credits
+        stay (the catalog is fine)."""
+        for name in ('wxskyfield_de421.bsp', 'wxskyfield_stars.dat'):
+            os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', name),
+                       os.path.join(str(tmp_path), name))
+        lineless = wxskyfield.Sky(str(tmp_path), load_stars=True)
+        assert lineless.is_valid() and lineless.stars
+        assert lineless.constellation_lines() is None
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(lineless)
+            html = page.footer_html()
+        assert 'Hipparcos star data Credit: ESA' in html
+        assert 'Stellarium' not in html
 
     def test_stars_disabled(self, page):
         starless = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
@@ -376,6 +461,7 @@ class TestFooter:
             html = page.footer_html()
         assert 'star catalog disabled' in html
         assert 'Hipparcos' not in html
+        assert 'Stellarium' not in html          # no catalog, no figures
         assert 'weewxd log' not in html          # disabled is not a failure
 
     def test_star_catalog_failure(self, page, tmp_path):

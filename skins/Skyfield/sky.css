@@ -80,6 +80,9 @@ svg text{fill:var(--ink)}
 .moonlab{font-size:10px; fill:#C9D0DA}
 :root.theme-light .moonlab{fill:#767E8A}
 .starlab{font-size:10px; fill:var(--muted); font-family:Georgia, serif; font-style:italic}
+.conlab{font-size:10px; fill:#7C8FC9; font-family:Georgia, serif; font-style:italic;
+        letter-spacing:.14em; text-transform:uppercase}
+:root.theme-light .conlab{fill:#8A96AC}
 .bodylab{font-size:11px; fill:var(--ink); font-family:Georgia, serif}
 .rowlab{font-size:13px; fill:var(--ink); font-family:Georgia, serif;
         font-variant-caps:small-caps; letter-spacing:.06em}

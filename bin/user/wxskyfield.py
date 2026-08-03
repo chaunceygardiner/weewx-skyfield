@@ -53,7 +53,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.18'
+WXSKYFIELD_VERSION = '1.19'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -92,7 +92,8 @@ class WxSkyfield(StdService):
         for key in skyfield_config_dict:
             if key not in ('enable', 'stars'):
                 hint = (' (a report option: put it under [StdReport] [[SkyfieldReport]])'
-                        if key in ('star_mag_limit', 'star_label_mag', 'theme', 'lang')
+                        if key in ('star_mag_limit', 'star_label_mag',
+                                   'constellation_lines', 'theme', 'lang')
                         else '')
                 log.warning('Ignoring unrecognized [Skyfield] option: %s%s' % (key, hint))
         enable = to_bool(skyfield_config_dict.get('enable', True))
@@ -553,6 +554,12 @@ NAMED_STARS: Dict[str, int] = {
 # lines are unmodified hip_main.dat records, so a full hip_main.dat works in
 # its place.
 STAR_FILE = 'wxskyfield_stars.dat'
+# The constellation line figures drawn by the Sky page's dome: per line one
+# polyline -- the IAU constellation abbreviation, then the Hipparcos numbers
+# of its vertices in draw order.  Distilled from the Stellarium project's
+# "modern" sky culture (CC BY-SA 4.0); the excerpt above carries a record
+# for every vertex.
+LINES_FILE = 'wxskyfield_lines.dat'
 # The Hipparcos catalog's positions are for epoch J1991.25.  This is that
 # epoch as a TT Julian date, matching skyfield.data.hipparcos.load_dataframe.
 HIPPARCOS_EPOCH_JD = 1721045.0 + 1991.25 * 365.25
@@ -816,6 +823,11 @@ class Sky():
         self.hip_misses: set = set()
         # catalog_stars results, keyed by magnitude limit.
         self._catalog_fields: Dict[float, Optional[Tuple[List[int], Any, List[float]]]] = {}
+        # The constellation line figures and the single array-valued Star
+        # carrying every line vertex, loaded lazily by the Sky page's dome
+        # (None: not yet tried; False: tried and failed, don't retry).
+        self._constellation_lines: Any = None
+        self._constellation_stars: Any = None
         if load_stars:
             try:
                 self.stars = Sky.load_named_stars(user_root)
@@ -1019,6 +1031,73 @@ class Sky():
             field = ([], None, [])
         self._catalog_fields[key] = field
         return field
+
+    def constellation_lines(self) -> Optional[List[Tuple[str, List[int]]]]:
+        """The constellation line figures of wxskyfield_lines.dat, one
+        (IAU abbreviation, vertex Hipparcos numbers) tuple per polyline
+        -- or None when stars are disabled or the file cannot be read.
+        The Sky page's dome draws these; loaded once, on first use."""
+        if not self.load_stars or self._constellation_lines is False:
+            return None
+        if self._constellation_lines is not None:
+            return self._constellation_lines
+        lines: List[Tuple[str, List[int]]] = []
+        try:
+            with open('%s/%s' % (self.user_root, LINES_FILE)) as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 3 or parts[0].startswith('#'):
+                        continue
+                    try:
+                        hips = [int(p) for p in parts[1:]]
+                    except ValueError:
+                        # A malformed polyline disables only itself.
+                        continue
+                    lines.append((parts[0], hips))
+        except Exception as e:
+            log.error('constellation_lines: could not read %s: %s' % (LINES_FILE, e))
+            self._constellation_lines = False
+            return None
+        self._constellation_lines = lines
+        return lines
+
+    def constellation_stars(self) -> Optional[Tuple[List[int], Any]]:
+        """Every distinct constellation line vertex as (its Hipparcos
+        numbers, ONE Star carrying all their coordinates as arrays) --
+        or None when the lines or the star catalog are unavailable.  The
+        bundled excerpt carries a record for every vertex, so it is read
+        even when a full hip_main.dat is installed (the same reasoning
+        as load_named_stars); a vertex missing from the catalog drops
+        only the segments that touch it.  Cached for the life of the
+        engine."""
+        if self._constellation_stars is False:
+            return None
+        if self._constellation_stars is not None:
+            return self._constellation_stars
+        polylines = self.constellation_lines()
+        if polylines is None:
+            return None
+        wanted = {hip for _abbr, hips in polylines for hip in hips}
+        try:
+            by_hip = Sky.load_stars_by_hip(self.user_root, wanted,
+                                           prefer_full_catalog=False)
+        except Exception as e:
+            log.error('constellation_stars: could not read the star catalog: %s' % e)
+            self._constellation_stars = False
+            return None
+        if not by_hip:
+            self._constellation_stars = False
+            return None
+        hips = sorted(by_hip)
+        star = skyfield.api.Star(
+            ra_hours=numpy.array([by_hip[h][0].ra.hours for h in hips]),
+            dec_degrees=numpy.array([by_hip[h][0].dec.degrees for h in hips]),
+            ra_mas_per_year=numpy.array([by_hip[h][0].ra_mas_per_year for h in hips]),
+            dec_mas_per_year=numpy.array([by_hip[h][0].dec_mas_per_year for h in hips]),
+            parallax_mas=numpy.array([by_hip[h][0].parallax_mas for h in hips]),
+            epoch=HIPPARCOS_EPOCH_JD)
+        self._constellation_stars = (hips, star)
+        return self._constellation_stars
 
     @staticmethod
     def get_weewx_config_info(config_dict: Dict[str, Any]) -> str:
@@ -1340,6 +1419,26 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         alt_d, az_d = alt.degrees, az.degrees
         return [(hips[i], az_d[i], alt_d[i], mags[i])
                 for i in range(len(hips)) if alt_d[i] > 0.0]
+
+    def constellation_field(self, almanac_obj) -> Optional[Dict[int, Tuple[float, float]]]:
+        """Apparent (azimuth, altitude) degrees for every constellation
+        line vertex, keyed by Hipparcos number -- below-horizon vertices
+        included, which the dome needs to clip a setting figure at the
+        rim instead of amputating it at its last risen star.  Computed
+        exactly as the binder's .az/.alt (refracted with the almanac's
+        temperature and pressure) in one vectorized observe; None when
+        the line data or the star catalog is unavailable."""
+        field = self.sky.constellation_stars()
+        if field is None:
+            return None
+        hips, star = field
+        _, observer = self.location(almanac_obj)
+        t = self.skyfield_time(almanac_obj.time_ts)
+        alt, az, _ = observer.at(t).observe(star).apparent().altaz(
+            temperature_C=almanac_obj.temperature,
+            pressure_mbar=almanac_obj.pressure)
+        alt_d, az_d = alt.degrees, az.degrees
+        return {hips[i]: (az_d[i], alt_d[i]) for i in range(len(hips))}
 
     def time_value(self, almanac_obj, time_ts: Optional[float], context: str) -> ValueHelper:
         return ValueHelper(ValueTuple(time_ts, 'unix_epoch', 'group_time'),

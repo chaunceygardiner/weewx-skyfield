@@ -234,6 +234,26 @@ The cost stays modest: the whole field is computed in one vectorized Skyfield ob
 milliseconds per render once the catalog scan is cached), and at `star_mag_limit = 5.0` the
 dome draws roughly 800 stars.
 
+The dome also draws the **constellation figures**: the 88 IAU constellations' stick figures,
+each substantially-risen figure labeled with the constellation's name at the centroid of its
+visible stars (the names yield to star and body labels when space is tight).  A setting
+figure is clipped at the horizon rim, planetarium-style, instead of losing limbs star by
+star.  The names translate with the rest of the page, through the same
+`[Almanac] [[Constellations]]` table the `.constellation` tag reads — the German page prints
+FUHRMANN under Auriga.  The figures work with the bundled catalog alone (a full `hip_main.dat`
+adds nothing to them), are on by default, and one report option turns them off:
+
+```
+[StdReport]
+    [[SkyfieldReport]]
+        constellation_lines = false     # the stick figures and their names (default true)
+```
+
+The line figures ship as `wxskyfield_lines.dat`, distilled from the
+[Stellarium](https://stellarium.org) project's "modern" sky culture (`skycultures/modern`,
+data licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); credit: the
+Stellarium contributors).
+
 #### Rise & set ribbons — `ribbons_svg`
 
 ```
@@ -653,12 +673,14 @@ extension.)
    (`wxskyfield_stars.dat`).
 
 These are the section's only options — anything else there draws a log warning and is
-ignored.  The Sky page's options (`theme`, `star_mag_limit`, `star_label_mag`, `lang`) are
-*report* options and belong under `[StdReport]` `[[SkyfieldReport]]`.
+ignored.  The Sky page's options (`theme`, `star_mag_limit`, `star_label_mag`,
+`constellation_lines`, `lang`) are *report* options and belong under `[StdReport]`
+`[[SkyfieldReport]]`.
 
 ## Serving every Hipparcos star
 
-The bundled `wxskyfield_stars.dat` covers the 412 named stars.  To address *any* Hipparcos star
+The bundled `wxskyfield_stars.dat` covers the 412 named stars (and, since 1.19, the
+constellation figures' vertices).  To address *any* Hipparcos star
 by catalog number (`$almanac.hip_57939.rise`), download the full Hipparcos catalog `hip_main.dat`
 (from [CDS VizieR I/239](https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239)) and place it in
 WeeWX's user directory (e.g., `/home/weewx/bin/user/hip_main.dat`).  When present, `hip_<number>`

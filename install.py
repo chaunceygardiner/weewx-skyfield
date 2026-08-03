@@ -40,7 +40,7 @@ def loader():
 class WxSkyfieldInstaller(ExtensionInstaller):
     def __init__(self):
         super(WxSkyfieldInstaller, self).__init__(
-            version = "1.18",
+            version = "1.19",
             name = 'wxskyfield',
             description = "Replaces WeeWX's built-in almanac with a Skyfield based almanac for report generation.",
             author = "John A Kline",
@@ -64,6 +64,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                     'bin/user/wxskyfield.py',
                     'bin/user/wxskyfield_sky.py',
                     'bin/user/wxskyfield_stars.dat',
+                    'bin/user/wxskyfield_lines.dat',
                     'bin/user/wxskyfield_de421.bsp',
                     ]),
                 ('skins/Skyfield', [

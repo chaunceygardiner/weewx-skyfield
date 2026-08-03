@@ -20,10 +20,12 @@ it is computed for *your* station's location and elevation, taken automatically 
 `weewx.conf`:
 
 - a **sky dome** of everything above your horizon right now — the sun, the moon drawn at its
-  true phase, the planets, and the bright IAU-named stars sized by magnitude, with hover
+  true phase, the planets, the bright IAU-named stars sized by magnitude with hover
   coordinates on every mark (when the sun is up, the stars are shown dimmed, standing where
-  they are behind the daylight); install the full Hipparcos catalog and the dome plots
-  *every* star down to a configurable magnitude limit — a true sky map;
+  they are behind the daylight), and the 88 constellations' stick figures, each
+  substantially-risen figure carrying the constellation's name; install the full Hipparcos
+  catalog and the dome plots *every* star down to a configurable magnitude limit — a true
+  sky map;
 - today's **rise & set ribbons** for the sun, moon and planets, over civil/nautical/
   astronomical twilight bands, with transit ticks and a "now" line;
 - today's **sun path** — the altitude/azimuth arc hour by hour, the moon's path dashed
@@ -84,6 +86,15 @@ render.
         star_mag_limit = 5.0     # plot stars at least this bright (default 2.6)
         star_label_mag = 1.1     # label named stars at least this bright (default 1.1)
 ```
+
+The `constellation_lines` option (default `true`) draws the 88 IAU constellations' stick
+figures under the stars, each substantially-risen figure labeled with the constellation's
+name at the centroid of its visible stars — translated through the same
+`[Almanac] [[Constellations]]` table the `.constellation` tag reads.  A setting figure is
+clipped at the horizon rim, planetarium-style.  The figures work with the bundled catalog
+alone (they are distilled from the [Stellarium](https://stellarium.org) project's "modern"
+sky culture, data licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/));
+set `constellation_lines = false` for the plain dome.
 
 It is the most computation-hungry page in a typical install (the solar-year chart runs several
 hundred rise/set searches, the analemma evaluates the almanac 53 times).  The

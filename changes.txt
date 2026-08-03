@@ -1,6 +1,30 @@
 weewx-skyfield change history
 -----------------------------
 
+1.19 2026/08/03
+---------------
+- The Sky page's dome draws the constellations: the 88 IAU
+  constellations' stick figures, distilled from the Stellarium
+  project's "modern" sky culture (data CC BY-SA 4.0), each
+  substantially-risen figure labeled with the constellation's name --
+  translated through [Almanac] [[Constellations]], the same table the
+  .constellation tag reads, so the German page says ORION under Orion
+  and FUHRMANN under Auriga.  A setting figure is clipped at the
+  horizon rim, planetarium-style, instead of losing limbs star by
+  star.  On by default; constellation_lines = false in the
+  [[SkyfieldReport]] section of weewx.conf restores the plain dome.
+  Suggested by Jacques Terrettaz.
+- The bundled Hipparcos excerpt wxskyfield_stars.dat grows from 412 to
+  877 records to carry every constellation line vertex, records
+  byte-for-byte from the full catalog as always; the line figures ship
+  as the new bin/user/wxskyfield_lines.dat.  No full hip_main.dat is
+  needed for the figures (and one adds nothing to them).
+- The Sky page's footer credits Stellarium ("Constellation figures:
+  Stellarium", translated like the rest of the footer) exactly when
+  the figures are drawn -- alongside the ESA credit, and gone when
+  constellation_lines is off, matching the footer's rule of naming
+  only what actually computed the page.
+
 1.18 2026/08/03
 ---------------
 - The Sky page's dome becomes a full sky map when the full Hipparcos

@@ -1217,6 +1217,71 @@ class TestCatalogStarField:
         assert s.catalog_stars(2.6) is None
 
 
+class TestConstellationLines:
+    """The constellation line data and its vectorized vertex field:
+    wxskyfield_lines.dat covers all 88 IAU constellations, the bundled
+    excerpt carries a record for every line vertex, and
+    constellation_field's positions must agree with the binder's scalar
+    path (it feeds the Sky page's dome)."""
+
+    @staticmethod
+    def almanac_type():
+        return [a for a in weewx.almanac.almanacs
+                if isinstance(a, wxskyfield.SkyfieldAlmanacType)][0]
+
+    def test_data_covers_every_constellation(self, sky):
+        lines = sky.constellation_lines()
+        assert ({abbr for abbr, _hips in lines}
+                == set(wxskyfield.CONSTELLATION_NAMES))
+        for _abbr, hips in lines:
+            assert len(hips) >= 2
+
+    def test_excerpt_covers_every_vertex(self, sky):
+        wanted = {hip for _abbr, hips in sky.constellation_lines()
+                  for hip in hips}
+        hips, star = sky.constellation_stars()
+        # Every vertex resolved from the bundled excerpt -- a gap here
+        # means wxskyfield_lines.dat and wxskyfield_stars.dat were
+        # regenerated out of step (tools/gen_constellations.py makes
+        # them together).
+        assert set(hips) == wanted
+
+    def test_cached_for_engine_life(self, sky):
+        assert sky.constellation_lines() is sky.constellation_lines()
+        assert sky.constellation_stars() is sky.constellation_stars()
+
+    def test_field_matches_binder(self, almanac):
+        amt = self.almanac_type()
+        field = amt.constellation_field(almanac)
+        hips, _star = amt.sky.constellation_stars()
+        # The whole field, below-horizon vertices included: the dome
+        # clips setting figures at the rim instead of dropping them.
+        assert set(field) == set(hips)
+        assert min(alt for _az, alt in field.values()) < 0.0
+        for name, hip in (('rigel', 24436), ('polaris', 11767)):
+            az, alt = field[hip]
+            b = getattr(almanac, name)
+            assert abs(alt - b.alt) < 1e-6
+            assert abs(az - b.az) < 1e-6
+
+    def test_stars_disabled_disables_lines(self):
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                           load_stars=False)
+        assert s.is_valid()
+        assert s.constellation_lines() is None
+        assert s.constellation_stars() is None
+
+    def test_missing_lines_file_degrades(self, tmp_path):
+        for f in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
+            os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', f),
+                       os.path.join(tmp_path, f))
+        s = wxskyfield.Sky(str(tmp_path), load_stars=True)
+        assert s.is_valid()
+        # No wxskyfield_lines.dat: the dome simply has no figures.
+        assert s.constellation_lines() is None
+        assert s.constellation_stars() is None
+
+
 class TestBodyLabel:
     """$almanac.<body>.label -- the body's display name, translated by the
     skin's [Almanac] texts (key = the tag name, beside moon_phases; WeeWX
