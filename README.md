@@ -723,7 +723,7 @@ skyfield/almanac.py:339: RuntimeWarning: invalid value encountered in divide
   return - 2*c / (b + sign * sqrt(discriminant))
 ```
 
-This is an upstream bug in recent Skyfield versions (through at least 1.54,
+This is an upstream bug in Skyfield releases through 1.54 (
 [skyfield issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114)):
 the rise/set solver's final refinement can divide 0/0 when its iteration lands, to the
 last bit, exactly on the horizon — a floating-point coincidence that can strike any
@@ -731,9 +731,10 @@ body, any latitude, any date, and that even varies with the machine's math libra
 Inside Skyfield the affected event's time becomes NaN; this extension detects and
 discards it, so the worst case is a single rise or set tag coming up empty for a
 while — in practice pages render complete.  weewx-skyfield's author diagnosed the
-root cause in issue #1114 and has submitted
-[pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140) to fix
-it; the warning will disappear once a Skyfield release newer than 1.54 ships the fix.
+root cause in issue #1114 and submitted
+[pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140), which
+Skyfield merged on August 4, 2026, closing the issue; the warning will disappear once
+the first Skyfield release after 1.54 ships the fix.
 
 ## Why require Python 3.9 or later?
 

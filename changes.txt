@@ -1,6 +1,15 @@
 weewx-skyfield change history
 -----------------------------
 
+1.19.1 (in progress)
+--------------------
+- Docs only: the Known Skyfield Issues section in the README and page
+  in the user manual now say that Skyfield merged pull request #1140 --
+  the fix for the rare benign RuntimeWarning from almanac.py line 339
+  (skyfield issue #1114) -- on August 4, 2026, closing the issue.  The
+  warning disappears once the first Skyfield release after 1.54 ships
+  the fix; these docs then get their final update naming that version.
+
 1.19 2026/08/03
 ---------------
 - The Sky page's dome draws the constellations: the 88 IAU

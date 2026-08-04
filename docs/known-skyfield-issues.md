@@ -32,7 +32,7 @@ skyfield/almanac.py:339: RuntimeWarning: invalid value encountered in divide
 
 **This is an upstream Skyfield bug, tracked as
 [skyfield issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114)**, and
-it affects recent Skyfield versions through at least 1.54.  The final refinement step of
+it affects Skyfield releases through 1.54.  The final refinement step of
 Skyfield's rise/set solver (`find_risings`/`find_settings`) fits a parabola through its
 last two altitude samples; when the solver's iteration happens to land, to the last
 floating-point bit, exactly on the horizon, that fit degenerates to a 0/0 division.  It is
@@ -48,8 +48,9 @@ value was present.  No configuration change, downgrade or workaround is needed.
 
 weewx-skyfield's author diagnosed the root cause — with a deterministic
 reproduction — in
-[issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114), and has
-submitted [pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140)
-to fix it, along with a regression test.  The warning will disappear once a Skyfield
-release newer than 1.54 ships the fix; upgrading Skyfield is routine — see
+[issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114) and submitted
+[pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140) with the
+fix and a regression test.  **Skyfield merged the fix on August 4, 2026**, closing the
+issue; the warning will disappear once the first Skyfield release after 1.54 ships it.
+Upgrading Skyfield, once that release is out, is routine — see
 [Upgrading Skyfield](installation.md#upgrading-skyfield).
