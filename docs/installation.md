@@ -42,8 +42,9 @@ weewx-skyfield requires Python 3.9 or later, WeeWX 5.2 or later, and the
 
 2. Download the latest release, `weewx-skyfield.zip`, from the
    [weewx-skyfield GitHub repository](https://github.com/chaunceygardiner/weewx-skyfield).
-   It is about 32 MB: the bundled DE421 ephemeris (16 MB) and the complete Hipparcos star
-   catalog (15 MB gzipped) account for nearly all of it.
+   It is about 43 MB: the bundled DE421 ephemeris (16 MB), the complete Hipparcos star
+   catalog (15 MB gzipped) and the documentation's screenshots (15 MB) account for nearly
+   all of it.
 
 3. Install the extension:
 
