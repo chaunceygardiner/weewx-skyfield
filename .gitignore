@@ -171,7 +171,6 @@ cython_debug/
 .pypirc
 
 # A user-installed full Hipparcos catalog (see README); never committed.
-bin/user/hip_main.dat
 
 # Claude Code project instructions and local settings; kept locally, not published.
 CLAUDE.md

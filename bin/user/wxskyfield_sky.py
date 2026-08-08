@@ -160,8 +160,14 @@ PLANETS = ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
 SEMI_MAJOR_AU = {'mercury': 0.387, 'venus': 0.723, 'earth': 1.0, 'mars': 1.524,
                  'jupiter': 5.203, 'saturn': 9.537, 'uranus': 19.19, 'neptune': 30.07}
 
-STAR_MAG_LIMIT = 2.6          # dome shows stars at least this bright (default)
-STAR_LABEL_MAG = 1.1          # ... and labels these (default)
+STAR_MAG_LIMIT = 5.0          # dome shows stars at least this bright (default)
+STAR_LABEL_MAG = 2.5          # ... and labels these (default)
+# The pass chart's cutoffs.  A visible pass happens while the sky is only
+# half dark, so the chart plots roughly the stars a twilight sky actually
+# shows and labels only the brightest -- a finder chart, not a census.
+# Constants, not options, until a consumer asks.
+PASS_STAR_MAG_LIMIT = 3.5
+PASS_STAR_LABEL_MAG = 1.5
 # The dome keeps constellation line vertices down to this altitude: a
 # just-set star still anchors its segment (the dome's clipPath trims it at
 # the rim), while the polar projection's blowup toward the antipode stays
@@ -390,11 +396,11 @@ class SkyPage:
         self._memo[key] = tw
         return tw
 
-    def _stars(self, alm) -> List[Dict[str, Any]]:
+    def _stars(self, alm, limit: float) -> List[Dict[str, Any]]:
         sky = _find_sky()
         if sky is None or not sky.stars:
             return []
-        catalog = self._catalog_stars(alm, sky)
+        catalog = self._catalog_stars(alm, sky, limit)
         if catalog is not None:
             return catalog
         seen, out = set(), []
@@ -402,7 +408,7 @@ class SkyPage:
             if hip in seen or name not in sky.stars:
                 continue
             mag = sky.stars[name][1]
-            if mag is None or (mag > self._star_mag_limit and name != 'polaris'):
+            if mag is None or (mag > limit and name != 'polaris'):
                 continue
             seen.add(hip)
             b = getattr(alm, name)
@@ -413,18 +419,18 @@ class SkyPage:
                         'az': b.az, 'alt': alt, 'mag': mag})
         return out
 
-    def _catalog_stars(self, alm, sky) -> Optional[List[Dict[str, Any]]]:
-        """The dome's stars from a full, user-installed hip_main.dat:
-        every catalog star above the horizon at least star_mag_limit
-        bright, dimmest first so the bright dots paint on top.  Stars
-        with a NAMED_STARS name keep their translated label; the rest
-        are anonymous dots whose tooltip names the Hipparcos number.
-        None when only the bundled excerpt is installed -- the dome then
-        falls back to the named stars."""
+    def _catalog_stars(self, alm, sky, limit: float) -> Optional[List[Dict[str, Any]]]:
+        """The chart's stars from the full Hipparcos catalog: every
+        catalog star above the horizon at least `limit` bright,
+        dimmest first so the bright dots paint on top.  Stars with a
+        NAMED_STARS name keep their translated label; the rest are
+        anonymous dots whose tooltip names the Hipparcos number.  None
+        when the catalog is unreadable -- the chart then falls back to
+        the named stars."""
         amt = _find_almanac_type()
         if amt is None:
             return None
-        field = amt.star_field(alm, self._star_mag_limit)
+        field = amt.star_field(alm, limit)
         if field is None:
             return None
         names = _hip_names()
@@ -514,6 +520,79 @@ class SkyPage:
     def _con_polyline(run: List[Tuple[float, float, float]]) -> str:
         return ('<polyline points="%s"/>'
                 % ' '.join('%.1f,%.1f' % (pt[0], pt[1]) for pt in run))
+
+    # ── satellites ───────────────────────────────────────────────────────────
+    def satellite_names(self) -> List[str]:
+        """The configured satellites' tag names ([Skyfield] [[Satellites]]),
+        in config order, from the registered engine.  Empty when none are
+        configured or the Skyfield almanac is not registered.  PUBLIC
+        CONTRACT: embedding skins enumerate the satellites through this
+        (weewx-celestial builds its live roster and satellite layer from
+        it -- celestial 8.0), so the name and semantics are stable."""
+        sky = _find_sky()
+        return list(sky.satellites) if sky is not None else []
+
+    @_panel_guard(fallback=False)
+    def has_satellites(self) -> bool:
+        """Whether the page shows its satellite panel -- the template's
+        guard: a station with no [[Satellites]] hides the section."""
+        return bool(self.satellite_names())
+
+    def _sat_pass(self, alm, name: str) -> Dict[str, Any]:
+        """The satellite's next visible pass as plain numbers ('pass', None
+        when there is none in the elements' validity window) -- 'usable'
+        then says whether that is honest sky truth (a satellite that just
+        never qualifies, HST from high latitudes) or missing/stale
+        elements, which point at the log instead."""
+        key = (alm.time_ts, 'sat:' + name)
+        if key in self._memo:
+            return self._memo[key]
+        b = getattr(alm, name)
+        p = b.next_visible_pass
+        rise = _raw(p.rise, 'unix_epoch')
+        d: Dict[str, Any] = {'usable': b.sunlit is not None, 'pass': None}
+        if rise is not None:
+            d['pass'] = {
+                'rise': rise,
+                'culmination': _raw(p.culmination, 'unix_epoch'),
+                'set': _raw(p.set, 'unix_epoch'),
+                'max_alt': _raw(p.max_altitude, 'degree_angle'),
+                'rise_ord': str(p.rise_azimuth.ordinal_compass()),
+                'culm_ord': str(p.culmination_azimuth.ordinal_compass()),
+                'set_ord': str(p.set_azimuth.ordinal_compass()),
+                'duration': _raw(p.duration, 'second'),
+            }
+        self._memo[key] = d
+        return d
+
+    def _satellite_track(self, alm) -> Optional[Dict[str, Any]]:
+        """The pass chart's arc: the soonest upcoming visible pass among
+        the configured satellites, sampled along its path (a pass in
+        progress counts -- its rise is simply in the past).  One track
+        only: the next thing worth watching; several arcs would be
+        clutter."""
+        best: Optional[str] = None
+        for name in self.satellite_names():
+            q = self._sat_pass(alm, name)['pass']
+            if q is not None and (best is None or
+                                  q['rise'] < self._sat_pass(alm, best)['pass']['rise']):
+                best = name
+        if best is None:
+            return None
+        q = dict(self._sat_pass(alm, best)['pass'])
+        n = 24
+        pts: List[Tuple[float, float]] = []
+        for i in range(n + 1):
+            ts = q['rise'] + (q['set'] - q['rise']) * i / n
+            b = getattr(alm(almanac_time=int(round(ts))), best)
+            alt, az = b.alt, b.az
+            if alt is None or az is None:
+                return None
+            pts.append((az, alt))
+        q.update(name=best, label=self._label(alm, best), pts=pts,
+                 culm_i=min(n, max(0, round(n * (q['culmination'] - q['rise'])
+                                            / (q['set'] - q['rise'])))))
+        return q
 
     # ── template conveniences ─────────────────────────────────────────────────
     @_panel_guard(fallback=False)
@@ -686,8 +765,24 @@ class SkyPage:
         degrees) by that factor -- font sizes are emitted inline so the
         collision layout always matches the rendered size.  Useful for skins
         whose pages are scaled down (fixed-canvas smartphone layouts)."""
-        pal = _palette(palette)
-        ink, line, body_color = pal['ink'], pal['line'], pal['body']
+        return self._sky_chart(alm, _palette(palette), label_scale,
+                               self._star_mag_limit, self._star_label_mag,
+                               track=None, grad_id='skyg', clip_id='domec',
+                               aria=self._t('Sky dome chart'))
+
+    def _sky_chart(self, alm, pal: Dict[str, Any], label_scale: float,
+                   star_limit: float, star_label_mag: float,
+                   track: Optional[Dict[str, Any]], grad_id: str, clip_id: str,
+                   aria: str) -> str:
+        """The all-sky chart core shared by the dome (the sky at the
+        almanac's time) and the pass chart (the sky at a pass's
+        culmination): frame, stars, constellation figures, bodies, and any
+        configured satellite above the horizon at the chart's epoch.
+        `track` adds the satellite pass arc -- the pass chart's reason to
+        exist; the dome stopped drawing it in 2.0, because an undated
+        future track on the now-sky read as tonight's.  grad_id/clip_id
+        keep the two charts' SVG ids distinct on the one page."""
+        ink, line, brass, body_color = pal['ink'], pal['line'], pal['brass'], pal['body']
         S, cx, cy, R = 680, 340, 348, 296
         star_px = 10.0 * label_scale
         body_px = 11.0 * label_scale
@@ -695,13 +790,13 @@ class SkyPage:
         grid_px = 10.0 * label_scale
         sun = self._body(alm, 'sun')
         star_op = 0.55 if sun['alt'] > 0 else 0.95
-        p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="%s">'
-             % (S, self._t('Sky dome chart'))]
-        p.append('<defs><radialGradient id="skyg">%s</radialGradient>'
-                 '<clipPath id="domec"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
-                 % (''.join('<stop offset="%s" stop-color="%s"/>' % s
-                            for s in pal['dome_stops']), cx, cy, R))
-        p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#skyg)"/>' % (cx, cy, R))
+        p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="%s">' % (S, aria)]
+        p.append('<defs><radialGradient id="%s">%s</radialGradient>'
+                 '<clipPath id="%s"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
+                 % (grad_id,
+                    ''.join('<stop offset="%s" stop-color="%s"/>' % s
+                            for s in pal['dome_stops']), clip_id, cx, cy, R))
+        p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#%s)"/>' % (cx, cy, R, grad_id))
         for alt in (30, 60):
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
                      'stroke-width="1" stroke-dasharray="3 5" opacity="0.7"/>'
@@ -728,9 +823,9 @@ class SkyPage:
         if self._constellation_lines:
             segs, con_labels = self._constellation_layer(alm, cx, cy, R)
             if segs:
-                p.append('<g clip-path="url(#domec)" fill="none" stroke="%s" '
+                p.append('<g clip-path="url(#%s)" fill="none" stroke="%s" '
                          'stroke-width="1" stroke-linecap="round" opacity="%.2f">%s</g>'
-                         % (pal['conline'], 0.40 if sun['alt'] > 0 else 0.55,
+                         % (clip_id, pal['conline'], 0.40 if sun['alt'] > 0 else 0.55,
                             ''.join(segs)))
         # Labels are placed after every mark is drawn: body labels first (each
         # nudged vertically until it clears the ones already placed), then
@@ -748,8 +843,9 @@ class SkyPage:
         deferred: List[str] = []
 
         def _try_label(x: float, y: float, text: str, cls: str, gap: float,
-                       must: bool, opacity: Optional[float] = None) -> None:
-            px = body_px if cls == 'bodylab' else star_px
+                       must: bool, opacity: Optional[float] = None,
+                       body: Optional[str] = None) -> None:
+            px = body_px if cls in ('bodylab', 'satlab') else star_px
             est_w = 0.62 * px * len(text)
             row_h = px + 3.0
             anchor = 'start'
@@ -769,12 +865,13 @@ class SkyPage:
                 ly = min(ly + row_h, 700.0)
             placed.append((box[0], box[1], box[2], box[3]))
             op = '' if opacity is None else ' opacity="%.2f"' % opacity
+            dat = '' if body is None else ' data-body="%s"' % _esc(body)
             deferred.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="%s" '
-                            'style="font-size:%.1fpx"%s>%s</text>'
-                            % (lx, ly, anchor, cls, px, op, text))
+                            'style="font-size:%.1fpx"%s%s>%s</text>'
+                            % (lx, ly, anchor, cls, px, op, dat, text))
 
         star_labels: List[Tuple[float, float, str]] = []
-        for s in self._stars(alm):
+        for s in self._stars(alm, star_limit):
             x, y = self._dome_xy(cx, cy, R, s['az'], s['alt'])
             r = max(1.0, min(4.0, 3.2 - 0.62 * s['mag']))
             p.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" opacity="%.2f">'
@@ -783,45 +880,116 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(s['name']), alt='%.1f' % s['alt'],
                                 az='%.1f' % s['az'], mag='%.2f' % s['mag'])))
-            if s['named'] and s['mag'] <= self._star_label_mag:
+            if s['named'] and s['mag'] <= star_label_mag:
                 star_labels.append((x, y - 8, _esc(s['name'])))
+        # Body marks and their labels carry data-body="<tag name>" (groups
+        # classed dome-body): a consumer contract -- weewx-celestial's live
+        # dome locates marks through it to reposition them between report
+        # cycles.  The <title> text is translated and cannot serve.
         for name in PLANETS:
             b = self._body(alm, name)
             if b['alt'] <= 0:
                 continue
             x, y = self._dome_xy(cx, cy, R, b['az'], b['alt'])
             label = self._label(alm, name)
-            p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
-                     '<title>%s</title></circle>'
-                     % (x, y, body_color[name], _ring(pal, name),
+            p.append('<g class="dome-body" data-body="%s">'
+                     '<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="2">'
+                     '<title>%s</title></circle></g>'
+                     % (_esc(name), x, y, body_color[name], _ring(pal, name),
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(label), alt='%.1f' % b['alt'],
                                 az='%.1f' % b['az'], mag='%.1f' % b['mag'])))
-            _try_label(x, y, _esc(label), 'bodylab', 8, must=True)
+            _try_label(x, y, _esc(label), 'bodylab', 8, must=True, body=name)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
+            p.append('<g class="dome-body" data-body="sun">')
             for i in range(8):
                 a = math.pi * i / 4
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1.5"/>'
                          % (x + 11 * math.cos(a), y + 11 * math.sin(a),
                             x + 16 * math.cos(a), y + 16 * math.sin(a), body_color['sun']))
             p.append('<circle cx="%.1f" cy="%.1f" r="9" fill="%s" stroke="%s" stroke-width="1.5">'
-                     '<title>%s</title></circle>'
+                     '<title>%s</title></circle></g>'
                      % (x, y, body_color['sun'], _ring(pal, 'sun'),
                         self._t('{name} — alt {alt}°, az {az}°',
                                 name=_esc(self._label(alm, 'sun')),
                                 alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
-            _try_label(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True)
+            _try_label(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True,
+                       body='sun')
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, moon['az'], moon['alt'])
-            p.append('<g>%s<title>%s</title></g>'
+            p.append('<g class="dome-body" data-body="moon">%s<title>%s</title></g>'
                      % (self._moon_disc(alm, x, y, 8, pal, ring=False),
                         self._t('{name} — alt {alt}°, az {az}°, {pct}% illuminated',
                                 name=_esc(self._label(alm, 'moon')),
                                 alt='%.1f' % moon['alt'], az='%.1f' % moon['az'],
                                 pct='%d' % alm.moon_fullness)))
-            _try_label(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True)
+            _try_label(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True,
+                       body='moon')
+        # Satellites: a marker for any satellite above the horizon at the
+        # chart's epoch -- the "sky at time T" contract.  On the pass
+        # chart, whose epoch is the pass's culmination, this is what puts
+        # the tracked satellite's dot at the peak of its arc.  A marker's
+        # name label doubles as the arc's when the tracked satellite is
+        # the one overhead.  A sunlit satellite is the solid brass dot; one
+        # inside Earth's shadow inverts to a hollow ring (the open-symbol
+        # convention for present-but-not-shining -- unlike a daytime star,
+        # a shadowed satellite emits nothing).  The ring keeps the marker's
+        # footprint, and its interior is the halo color rather than
+        # fill="none" so the tooltip still triggers anywhere on the dot.
+        overhead: List[str] = []
+        for name in self.satellite_names():
+            binder = getattr(alm, name)
+            s_alt, s_az = binder.alt, binder.az
+            if s_alt is None or s_alt <= 0:
+                continue
+            overhead.append(name)
+            x, y = self._dome_xy(cx, cy, R, s_az, s_alt)
+            label = self._label(alm, name)
+            lit = binder.sunlit is not False
+            if lit:
+                title = self._t('{name} — alt {alt}°, az {az}°',
+                                name=_esc(label), alt='%.1f' % s_alt,
+                                az='%.1f' % s_az)
+            else:
+                title = self._t('{name} — alt {alt}°, az {az}° — in shadow',
+                                name=_esc(label), alt='%.1f' % s_alt,
+                                az='%.1f' % s_az)
+            fill, ring = (brass, pal['halo']) if lit else (pal['halo'], brass)
+            p.append('<g class="dome-body" data-body="%s" data-sunlit="%d">'
+                     '<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="%s" stroke-width="2">'
+                     '<title>%s</title></circle></g>'
+                     % (_esc(name), 1 if lit else 0, x, y, fill, ring, title))
+            _try_label(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+        if track is not None:
+            xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
+            p.append('<g class="dome-track" data-body="%s" '
+                     'clip-path="url(#%s)"><path d="M%s" fill="none" stroke="%s" '
+                     'stroke-width="1.6" stroke-dasharray="6 4" opacity="0.9"/>'
+                     '<title>%s</title></g>'
+                     % (_esc(track['name']), clip_id,
+                        ' L'.join('%.1f %.1f' % pt for pt in xy), brass,
+                        self._t('{name} pass — {rise} → {set}, peak {alt}°',
+                                name=_esc(track['label']), rise=_t_hm(track['rise']),
+                                set=_t_hm(track['set']), alt='%.0f' % track['max_alt'])))
+            for end_i, ts in ((0, track['rise']), (-1, track['set'])):
+                x, y = xy[end_i]
+                # The ends sit on the rim; nudge each time label toward the
+                # dome's center so it stays inside, and log its box so the
+                # remaining labels dodge it.
+                away = math.hypot(cx - x, cy - y) or 1.0
+                lx = x + 18.0 * (cx - x) / away
+                ly = y + 18.0 * (cy - y) / away
+                p.append('<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>' % (x, y, brass))
+                p.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="mono nowlab" '
+                         'style="font-size:%.1fpx">%s</text>'
+                         % (lx, ly + 3, grid_px, _t_hm(ts)))
+                placed.append((lx - 2.0 * grid_px, ly - grid_px, lx + 2.0 * grid_px, ly + 5))
+            if track['name'] not in overhead:
+                xc, yc = xy[track['culm_i']]
+                _try_label(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
+                           body=track['name'])
         for x, y, name in star_labels:
             _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + 0.05)
         # Constellation names go last: background context that yields to
@@ -843,6 +1011,43 @@ class SkyPage:
         p.extend(deferred)
         p.append('</svg>')
         return ''.join(p)
+
+    # ── pass chart ───────────────────────────────────────────────────────────
+    @_panel_guard()
+    def pass_chart_html(self, alm, palette: str = 'night',
+                        label_scale: float = 1.0) -> str:
+        """The Next Visible Pass panel: the whole sky as it will stand at the
+        soonest upcoming visible pass's culmination, the pass's arc drawn
+        across it -- one chart, one epoch, so the arc crosses the stars
+        it will actually cross (the per-pass chart convention
+        Heavens-Above set).  A dated head line names the satellite and
+        the pass's times; the chart itself is the dome renderer pointed
+        at the culmination, with twilight-honest star cutoffs, and the
+        chart-epoch satellite loop puts the satellite's own dot at the
+        peak of its arc.  Empty string when no configured satellite has a
+        visible pass in its elements' validity window -- the satellite
+        panel's rows then tell that story.  The data-body/dome-track
+        hooks (the weewx-celestial consumer contract) appear here exactly
+        as on the dome."""
+        pal = _palette(palette)
+        track = self._satellite_track(alm)
+        if track is None:
+            return ''
+        culm = alm(almanac_time=int(round(track['culmination'])))
+        head = ('<div class="passhead"><span class="passname">%s</span>'
+                '<span class="passwhen mono">%s</span></div>'
+                % (_esc(track['label']),
+                   self._t('{date} · {rise} → {set} · peak {alt}°',
+                           date=_esc(time.strftime(
+                               self._t('%a %b %-d'),
+                               time.localtime(track['culmination']))),
+                           rise=_t_hm(track['rise']), set=_t_hm(track['set']),
+                           alt='%.0f' % track['max_alt'])))
+        return head + self._sky_chart(culm, pal, label_scale,
+                                      PASS_STAR_MAG_LIMIT, PASS_STAR_LABEL_MAG,
+                                      track=track, grad_id='skygp',
+                                      clip_id='domecp',
+                                      aria=self._t('Pass sky chart'))
 
     # ── rise/set ribbons ─────────────────────────────────────────────────────
     @_panel_guard()
@@ -1497,6 +1702,56 @@ class SkyPage:
                 '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
                 '<div class="chipsub mono">%s</div>%s</div></div>'
                 % (dot_style(name), _esc(self._label(alm, name)), line, sub, extra))
+        return '\n'.join(rows)
+
+    def _sat_when(self, alm, rise_ts: float, set_ts: Optional[float]) -> str:
+        """The pass countdown, at the resolution a minutes-long event
+        needs: 'overhead now' while the pass is in progress, minutes
+        under an hour, hours under a day, then the countdown chips'
+        day count."""
+        now = alm.time_ts
+        if set_ts is not None and rise_ts <= now < set_ts:
+            return self._t('overhead now')
+        delta = rise_ts - now
+        if delta < 3600:
+            return self._t('in {m} min', m=max(1, int(delta // 60)))
+        if delta < 86400:
+            return self._t('in {h} h', h=int(round(delta / 3600.0)))
+        n = int(math.ceil(delta / 86400.0))
+        if n == 1:
+            return self._t('in {n} day', n=1)
+        return self._t('in {n} days', n=n)
+
+    @_panel_guard()
+    def satellites_html(self, alm, palette: str = 'night') -> str:
+        """One row per configured satellite: its next visible pass -- the
+        go-watch question -- in the planet chips' idiom.  A satellite with
+        no qualifying pass in its elements' validity window says so
+        honestly (HST from high latitudes is a permanent dash, and that is
+        the truth), and one with no usable elements (an offline install, a
+        stale cache) points at the log instead of guessing."""
+        pal = _palette(palette)
+        rows = []
+        for name in self.satellite_names():
+            d = self._sat_pass(alm, name)
+            q = d['pass']
+            sub = ''
+            if q is not None:
+                line = '%s %s · %s' % (self._date(q['rise']), _t_hm(q['rise']),
+                                       self._sat_when(alm, q['rise'], q['set']))
+                sub = self._t('appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} min',
+                              rise=_esc(q['rise_ord']), alt='%.0f' % q['max_alt'],
+                              culm=_esc(q['culm_ord']), set=_esc(q['set_ord']),
+                              m='%d' % round(q['duration'] / 60.0))
+            elif d['usable']:
+                line = self._t('no visible pass in the coming week')
+            else:
+                line = self._t('no usable orbital elements — see the weewxd log')
+            rows.append('<div class="chip"><span class="dot" style="background:%s"></span>'
+                        '<div><div class="chipname">%s</div>'
+                        '<div class="chipline mono">%s</div>%s</div></div>'
+                        % (pal['brass'], _esc(self._label(alm, name)), line,
+                           '<div class="chipsub mono">%s</div>' % sub if sub else ''))
         return '\n'.join(rows)
 
     @_panel_guard()

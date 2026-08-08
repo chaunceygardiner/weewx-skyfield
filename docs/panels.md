@@ -38,8 +38,16 @@ not in English:
    `count`, the `chip` family and the table rules for the HTML blocks.  Copy the rules you
    need (or the whole file) into your skin's stylesheet.  If you copied individual rules,
    re-check on each upgrade: a release that adds marks to a panel can add a class (1.10
-   added `moonlab`, the sun-path moon-time labels), and text with no rule renders at the
+   added `moonlab`, the sun-path moon-time labels; 2.0 added `satlab`, the satellite name
+   label, and the pass chart's `passhead`/`passname`/`passwhen` head-line rules), and text
+   with no rule renders at the
    16px SVG default in the wrong color — changes.txt calls out new classes.
+
+   The panels' tooltips are native SVG `<title>` elements, so they work on hover with no
+   help — but hover does not exist on a touch screen.  The bundled skin ships
+   `skins/Skyfield/sky.js`, a small dependency-free script that shows the same tooltip text
+   on tap; copy it (and the `.skytip` rule from `sky.css`) and load it with
+   `<script src="sky.js" defer></script>` if your page's visitors use tablets or phones.
 
 4. Non-English skins only: bring the translations along the same way.  The panels read
    `[Texts]` and `[Almanac]` from *your* report, not from the bundled skin, so without this
@@ -69,24 +77,77 @@ $sky_page.dome_svg($almanac)
 
 Everything above the horizon right now, in sky-chart orientation — north at the top, east at
 the left, as if lying on your back looking up: the sun, the moon drawn at its true phase, the
-planets, and the bright IAU-named stars sized by magnitude, with hover coordinates on every
+planets, and the stars sized by magnitude, with hover coordinates on every
 mark.  When the sun is up the stars are shown dimmed, standing where they are behind the
 daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally takes
 `label_scale` (default 1.0), which grows every label by that factor with the collision layout
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
 smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
 
-With only the bundled catalog excerpt installed, the dome draws from the 412 named stars.
-Install the full Hipparcos catalog (see
-[Serving every Hipparcos star](installation.md#serving-every-hipparcos-star)) and it plots
-*every* catalog star down to the magnitude limit instead — automatically, nothing to
-configure.  Labels stay on named stars; an unnamed star's hover tooltip gives its Hipparcos
-number.  The dome also draws the 88 constellations' stick figures, each substantially-risen
-figure labeled with the constellation's (translated) name, setting figures clipped at the
-horizon rim.  The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
+The dome plots *every* star of the bundled Hipparcos catalog down to the magnitude limit — a
+true sky map.  Labels stay on named stars; an unnamed star's hover tooltip gives its
+Hipparcos number.  The dome also draws the 88 constellations' stick figures, each
+substantially-risen figure labeled with the constellation's (translated) name, setting
+figures clipped at the horizon rim — and, with satellites configured, a position dot for any
+satellite above the horizon at generation time.  A sunlit satellite is a solid dot; one
+inside Earth's shadow is drawn as a hollow ring — present but not shining — with its
+tooltip saying "in shadow".  The dome is strictly the *current* sky, one
+chart, one instant: an upcoming [visible pass](tags.md#satellites) is charted by
+[`pass_chart_html`](#the-next-visible-pass-chart--pass_chart_html) below, at the pass's own epoch.
+The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
 `constellation_lines = false` turns the figures off — see
 [Configuring the page](sky-page.md#configuring-the-page); when embedding the panels in your
 own skin, set them in that skin's report section the same way.
+
+An embedding skin that repositions dome marks between report cycles — weewx-celestial's live
+dome is the consumer — locates them by machine name, never by tooltip text (which is
+translated): the sun's, moon's and each planet's marks are wrapped in
+`<g class="dome-body" data-body="mars">`, their name labels carry the same `data-body`
+attribute, and a satellite's position dot gets its tag name the same way plus
+`data-sunlit="1"` or `"0"`, so a live layer can flip the dot between solid and hollow as
+the satellite crosses the shadow line.  These hooks are a
+stable contract, and so is `$sky_page.satellite_names()`, through which an embedding skin
+enumerates the configured satellites — the tag names in config order, empty when none
+are configured or the almanac is not registered.
+
+## The next visible pass chart — `pass_chart_html`
+
+```
+$sky_page.pass_chart_html($almanac)
+```
+
+<img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_passchart.png" width="440" alt="The next visible pass chart panel">
+
+The whole sky as it will stand at the culmination of the soonest upcoming
+[visible pass](tags.md#satellites) among the configured satellites, with the pass drawn
+across it as a dashed arc — rise and set times at the endpoints, the satellite's own dot at
+the peak — under a dated head line naming the satellite and the pass ("ISS · Sun Jun 22 ·
+03:11 → 03:21 · peak 19°").  The peak dot can be the hollow in-shadow ring: a pass is
+visible when *any* of it is sunlit in a dark sky, and a morning pass often exits Earth's
+shadow just after culminating — the chart honestly shows it flaring into view mid-sky.  One chart, one epoch: the arc crosses the stars it will
+actually cross, the per-pass convention sky-charting has always used for future events (the
+sky dome, by contrast, never shows anything but the current sky).  The star field uses
+twilight-honest cutoffs — a visible pass happens while the sky is only half dark, so only
+stars bright enough to actually show then are plotted (magnitude 3.5, labels at 1.5) —
+making it a finder chart rather than a census.
+
+The method returns a `passhead` div followed by the chart SVG, and an **empty string** when
+no configured satellite has a visible pass in its elements' validity window (up to a week
+out) — wrap it in a guard as the bundled template does:
+
+```
+#set $passchart = $sky_page.pass_chart_html($almanac, palette=$palette)
+#if $passchart
+  ...
+#end if
+```
+
+Like `dome_svg` it takes `palette` and `label_scale`.  Its SVG ids (`skygp`, `domecp`) stay
+distinct from the dome's, so both charts share a page cleanly, and the `data-body` /
+`dome-track` hooks appear here exactly as on the dome — the pass arc's group,
+`<g class="dome-track" data-body="iss">`, lives on this chart.  New CSS classes: `passhead`,
+`passname` and `passwhen` style the head line (see `sky.css`); the arc and its labels reuse
+the dome's `satlab`/`nowlab` rules.
 
 ## Rise & set ribbons — `ribbons_svg`
 
@@ -202,6 +263,27 @@ A summary card per body: daylight (length, sun rise → set, civil dusk and astr
 then each planet with its rise time or current position, the constellation it stands in,
 magnitude, distance and elongation — plus Jupiter's central meridian longitudes and Saturn's
 ring tilt.  The `chips` wrapper provides the single-column layout.
+
+## The satellites panel — `satellites_html`
+
+```
+#if $sky_page.has_satellites()
+<div class="chips">
+  $sky_page.satellites_html($almanac)
+</div>
+#end if
+```
+
+<img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_satellites.png" width="340" alt="Satellites panel">
+
+One card per configured satellite (see [Satellites](installation.md#satellites)): its
+[next visible pass](tags.md#satellites) — the date and countdown in the countdown-chip
+idiom, rolling into "overhead now" during the pass itself, then "appears WSW · peaks 45° SSW
+· disappears NE · 6 min".  The rows are honest about nothing-to-see: a satellite with no
+visible pass in the coming week says so, and one with no usable orbital elements says
+*that*, pointing at the weewxd log — the panel never shows a stale pass.
+`$sky_page.has_satellites()` returns whether any satellites are configured, so a template
+can skip the whole section when there are none — the bundled page does exactly that.
 
 ## Countdown chips — `countdown_html`
 

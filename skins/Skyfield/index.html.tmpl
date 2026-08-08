@@ -30,6 +30,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$gettext("The Sky over {location}").format(location=$station.location)</title>
   <link rel="stylesheet" href="sky.css">
+  <script src="sky.js" defer></script>
 </head>
 <body>
 <div class="page">
@@ -62,7 +63,7 @@
       #else
       $gettext("Dot size follows magnitude; the brighter the star, the larger the mark.")
       #end if
-      $gettext("Hover any mark for its coordinates.")</p>
+      $gettext("Hover or tap any mark for its coordinates.")</p>
     </section>
 
     <section class="sec-ribbons">
@@ -80,7 +81,7 @@
     <section class="sec-lunation">
       <h2 class="eyebrow">$gettext("The Lunar Month · this lunation")</h2>
       $sky_page.lunation_svg($almanac, palette=$palette)
-      <p class="caption">$gettext("New moon to new moon in thirty steps, the principal phases dated; the brass ring is today.  Hover any disc for its date and illumination.")</p>
+      <p class="caption">$gettext("New moon to new moon in thirty steps, the principal phases dated; the brass ring is today.  Hover or tap any disc for its date and illumination.")</p>
     </section>
 
     <section class="sec-table">
@@ -88,7 +89,7 @@
       <div class="tablewrap">
         $sky_page.table_html($almanac, palette=$palette)
       </div>
-      <p class="caption">$gettext("Every value on this page is a WeeWX report tag served by weewx-skyfield — no PyEphem, no downloads at run time.")</p>
+      <p class="caption">$gettext("Every value on this page is a WeeWX report tag served by weewx-skyfield — no PyEphem, and the page itself fetches nothing.")</p>
     </section>
   </div>
 
@@ -99,6 +100,32 @@
         $sky_page.chips_html($almanac, palette=$palette)
       </div>
     </section>
+
+## Satellites appear only when [Skyfield] [[Satellites]] configures some
+## (the installer's default is iss and tiangong); a station with none
+## hides the section entirely.
+#if $sky_page.has_satellites()
+    <section class="sec-satellites">
+      <h2 class="eyebrow">$gettext("Satellites · the next visible pass")</h2>
+      <div class="chips">
+        $sky_page.satellites_html($almanac, palette=$palette)
+      </div>
+      <p class="caption">$gettext("Each row is the satellite's next visible pass — visible means the satellite is sunlit while your sky is dark, peaking at least 10° up.  The soonest of these passes gets its own chart below.  Orbital elements refresh from CelesTrak every few hours.")</p>
+    </section>
+#end if
+
+## The pass chart appears only when some configured satellite has a visible
+## pass in its elements' validity window: the sky as it will stand at that
+## pass's culmination, the one single-epoch home for the pass's arc (the
+## dome shows only the current sky).
+#set $passchart = $sky_page.pass_chart_html($almanac, palette=$palette)
+#if $passchart
+    <section class="sec-passchart">
+      <h2 class="eyebrow">$gettext("The Next Visible Pass · the sky at its peak")</h2>
+      $passchart
+      <p class="caption">$gettext("The whole sky as it will stand at the pass's highest point, on the date above — the dashed arc is the satellite's path, its rise and set times at the ends.  Only stars bright enough for a twilight sky are drawn: a visible pass happens while your sky is half dark.")</p>
+    </section>
+#end if
 
     <section class="sec-sunpath">
       <h2 class="eyebrow">$gettext("The Sun’s Path · today")</h2>

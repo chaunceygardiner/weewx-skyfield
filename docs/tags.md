@@ -1,6 +1,6 @@
 ---
 title: weewx-skyfield almanac tag reference
-description: The $almanac tags weewx-skyfield computes natively — bodies, stars, eclipses, constellations — plus its differences from PyEphem and the result cache.
+description: The $almanac tags weewx-skyfield computes natively — bodies, stars, satellites, eclipses, constellations — plus its differences from PyEphem and the result cache.
 ---
 
 # Almanac tag reference
@@ -112,29 +112,72 @@ are legacy spellings of the same stars, e.g. `albereo` for `albireo`) — 420 na
 covering 412 stars.  Multi-word names use underscores and diacritics are dropped
 (`$almanac.kaus_australis.rise`, `$almanac.barnards_star.mag`).
 
-Any other Hipparcos star can be addressed by catalog number: `$almanac.hip_57939.rise` — the
-bundled catalog excerpt covers the named stars, and a user-installed full `hip_main.dat`
-serves all 118,218 (see [Serving every Hipparcos star](installation.md#serving-every-hipparcos-star)).
-The star positions, proper motions, parallaxes and magnitudes come from
-`wxskyfield_stars.dat`, an excerpt of the Hipparcos Catalogue (The Hipparcos and Tycho
-Catalogues, ESA SP-1200, 1997; distributed by CDS as VizieR catalog I/239) which is installed
-along with the extension.
+Any other Hipparcos star can be addressed by catalog number: `$almanac.hip_57939.rise` —
+as of 2.0 the *complete* Hipparcos Catalogue ships with the extension as
+`wxskyfield_stars.dat.gz` (The Hipparcos and Tycho Catalogues, ESA SP-1200, 1997;
+distributed by CDS as VizieR catalog I/239), so the star positions, proper motions,
+parallaxes and magnitudes of all 118,218 stars are available with nothing to download.
 
 Unlike PyEphem, `earth_distance` and `sun_distance` work for stars (in astronomical units,
 like the planets — e.g., `$almanac.proxima_centauri.earth_distance`), computed from the star's
 Hipparcos parallax.
 
-Star support can be turned off by setting `stars = false` in the `Skyfield` section of
-`weewx.conf`.
+## Satellites
+
+New in 2.0, the almanac tracks earth satellites.  The `[Skyfield]` `[[Satellites]]` section
+of `weewx.conf` maps tag names to NORAD catalog numbers — the installer writes `iss = 25544`
+and `tiangong = 48274`, the two naked-eye space stations — and that one list drives both the
+tags and the fetch list; how the orbital elements are fetched and kept fresh, the
+`satellite_downloads` switch, and the air-gapped alternative are on the
+[installation page](installation.md#satellites).
+
+Each entry serves the almanac's usual position surface: `$almanac.iss.alt`/`.az`/`.ra`/`.dec`
+(decimal degrees) and their unit-aware siblings `.altitude`/`.azimuth`/`.topo_ra`/`.topo_dec`;
+`.distance`, the slant range from observer to satellite, a ValueHelper honoring the report's
+distance units; and `.sunlit` — whether the satellite is in sunlight.  `$almanac.sat_25544.alt`
+is an alternate spelling for a *listed* satellite, mirroring `hip_<number>`; it never fetches
+an unlisted one.  `.rise`, `.transit` and `.set` are the *next* occurrence from the almanac's
+time — transit meaning culmination — because passes are minutes long and "today's" is rarely
+the interesting one.  The heart of the surface is the pass:
+
+- `$almanac.iss.next_pass` — the next pass, or the one in progress: once the satellite is
+  up, `next_pass` is the current pass until it sets.  Its attributes: `.rise`,
+  `.culmination` and `.set` (times), `.max_altitude` (an angle ValueHelper),
+  `.rise_azimuth`, `.culmination_azimuth` and `.set_azimuth` (compass ValueHelpers, so
+  `.ordinal_compass` renders "WSW"), `.duration`, and `.visible`.
+- `$almanac.iss.next_visible_pass` — the same attributes, for the next pass *worth
+  watching*: the satellite sunlit while your sky is dark (sun below −6° — the
+  civil-twilight convention Heavens-Above uses) at some moment of the pass, and peaking at
+  least 10° up.
+
+A pass runs rise → culmination → set across the geometric horizon — no refraction, which is
+irrelevant to satellite watching — and the almanac's existing horizon argument applies:
+`$almanac(horizon=10).iss.next_pass` counts only the portion above 10°.  Passes are searched
+within the orbital elements' seven-day validity window; when no qualifying pass exists,
+every attribute honestly reads "N/A" — Hubble from northern Europe, for example, never
+rises.  Likewise when the elements themselves are unusable (missing, or their epoch more
+than seven days older than the almanac's time): every tag reads "N/A" rather than reporting
+confidently wrong pass times, and the always-live diagnostics `$almanac.iss.elements_epoch`
+and `$almanac.iss.elements_age` say why.
+
+Deliberately absent: an apparent-magnitude tag (satellite brightness models are hand-wavy;
+`sunlit` and `.max_altitude` are served honestly instead) and pass *lists* — ask if you need
+tonight's passes as a table.
+
+On [live-updating pages](index.md#live-updating-pages), the satellite tags work as loopdata
+almanac fields like any others — `almanac.iss.next_pass.rise` included.  Use loopdata 6.9 or
+later: earlier versions could cache a temporarily-unavailable satellite field's "N/A" until
+the day rolled over, instead of recovering the moment fresh elements arrive.
 
 ## Fallback behavior
 
 Anything this extension does not compute falls through to the next almanac in WeeWX's list —
-the built-in PyEphem almanac when PyEphem is installed (e.g., named stars when the star
-catalog is disabled, or direct PyEphem data attributes such as `$almanac.moon.a_epoch`).
+the built-in PyEphem almanac when PyEphem is installed (e.g., direct PyEphem data attributes
+such as `$almanac.moon.a_epoch`).
 Almanac times outside the span of the bundled DE421 ephemeris (mid-1899 through 2053) fall
 through the same way.  Without PyEphem, such tags simply report per-tag errors rather than
-breaking report generation.
+breaking report generation.  (Satellite tags never fall through: the built-in almanac has no
+satellites, so an unrecognized satellite attribute reports a per-tag error directly.)
 
 ## Differences from PyEphem
 

@@ -15,12 +15,16 @@ inserts celestial observations into loop packets); this extension carries
 the almanac alone.
 """
 
+import gzip
 import io
 import logging
 import math
 import os
 import re
 import sys
+import threading
+import time
+import urllib.request
 
 from datetime import datetime
 from datetime import timezone
@@ -53,7 +57,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '1.19'
+WXSKYFIELD_VERSION = '2.0'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -85,16 +89,20 @@ class WxSkyfield(StdService):
 
         # Only continue if the plugin is enabled.
         skyfield_config_dict = config_dict.get('Skyfield', {})
-        # [Skyfield] has exactly two options.  Anything else here is a
-        # mistake -- most likely a report option that belongs under
-        # [StdReport] [[SkyfieldReport]] -- and would otherwise be
-        # silently ignored.
+        # [Skyfield] has exactly two options and one subsection.  Anything
+        # else here is a mistake -- most likely a report option that
+        # belongs under [StdReport] [[SkyfieldReport]] -- and would
+        # otherwise be silently ignored.
         for key in skyfield_config_dict:
-            if key not in ('enable', 'stars'):
-                hint = (' (a report option: put it under [StdReport] [[SkyfieldReport]])'
-                        if key in ('star_mag_limit', 'star_label_mag',
-                                   'constellation_lines', 'theme', 'lang')
-                        else '')
+            if key not in ('enable', 'satellite_downloads', 'Satellites'):
+                if key == 'stars':
+                    hint = (' (removed in 2.0: the complete Hipparcos catalog now'
+                            ' ships with the extension and stars are always available)')
+                elif key in ('star_mag_limit', 'star_label_mag',
+                             'constellation_lines', 'theme', 'lang'):
+                    hint = ' (a report option: put it under [StdReport] [[SkyfieldReport]])'
+                else:
+                    hint = ''
                 log.warning('Ignoring unrecognized [Skyfield] option: %s%s' % (key, hint))
         enable = to_bool(skyfield_config_dict.get('enable', True))
         if enable:
@@ -103,16 +111,100 @@ class WxSkyfield(StdService):
             log.info("WxSkyfield status: disabled...enable it in the Skyfield section of weewx.conf.")
             return
 
-        stars = to_bool(skyfield_config_dict.get('stars', True))
         user_root = Sky.get_weewx_config_info(config_dict)
-
-        log.info("stars    : %r" % stars)
         log.info("user_root: %s" % user_root)
 
-        self.sky = Sky(user_root, load_stars=stars)
+        satellites = parse_satellites(skyfield_config_dict)
+        sat_dir = get_sat_dir(config_dict) if satellites else None
+        self.sat_downloads = to_bool(skyfield_config_dict.get('satellite_downloads', True))
+        if satellites:
+            log.info('satellites: %s (elements cached in %s; downloads %s)'
+                     % (', '.join('%s=%d' % (n, c) for n, c in satellites.items()),
+                        sat_dir, 'on' if self.sat_downloads else 'off'))
+
+        self.sky = Sky(user_root, load_stars=True,
+                       satellites=satellites, sat_dir=sat_dir)
         if self.sky.is_valid():
             if register_almanac(self.sky):
                 log.info('Skyfield almanac registered; reports will use Skyfield for almanac computations.')
+            # Keeping the satellite elements fresh is the service's only
+            # recurring job (a pure almanac needs no events at all): at
+            # the engine's STARTUP event and then each archive record,
+            # stale cache files are refreshed on a worker thread.  The
+            # STARTUP check is what makes a satellite just added to the
+            # config live within seconds of a restart instead of one
+            # archive interval in; the constructor itself still spawns
+            # nothing, and the main thread never touches the network.
+            self._sat_thread: Optional[threading.Thread] = None
+            self._sat_retry_ts: Dict[int, float] = {}
+            self._sat_retry_delay: Dict[int, float] = {}
+            if satellites and self.sat_downloads:
+                self.bind(weewx.STARTUP, self.refresh_satellite_elements)
+                self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_satellite_elements)
+
+    def refresh_satellite_elements(self, event) -> None:
+        """Refresh any stale satellite elements, on a worker thread so a
+        slow CelesTrak can never delay startup or the archive cycle.
+        Bound to STARTUP -- a just-added satellite gets its elements
+        right away, not one archive interval in -- and to every
+        NEW_ARCHIVE_RECORD.  Never raises."""
+        try:
+            if self._sat_thread is not None and self._sat_thread.is_alive():
+                return
+            due = self.stale_satellites(time.time())
+            if not due:
+                return
+            self._sat_thread = threading.Thread(target=self._fetch_worker,
+                                                args=(due,), daemon=True,
+                                                name='wxskyfield-tle')
+            self._sat_thread.start()
+        except Exception as e:
+            log.error('refresh_satellite_elements: could not start the element fetch: %s' % e)
+
+    def stale_satellites(self, now: float) -> List[int]:
+        """The NORAD numbers whose cache files are due for a fetch: file
+        mtime older than the refresh cadence, or no file at all (a
+        satellite added to the config later, or an install that was
+        offline) -- maximally stale, fetched at the first archive cycle.
+        A number inside its failure backoff window is skipped.  Checks
+        are age-driven, not schedule-driven, so a weewxd started after a
+        long stop refreshes immediately."""
+        due: List[int] = []
+        for norad in sorted(set(self.sky.satellites.values())):
+            if now < self._sat_retry_ts.get(norad, 0.0):
+                continue
+            try:
+                mtime = os.stat(self.sky.sat_path(norad)).st_mtime
+            except OSError:
+                mtime = None
+            if mtime is None or now - mtime >= SAT_REFRESH_SECS:
+                due.append(norad)
+        return due
+
+    def _fetch_worker(self, norads: List[int]) -> None:
+        """Fetch each due element set.  A failure keeps the old file (the
+        fetcher is atomic) and backs off: retry in five minutes, doubling
+        per consecutive failure up to the normal three-hour cadence, so a
+        recovered network refreshes quickly without hammering CelesTrak.
+        In-memory backoff state resetting on restart (to try-now) is
+        correct.  Never raises -- and never touches the engine: weewxd's
+        shutdown does not wait for daemon threads."""
+        for norad in norads:
+            try:
+                assert self.sky.sat_dir is not None
+                os.makedirs(self.sky.sat_dir, exist_ok=True)
+                fetch_satellite_elements(norad, self.sky.sat_path(norad))
+                self._sat_retry_ts.pop(norad, None)
+                self._sat_retry_delay.pop(norad, None)
+                log.info('Fetched satellite elements for %d.' % norad)
+            except Exception as e:
+                delay = min(self._sat_retry_delay.get(norad, SAT_RETRY_BASE_SECS),
+                            float(SAT_REFRESH_SECS))
+                self._sat_retry_ts[norad] = time.time() + delay
+                self._sat_retry_delay[norad] = delay * 2
+                log.warning('Could not fetch satellite elements for %d (%s);'
+                            ' keeping the cached elements, next try in %d minutes.'
+                            % (norad, e, delay // 60))
 
 # Named stars available as report almanac tags (e.g., $almanac.rigel.rise)
 # unless disabled (stars = false in [Skyfield]).  Maps the tag name to the
@@ -123,7 +215,7 @@ class WxSkyfield(StdService):
 # stars: albereo, alcaid, sirrah, etc.).  Multi-word names use underscores
 # and diacritics are dropped, since a report tag must be an identifier
 # ($almanac.barnards_star, $almanac.kaus_australis).  The stars themselves
-# are read from wxskyfield_stars.dat, an excerpt of the Hipparcos Catalogue
+# are read from wxskyfield_stars.dat.gz, the complete Hipparcos Catalogue
 # (ESA SP-1200, 1997) that ships with this extension.  Any other Hipparcos
 # star can be addressed by number: $almanac.hip_57939.
 NAMED_STARS: Dict[str, int] = {
@@ -549,11 +641,13 @@ NAMED_STARS: Dict[str, int] = {
     'zubeneschamali'   : 74785,
 }
 
-# An excerpt of the Hipparcos Catalogue containing the stars in NAMED_STARS.
-# It is installed alongside wxskyfield.py (like the ephemeris), and its data
-# lines are unmodified hip_main.dat records, so a full hip_main.dat works in
-# its place.
-STAR_FILE = 'wxskyfield_stars.dat'
+# The complete Hipparcos Catalogue -- all 118,218 records of hip_main.dat,
+# gzipped and unmodified -- installed alongside wxskyfield.py (like the
+# ephemeris).  Through 1.19 this was a ~400-star excerpt and the full
+# catalog was a user-supplied download; as of 2.0 everyone has the whole
+# sky.  The scan is sequential and rare (once per need, cached for the
+# life of the engine), so the file is read straight through gzip.
+STAR_FILE = 'wxskyfield_stars.dat.gz'
 # The constellation line figures drawn by the Sky page's dome: per line one
 # polyline -- the IAU constellation abbreviation, then the Hipparcos numbers
 # of its vertices in draw order.  Distilled from the Stellarium project's
@@ -563,6 +657,56 @@ LINES_FILE = 'wxskyfield_lines.dat'
 # The Hipparcos catalog's positions are for epoch J1991.25.  This is that
 # epoch as a TT Julian date, matching skyfield.data.hipparcos.load_dataframe.
 HIPPARCOS_EPOCH_JD = 1721045.0 + 1991.25 * 365.25
+
+REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
+
+# ── satellites ───────────────────────────────────────────────────────────────
+# [Skyfield] [[Satellites]] maps tag names to NORAD catalog numbers
+# (iss = 25544); that one list drives both the report tags
+# ($almanac.iss.next_pass.rise) and the fetch list.  Orbital elements (TLEs)
+# are fetched per satellite from CelesTrak and cached as plain files,
+# wxskyfield_sat_<norad>.tle, in SAT_DIR_NAME under the station's SQLITE_ROOT
+# -- TLEs are already a file format Skyfield reads directly, staleness is
+# mtime, and `cat` works when debugging.  The service refreshes them on a
+# worker thread at STARTUP and each NEW_ARCHIVE_RECORD (weewxd's only
+# network access in this extension -- satellite_downloads = false turns it
+# off, leaving the files for the user to maintain).
+CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%d&FORMAT=TLE'
+SAT_DIR_NAME = 'wxskyfield'
+SAT_FILE_FORMAT = 'wxskyfield_sat_%d.tle'
+# CelesTrak identifies polite clients by software, so abuse reports can
+# reach the author; the repo URL does that.  Deliberately no per-machine
+# identifier: hostnames are often personal.
+SAT_USER_AGENT = 'weewx-skyfield/%s (+%s)' % (WXSKYFIELD_VERSION, REPO_URL)
+# Refresh cadence.  CelesTrak regenerates element sets about every two
+# hours; three is polite, and each install's archive-cycle phase spreads
+# the fleet's fetches.  A failed fetch retries sooner -- the next archive
+# cycle, doubling from five minutes up to this same cadence -- so a
+# recovered network refreshes quickly and CelesTrak is never hammered.
+SAT_REFRESH_SECS = 3 * 3600
+SAT_RETRY_BASE_SECS = 300
+# Elements whose epoch is older than this cannot be trusted for pass
+# times: plain SGP4 drift is only seconds at a week, but a reboost or
+# maneuver accumulates minutes of error per week after it -- missed-pass
+# territory.  Age is measured from the TLE epoch, never the file mtime (a
+# "successful" fetch of stale data must not reset the clock).  Past the
+# cutoff every satellite tag reports the unified no-usable-elements state:
+# empty ValueHelpers ("N/A"), None for the plain-value tags.
+SAT_MAX_ELEMENT_AGE_SECS = 7 * 86400
+# A pass is visible when the satellite is sunlit while the observer is in
+# at least civil twilight (sun below -6 degrees geometric, the
+# Heavens-Above convention), sampled at rise, culmination and set --
+# whole-pass sampling catches the mid-pass fade-out into Earth's shadow.
+# next_visible_pass additionally requires a culmination of at least 10
+# degrees (a go-watch recommendation, not a bare fact like next_pass).
+SAT_DARK_SUN_ALT_DEGREES = -6.0
+SAT_VISIBLE_MIN_CULMINATION_DEGREES = 10.0
+
+# Tag form addressing a LISTED satellite by number, e.g. $almanac.sat_25544.
+# Unlike hip_<number> (whose whole catalog is on disk), this is only an
+# alternate spelling for a satellite already in [[Satellites]] -- it never
+# triggers a fetch of an unlisted one.
+SAT_TAG_RE = re.compile(r'sat_(\d+)$')
 
 # Astronomical units per light year (IAU 2015 definitions).
 AU_PER_LIGHT_YEAR = 63241.077
@@ -682,6 +826,80 @@ def daylight_seconds(rise: Optional[float], set_: Optional[float],
     return 86400 if up_all_day() else 0
 
 
+def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
+    """(name, line1, line2) of the two-line element set for the given
+    satellite in text -- the wire format CelesTrak's CATNR query returns
+    and the cache files hold: an optional name line, then the '1 '/'2 '
+    element lines.  Raises ValueError when the text is not a TLE for
+    this catalog number (e.g. CelesTrak's "No GP data found" answer, a
+    truncated download, or a corrupt cache file)."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for i, line in enumerate(lines):
+        if line.startswith('1 ') and i + 1 < len(lines) and lines[i + 1].startswith('2 '):
+            try:
+                catnr = int(line[2:7])
+            except ValueError:
+                break
+            if catnr != norad:
+                raise ValueError('TLE is for catalog number %d, not %d' % (catnr, norad))
+            name = lines[i - 1] if i > 0 else 'NORAD %d' % norad
+            return name, line, lines[i + 1]
+    raise ValueError('no two-line element set found')
+
+
+def fetch_satellite_elements(norad: int, path: str, timeout: float = 15.0) -> None:
+    """Fetch the current TLE for the given NORAD catalog number from
+    CelesTrak into path.  The write is atomic (temp file, then rename)
+    and the payload is validated first, so the previous file survives
+    any failure -- serving slightly old elements always beats serving
+    none.  Raises on any failure; callers own the backoff."""
+    request = urllib.request.Request(CELESTRAK_URL % norad,
+                                     headers={'User-Agent': SAT_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = response.read().decode('ascii', 'replace')
+    tle_lines(payload, norad)
+    tmp_path = '%s.tmp' % path
+    with open(tmp_path, 'w') as f:
+        f.write(payload)
+    os.replace(tmp_path, path)
+
+
+def get_sat_dir(config_dict: Dict[str, Any]) -> str:
+    """The satellite element cache directory: SAT_DIR_NAME under the
+    station's SQLITE_ROOT (the conventional home for a WeeWX extension's
+    runtime-writable data; weewx's own manager joins WEEWX_ROOT the same
+    way, an absolute SQLITE_ROOT winning the join).  A MySQL-only
+    configuration has no SQLITE_ROOT and falls back to WEEWX_ROOT."""
+    weewx_root: str = config_dict.get('WEEWX_ROOT', '')
+    sqlite_root: str = (config_dict.get('DatabaseTypes', {})
+                        .get('SQLite', {}).get('SQLITE_ROOT', ''))
+    return os.path.join(weewx_root, sqlite_root or '.', SAT_DIR_NAME)
+
+
+def parse_satellites(skyfield_config_dict: Dict[str, Any]) -> Dict[str, int]:
+    """The [Skyfield] [[Satellites]] section as a tag-name -> NORAD number
+    map.  A bad entry disables only itself, loudly; a name that would
+    shadow an existing tag (a planet, a named star, or the hip_/sat_
+    number forms) is refused -- body dispatch checks those first, so the
+    satellite would silently never be served."""
+    satellites: Dict[str, int] = {}
+    for name, value in (skyfield_config_dict.get('Satellites', {}) or {}).items():
+        tag = str(name).lower()
+        try:
+            norad = int(str(value))
+        except ValueError:
+            log.error('Ignoring [Skyfield] [[Satellites]] entry %s = %r: the value'
+                      ' must be the satellite\'s NORAD catalog number.' % (name, value))
+            continue
+        if tag in EPHEMERIS_KEYS or tag in NAMED_STARS or HIP_TAG_RE.match(tag) \
+                or SAT_TAG_RE.match(tag) or tag in ('sun', 'earth'):
+            log.error('Ignoring [Skyfield] [[Satellites]] entry %s: the name is'
+                      ' already an almanac tag.' % name)
+            continue
+        satellites[tag] = norad
+    return satellites
+
+
 class InMemorySpiceKernel(skyfield.jpllib.SpiceKernel):
     """A SpiceKernel whose .bsp is read fully into memory (~16 MB for
     DE421) instead of memory-mapped by jplephem.  A mapped ephemeris kills
@@ -727,11 +945,27 @@ class Sky():
     handler here re-raises it (reraise_if_terminate) instead of logging
     it away -- otherwise weewx cannot stop."""
 
-    def __init__(self, user_root: str, load_stars: bool = False):
+    def __init__(self, user_root: str, load_stars: bool = False,
+                 satellites: Optional[Dict[str, int]] = None,
+                 sat_dir: Optional[str] = None):
         log.info("Skyfield version: %d.%d." % (skyfield.VERSION[0], skyfield.VERSION[1]))
 
         self.valid    : bool = False
         self.user_root: str  = user_root
+        # The configured satellites (tag name -> NORAD number) and their
+        # element cache directory.  Nothing is read here -- elements load
+        # lazily at tag time (satellite_elements), and no network is ever
+        # touched at startup: the service's archive-cycle worker owns the
+        # fetching.
+        self.satellites: Dict[str, int] = satellites or {}
+        self.sat_dir: Optional[str] = sat_dir
+        # Parsed elements keyed by NORAD number, tagged with the cache
+        # file's mtime so a refreshed file is picked up on the next tag
+        # evaluation; and the last usable/unusable state per satellite,
+        # so the age-cutoff warning fires once at each crossing rather
+        # than on every tag.
+        self._sat_cache: Dict[int, Tuple[Optional[float], Optional[Tuple[Any, float]]]] = {}
+        self._sat_usable: Dict[int, bool] = {}
         # Skyfield's constellation boundary map, loaded lazily on first
         # use by constellation_abbr_at (None: not yet tried; False: tried
         # and failed, don't retry).
@@ -842,9 +1076,8 @@ class Sky():
     def get_star_by_hip(self, hip: int) -> bool:
         """Load the star with the given Hipparcos number into self.stars
         under the name 'hip_<number>', serving $almanac.hip_57939 style tags
-        for any star in the available catalog (the bundled excerpt, or all
-        118,218 stars when a full hip_main.dat is installed).  Results,
-        including misses, are cached.  Returns whether the star is available."""
+        for any of the catalog's 118,218 stars.  Results, including misses,
+        are cached.  Returns whether the star is available."""
         if not self.load_stars:
             return False
         name = 'hip_%d' % hip
@@ -860,10 +1093,9 @@ class Sky():
         try:
             by_hip = Sky.load_stars_by_hip(self.user_root, {hip})
         except Exception as e:
-            # An unreadable catalog -- missing, permission-denied, or not
-            # text at all (a corrupt or still-compressed hip_main.dat raises
-            # UnicodeDecodeError) -- must degrade to a per-tag miss, never
-            # propagate into report generation.
+            # An unreadable catalog -- missing, permission-denied, or
+            # corrupt (bad gzip data raises mid-read) -- must degrade to a
+            # per-tag miss, never propagate into report generation.
             log.error('get_star_by_hip: could not read the star catalog: %s' % e)
             self.hip_misses.add(hip)
             return False
@@ -875,31 +1107,19 @@ class Sky():
 
     @staticmethod
     def load_named_stars(user_root: str) -> Dict[str, Tuple[Any, Optional[float]]]:
-        """Load the stars in NAMED_STARS from the Hipparcos catalog.  The
-        bundled excerpt covers exactly these stars (with records identical
-        to the full catalog's), so it is read even when a full hip_main.dat
-        is installed: scanning 118,218 records at every startup would buy
-        nothing."""
-        by_hip = Sky.load_stars_by_hip(user_root, set(NAMED_STARS.values()),
-                                       prefer_full_catalog=False)
+        """Load the stars in NAMED_STARS from the Hipparcos catalog (an
+        early-exit scan: the last named HIP sits well before the end of
+        the catalog, and the whole read costs a few hundred ms, once, at
+        engine startup)."""
+        by_hip = Sky.load_stars_by_hip(user_root, set(NAMED_STARS.values()))
         return {name: by_hip[hip] for name, hip in NAMED_STARS.items() if hip in by_hip}
 
     @staticmethod
-    def load_stars_by_hip(user_root: str, wanted_hips: set,
-                          prefer_full_catalog: bool = True) -> Dict[int, Tuple[Any, Optional[float]]]:
-        """Load the requested Hipparcos numbers from the star catalog.  By
-        default a full hip_main.dat, if present, is preferred, since it
-        serves every Hipparcos star, not just the named ones; either file
-        stands in for the other when only one is present."""
-        first, second = 'hip_main.dat', STAR_FILE
-        if not prefer_full_catalog:
-            first, second = second, first
-        path = '%s/%s' % (user_root, first)
-        if not os.path.exists(path):
-            path = '%s/%s' % (user_root, second)
-
+    def load_stars_by_hip(user_root: str, wanted_hips: set) -> Dict[int, Tuple[Any, Optional[float]]]:
+        """Load the requested Hipparcos numbers from the star catalog.
+        The scan stops as soon as every requested star has been seen."""
         by_hip: Dict[int, Tuple[Any, Optional[float]]] = {}
-        with open(path) as f:
+        with gzip.open('%s/%s' % (user_root, STAR_FILE), 'rt') as f:
             for line in f:
                 fields = line.split('|')
                 try:
@@ -954,26 +1174,21 @@ class Sky():
                 parse_float(fields[13]), parse_float(fields[11]), magnitude)
 
     def catalog_stars(self, mag_limit: float) -> Optional[Tuple[List[int], Any, List[float]]]:
-        """Every star in a full, user-installed hip_main.dat that is at
-        least mag_limit bright: (hip numbers, ONE Star carrying all their
-        coordinates as arrays, magnitudes) -- or None when only the
-        bundled named-star excerpt is installed, or stars are disabled,
-        or the catalog cannot be read.  The Sky page's dome uses this to
-        plot the whole visible sky; the single array-valued Star makes
-        the per-render cost one vectorized observe instead of thousands
-        of scalar ones.  The scan reads all 118,218 records, so results
-        are cached for the life of the engine; an extension install
-        replacing the file under a running weewxd is served from this
-        cache, by design.  A missing file is NOT cached: the user may
-        drop a catalog in later."""
+        """Every catalog star at least mag_limit bright: (hip numbers, ONE
+        Star carrying all their coordinates as arrays, magnitudes) -- or
+        None when stars are disabled or the catalog cannot be read.  The
+        Sky page's dome uses this to plot the whole visible sky; the
+        single array-valued Star makes the per-render cost one vectorized
+        observe instead of thousands of scalar ones.  The scan reads all
+        118,218 records, so results are cached for the life of the
+        engine; an extension install replacing the file under a running
+        weewxd is served from this cache, by design."""
         if not self.load_stars:
             return None
         key = round(mag_limit, 3)
         if key in self._catalog_fields:
             return self._catalog_fields[key]
-        path = '%s/hip_main.dat' % self.user_root
-        if not os.path.exists(path):
-            return None
+        path = '%s/%s' % (self.user_root, STAR_FILE)
         hips: List[int] = []
         mags: List[float] = []
         ra_h: List[float] = []
@@ -982,7 +1197,7 @@ class Sky():
         pm_dec: List[float] = []
         plx: List[float] = []
         try:
-            with open(path) as f:
+            with gzip.open(path, 'rt') as f:
                 for line in f:
                     fields = line.split('|')
                     # Test magnitude before the full astrometric parse:
@@ -1007,11 +1222,10 @@ class Sky():
                     pm_dec.append(pd)
                     plx.append(px)
         except Exception as e:
-            # An unreadable catalog (permission-denied, or not text at all:
-            # a corrupt or still-compressed hip_main.dat raises
-            # UnicodeDecodeError) must degrade to the named-star dome,
-            # never into report generation.  Cached: retrying every report
-            # cycle would log the same error forever.
+            # An unreadable catalog (missing, permission-denied, or
+            # corrupt: bad gzip data raises mid-read) must degrade to the
+            # named-star dome, never into report generation.  Cached:
+            # retrying every report cycle would log the same error forever.
             log.error('catalog_stars: could not read the star catalog: %s' % e)
             self._catalog_fields[key] = None
             return None
@@ -1064,12 +1278,9 @@ class Sky():
     def constellation_stars(self) -> Optional[Tuple[List[int], Any]]:
         """Every distinct constellation line vertex as (its Hipparcos
         numbers, ONE Star carrying all their coordinates as arrays) --
-        or None when the lines or the star catalog are unavailable.  The
-        bundled excerpt carries a record for every vertex, so it is read
-        even when a full hip_main.dat is installed (the same reasoning
-        as load_named_stars); a vertex missing from the catalog drops
-        only the segments that touch it.  Cached for the life of the
-        engine."""
+        or None when the lines or the star catalog are unavailable.  A
+        vertex missing from the catalog drops only the segments that
+        touch it.  Cached for the life of the engine."""
         if self._constellation_stars is False:
             return None
         if self._constellation_stars is not None:
@@ -1079,8 +1290,7 @@ class Sky():
             return None
         wanted = {hip for _abbr, hips in polylines for hip in hips}
         try:
-            by_hip = Sky.load_stars_by_hip(self.user_root, wanted,
-                                           prefer_full_catalog=False)
+            by_hip = Sky.load_stars_by_hip(self.user_root, wanted)
         except Exception as e:
             log.error('constellation_stars: could not read the star catalog: %s' % e)
             self._constellation_stars = False
@@ -1098,6 +1308,66 @@ class Sky():
             epoch=HIPPARCOS_EPOCH_JD)
         self._constellation_stars = (hips, star)
         return self._constellation_stars
+
+    def sat_norad(self, name: str) -> Optional[int]:
+        """The NORAD number a body name refers to: a configured
+        [[Satellites]] tag name, or the sat_<number> spelling of a LISTED
+        satellite (never a trigger to serve an unlisted one).  None when
+        the name is not a satellite."""
+        norad = self.satellites.get(name)
+        if norad is not None:
+            return norad
+        match = SAT_TAG_RE.match(name)
+        if match:
+            norad = int(match.group(1))
+            if norad in self.satellites.values():
+                return norad
+        return None
+
+    def sat_path(self, norad: int) -> str:
+        return os.path.join(self.sat_dir or '.', SAT_FILE_FORMAT % norad)
+
+    def satellite_elements(self, norad: int) -> Optional[Tuple[Any, float]]:
+        """The satellite's orbital elements from its cache file, as
+        (skyfield EarthSatellite, TLE epoch timestamp) -- or None when
+        the file is missing or not a usable TLE.  Results are cached
+        against the file's mtime, so the fetch worker replacing the file
+        is picked up on the next tag evaluation, and a missing or
+        corrupt file is not re-read (or re-logged) every tag.  Never
+        raises: a broken cache file costs only this satellite."""
+        try:
+            mtime: Optional[float] = os.stat(self.sat_path(norad)).st_mtime
+        except OSError:
+            mtime = None
+        cached = self._sat_cache.get(norad)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        elements: Optional[Tuple[Any, float]] = None
+        if mtime is not None:
+            try:
+                with open(self.sat_path(norad)) as f:
+                    name, line1, line2 = tle_lines(f.read(), norad)
+                sat = skyfield.api.EarthSatellite(line1, line2, name, self.ts)
+                elements = (sat, sat.epoch.utc_datetime().timestamp())
+            except Exception as e:
+                log.error('satellite_elements: could not load %s: %s'
+                          % (self.sat_path(norad), e))
+        self._sat_cache[norad] = (mtime, elements)
+        return elements
+
+    def note_sat_usable(self, norad: int, usable: bool) -> None:
+        """Track each satellite's usable/unusable state so the age-cutoff
+        crossing (and the recovery) is logged once, not per tag."""
+        previous = self._sat_usable.get(norad)
+        if previous == usable:
+            return
+        self._sat_usable[norad] = usable
+        if not usable:
+            log.warning('Satellite %d has no usable elements (missing, unreadable,'
+                        ' or epoch older than %d days); its tags will report N/A.'
+                        % (norad, SAT_MAX_ELEMENT_AGE_SECS // 86400))
+        elif previous is not None:
+            log.info('Satellite %d has usable elements again.' % norad)
 
     @staticmethod
     def get_weewx_config_info(config_dict: Dict[str, Any]) -> str:
@@ -1397,14 +1667,13 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         return self.ts.from_datetime(datetime.fromtimestamp(time_ts, timezone.utc))
 
     def star_field(self, almanac_obj, mag_limit: float) -> Optional[List[Tuple[int, float, float, float]]]:
-        """Every star of a full, user-installed hip_main.dat that is at
-        least mag_limit bright and above the horizon, as (hip, azimuth
-        degrees, altitude degrees, magnitude) tuples -- or None when only
-        the bundled named-star excerpt is installed (the Sky page's dome
-        then falls back to the named stars).  Alt/az are computed exactly
-        as the binder's .alt/.az -- apparent, refracted with the almanac's
-        temperature and pressure -- in one vectorized observe covering the
-        whole field."""
+        """Every catalog star at least mag_limit bright and above the
+        horizon, as (hip, azimuth degrees, altitude degrees, magnitude)
+        tuples -- or None when the catalog is disabled or unreadable (the
+        Sky page's dome then falls back to the named stars).  Alt/az are
+        computed exactly as the binder's .alt/.az -- apparent, refracted
+        with the almanac's temperature and pressure -- in one vectorized
+        observe covering the whole field."""
         field = self.sky.catalog_stars(mag_limit)
         if field is None:
             return None
@@ -1446,7 +1715,7 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
                            formatter=almanac_obj.formatter,
                            converter=almanac_obj.converter)
 
-    def direction_value(self, almanac_obj, degrees: float) -> ValueHelper:
+    def direction_value(self, almanac_obj, degrees: Optional[float]) -> ValueHelper:
         return ValueHelper(ValueTuple(degrees, 'degree_compass', 'group_direction'),
                            context='ephem_day',
                            formatter=almanac_obj.formatter,
@@ -1720,10 +1989,13 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             return self.direction_value(almanac_obj, degrees)
         elif attr in self.sky.orbs or attr in self.sky.stars:
             return SkyfieldAlmanacBinder(self, almanac_obj, attr)
+        # A configured satellite, by its [[Satellites]] tag name or its
+        # sat_<norad> spelling ($almanac.iss, $almanac.sat_25544).
+        elif self.sky.sat_norad(attr) is not None:
+            return SkyfieldAlmanacBinder(self, almanac_obj, attr)
 
         # Any Hipparcos star by number: $almanac.hip_57939 (works for every
-        # star in the available catalog; install a full hip_main.dat in the
-        # user directory to go beyond the bundled named-star excerpt).
+        # one of the catalog's 118,218 stars).
         hip_match = HIP_TAG_RE.match(attr)
         if hip_match:
             hip = int(hip_match.group(1))
@@ -1750,7 +2022,13 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         else (e.g., PyEphem Body objects) is deferred to the next almanac
         rather than crashed on."""
         try:
-            if isinstance(body1, SkyfieldAlmanacBinder) and isinstance(body2, SkyfieldAlmanacBinder):
+            if (isinstance(body1, SkyfieldAlmanacBinder) and isinstance(body2, SkyfieldAlmanacBinder)
+                    and not body1.is_satellite and not body2.is_satellite):
+                # A satellite binder cannot take this exact-vector path:
+                # an EarthSatellite is Earth-centered, and skyfield only
+                # observe()s from the barycenter.  Satellites fall through
+                # to the coordinate path below, whose geocentric radec has
+                # a satellite branch.
                 p1 = self.sky.earth.at(self.skyfield_time(body1.almanac.time_ts)).observe(body1.target_body())
                 p2 = self.sky.earth.at(self.skyfield_time(body2.almanac.time_ts)).observe(body2.target_body())
                 return Radians(p1.separation_from(p2).radians)
@@ -1776,6 +2054,39 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
         if isinstance(body, (tuple, list)):
             return body
         return None
+
+
+class SatellitePass:
+    """One satellite pass, as $almanac.<sat>.next_pass and
+    .next_visible_pass report it.  Every attribute is a plain,
+    already-computed value -- rise, culmination and set as time
+    ValueHelpers, max_altitude a group_angle ValueHelper, the three
+    azimuths degree_compass ValueHelpers (so .ordinal_compass comes
+    free), duration a group_deltatime ValueHelper, visible a bool --
+    never a method: consumers that walk attribute chains with plain
+    getattr (loopdata almanac fields) must resolve them without
+    Cheetah's autocall.  With no qualifying pass, or no usable elements,
+    every ValueHelper is empty ("N/A") and visible is None."""
+
+    def __init__(self, binder: 'SkyfieldAlmanacBinder',
+                 data: Optional[Dict[str, Any]]):
+        almanac_type, a = binder.almanac_type, binder.almanac
+        d: Dict[str, Any] = data or {}
+        self.rise = almanac_type.time_value(a, d.get('rise'), 'ephem_day')
+        self.culmination = almanac_type.time_value(a, d.get('culmination'), 'ephem_day')
+        self.set = almanac_type.time_value(a, d.get('set'), 'ephem_day')
+        max_altitude = d.get('max_altitude')
+        self.max_altitude = ValueHelper(
+            ValueTuple(math.radians(max_altitude) if max_altitude is not None else None,
+                       'radian', 'group_angle'),
+            context='ephem_day', formatter=a.formatter, converter=a.converter)
+        self.rise_azimuth = almanac_type.direction_value(a, d.get('rise_azimuth'))
+        self.culmination_azimuth = almanac_type.direction_value(a, d.get('culmination_azimuth'))
+        self.set_azimuth = almanac_type.direction_value(a, d.get('set_azimuth'))
+        self.duration = ValueHelper(
+            ValueTuple(d['set'] - d['rise'] if d else None, 'second', 'group_deltatime'),
+            context='hour', formatter=a.formatter, converter=a.converter)
+        self.visible: Optional[bool] = d.get('visible') if d else None
 
 
 class SkyfieldAlmanacBinder:
@@ -1808,7 +2119,10 @@ class SkyfieldAlmanacBinder:
         self.almanac_type = almanac_type
         self.almanac = almanac
         self.heavenly_body = heavenly_body
-        self.is_star = heavenly_body not in almanac_type.sky.orbs
+        self.norad: Optional[int] = almanac_type.sky.sat_norad(heavenly_body)
+        self.is_satellite = self.norad is not None
+        self.is_star = (not self.is_satellite
+                        and heavenly_body not in almanac_type.sky.orbs)
         self.use_center = False
 
     def __call__(self, use_center: bool = False):
@@ -1820,8 +2134,17 @@ class SkyfieldAlmanacBinder:
         raise AttributeError(self.heavenly_body)
 
     def target_body(self) -> Any:
-        """The skyfield object observed: a planet vector or a Star."""
+        """The skyfield object observed: a planet vector, a Star, or an
+        EarthSatellite (which raises like a missing attribute when its
+        elements are unusable -- callers landing here for a satellite,
+        e.g. separation, have no N/A convention to fall back on)."""
         sky = self.almanac_type.sky
+        if self.is_satellite:
+            assert self.norad is not None
+            elements = sky.satellite_elements(self.norad)
+            if elements is None:
+                raise AttributeError(self.heavenly_body)
+            return elements[0]
         if self.is_star:
             return sky.stars[self.heavenly_body][0]
         return sky.orbs[self.heavenly_body]
@@ -1925,6 +2248,13 @@ class SkyfieldAlmanacBinder:
     @property
     def visible(self) -> ValueHelper:
         """How long the body is above the horizon on the almanac's day."""
+        if self.is_satellite:
+            # Not part of a satellite's tag surface (that is the pass
+            # family).  A property shadows __getattr__, so decline here;
+            # the raise routes the lookup through __getattr__, whose
+            # satellite branch raises the same clean AttributeError as
+            # any other unsupported satellite attribute.
+            raise AttributeError('visible')
         sod_ts = self.start_of_day_ts()
         eod_ts = sod_ts + 86400
         rise = self.find_rise_set(True, sod_ts, eod_ts)
@@ -1968,6 +2298,11 @@ class SkyfieldAlmanacBinder:
     def _geocentric_radec_degrees(self) -> Tuple[float, float]:
         sky = self.almanac_type.sky
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
+        if self.is_satellite:
+            # An EarthSatellite is already a geocentric vector; there is
+            # no light-time iteration to observe() through.
+            ra, dec, _ = self.target_body().at(t).radec('date')
+            return ra._degrees, dec.degrees
         ra, dec, _ = sky.earth.at(t).observe(self.target_body()).apparent().radec('date')
         return ra._degrees, dec.degrees
 
@@ -2249,6 +2584,13 @@ class SkyfieldAlmanacBinder:
             return self.pyephem_fallback(attr)
 
     def _evaluate(self, attr: str):
+        # A satellite's tag surface is its own -- positions, sunlit, the
+        # pass family, the element diagnostics -- and nothing else applies:
+        # there is no PyEphem fallback to defer to (the built-in almanac
+        # never served satellites), so anything unrecognized raises cleanly.
+        if self.is_satellite and attr not in ('name', 'label'):
+            return self._satellite_attr(attr)
+
         # For a star, attributes involving sun-body geometry make no sense.
         # PyEphem's own star objects raise AttributeError for these, and the
         # fallback reproduces that behavior.
@@ -2374,6 +2716,209 @@ class SkyfieldAlmanacBinder:
         # deprecated rise_time family).  Fall back to the built-in PyEphem
         # almanac if PyEphem is installed.
         return self.pyephem_fallback(attr)
+
+    # ── satellites ───────────────────────────────────────────────────────
+
+    def _satellite_attr(self, attr: str):
+        """Serve a satellite tag.  Missing, unparseable, or too-old
+        elements (epoch beyond the seven-day cutoff, measured against the
+        almanac's time) all collapse to one no-usable-elements state:
+        empty ValueHelpers ("N/A"), None for the plain-value tags -- never
+        a silently wrong pass time.  Only the element diagnostics
+        (elements_epoch, elements_age) ignore the cutoff: they are how a
+        user sees WHY everything else reads N/A."""
+        almanac_type = self.almanac_type
+        a = self.almanac
+        sky = almanac_type.sky
+        assert self.norad is not None
+        elements = sky.satellite_elements(self.norad)
+        epoch_ts = elements[1] if elements is not None else None
+        if attr == 'elements_epoch':
+            return almanac_type.time_value(a, epoch_ts, 'ephem_year')
+        if attr == 'elements_age':
+            age = a.time_ts - epoch_ts if epoch_ts is not None else None
+            return ValueHelper(ValueTuple(age, 'second', 'group_deltatime'),
+                               context='hour', formatter=a.formatter,
+                               converter=a.converter)
+        usable = (epoch_ts is not None
+                  and a.time_ts - epoch_ts <= SAT_MAX_ELEMENT_AGE_SECS)
+        sky.note_sat_usable(self.norad, usable)
+        if not usable:
+            elements = None
+
+        if attr in ('next_pass', 'next_visible_pass'):
+            data = None
+            if elements is not None:
+                passes = self._sat_passes(elements[0], elements[1])
+                data = self._next_sat_pass(passes, visible_only=(attr == 'next_visible_pass'))
+            return SatellitePass(self, data)
+        if attr in ('rise', 'transit', 'set'):
+            # For a satellite these are the NEXT occurrence from the
+            # almanac's time (transit meaning culmination), not the
+            # planets' anytime-today verbs: passes are minutes long and
+            # "today's" is rarely the interesting one.
+            event_ts = None
+            if elements is not None:
+                event_key = {'rise': 'rise', 'transit': 'culmination', 'set': 'set'}[attr]
+                passes = self._sat_passes(elements[0], elements[1])
+                event_ts = next((p[event_key] for p in passes
+                                 if p[event_key] > a.time_ts), None)
+            return almanac_type.time_value(a, event_ts, 'ephem_day')
+        if attr == 'sunlit':
+            if elements is None:
+                return None
+            return self._sat_position(elements[0], elements[1])['sunlit']
+        if attr == 'distance':
+            # Slant range, observer to satellite.
+            distance_km = (self._sat_position(elements[0], elements[1])['distance_km']
+                           if elements is not None else None)
+            return ValueHelper(ValueTuple(distance_km, 'km', 'group_distance'),
+                               context='ephem_day', formatter=a.formatter,
+                               converter=a.converter)
+        if (attr in SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES
+                and SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES[attr][0]
+                in ('az', 'alt', 'ra', 'dec')):
+            angle_key, flavor = SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES[attr]
+            degrees = (self._sat_position(elements[0], elements[1])[angle_key]
+                       if elements is not None else None)
+            if flavor == 'direction':
+                return almanac_type.direction_value(a, degrees)
+            return ValueHelper(ValueTuple(
+                math.radians(degrees) if degrees is not None else None,
+                'radian', 'group_angle'),
+                context='ephem_day', formatter=a.formatter, converter=a.converter)
+        if attr in ('az', 'alt', 'ra', 'dec'):
+            if elements is None:
+                return None
+            return self._sat_position(elements[0], elements[1])[attr]
+        raise AttributeError("'%s' object has no attribute '%s'"
+                             % (self.heavenly_body.capitalize(), attr))
+
+    def _sat_position(self, sat: Any, epoch_ts: float) -> Dict[str, Any]:
+        """The satellite's topocentric numbers at the almanac's time, in
+        one cached computation: apparent alt/az (refracted with the
+        almanac's temperature and pressure, like every body's .alt/.az),
+        topocentric right ascension/declination of date, slant range, and
+        whether the satellite is sunlit.  An EarthSatellite is differenced
+        from the observer (Skyfield's satellite form; there is no
+        light-time iteration to observe() through)."""
+        a = self.almanac
+        key = ('sat_pos', self.norad, round(epoch_ts), a.time_ts,
+               a.lat, a.lon, a.altitude, a.temperature, a.pressure)
+        return _cached(_POS_CACHE, _POS_CACHE_CAP, key,
+                       lambda: self._compute_sat_position(sat))
+
+    def _compute_sat_position(self, sat: Any) -> Dict[str, Any]:
+        sky = self.almanac_type.sky
+        a = self.almanac
+        geographic, _ = self.almanac_type.location(a)
+        t = self.almanac_type.skyfield_time(a.time_ts)
+        topocentric = (sat - geographic).at(t)
+        alt, az, distance = topocentric.altaz(temperature_C=a.temperature,
+                                              pressure_mbar=a.pressure)
+        ra, dec, _ = topocentric.radec('date')
+        return {'alt': alt.degrees, 'az': az.degrees,
+                'ra': ra._degrees, 'dec': dec.degrees,
+                'distance_km': distance.km,
+                'sunlit': bool(sat.at(t).is_sunlit(sky.planets))}
+
+    def _sat_passes(self, sat: Any, epoch_ts: float) -> List[Dict[str, Any]]:
+        """Every pass in the elements' validity window -- a day before the
+        TLE epoch through the seven-day age cutoff; never searching times
+        the elements cannot be trusted for -- computed once per element
+        set, location and horizon, and cached (the seven-day SGP4 sweep
+        is milliseconds, but loopdata asks every loop packet).  The
+        horizon is GEOMETRIC (default 0, overridable via the existing
+        $almanac(horizon=10) argument): refraction is irrelevant to
+        satellite watching, per the USNO-over-PyEphem policy."""
+        a = self.almanac
+        horizon = float(a.horizon)
+        key = ('sat_passes', self.norad, round(epoch_ts), a.lat, a.lon,
+               a.altitude, round(horizon / _HORIZON_QUANTUM_DEGREES))
+        return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
+                       lambda: self._compute_sat_passes(sat, epoch_ts, horizon))
+
+    def _compute_sat_passes(self, sat: Any, epoch_ts: float,
+                            horizon: float) -> List[Dict[str, Any]]:
+        almanac_type = self.almanac_type
+        sky = almanac_type.sky
+        geographic, observer = almanac_type.location(self.almanac)
+        t0 = almanac_type.skyfield_time(epoch_ts - 86400)
+        t1 = almanac_type.skyfield_time(epoch_ts + SAT_MAX_ELEMENT_AGE_SECS)
+        times, events = sat.find_events(geographic, t0, t1,
+                                        altitude_degrees=horizon)
+        stamps = [t.utc_datetime().timestamp() for t in times]
+        # Group the event stream into rise -> culmination(s) -> set.  A
+        # pass already in progress at the window's edge (no rise event) is
+        # dropped: the window starts a day before the epoch, so no
+        # queryable pass is lost.  A satellite that never crosses the
+        # horizon (geostationary, or HST from high latitudes with a high
+        # horizon argument) yields no events and an empty list.
+        raw: List[Tuple[float, List[float], float]] = []
+        rise_ts: Optional[float] = None
+        culm_ts: List[float] = []
+        for stamp, event in zip(stamps, events):
+            if event == 0:
+                rise_ts, culm_ts = stamp, []
+            elif event == 1:
+                culm_ts.append(stamp)
+            elif rise_ts is not None and culm_ts:
+                raw.append((rise_ts, culm_ts, stamp))
+                rise_ts, culm_ts = None, []
+        if not raw:
+            return []
+        # One vectorized sweep answers every per-event question: geometric
+        # altitude and azimuth, whether the satellite is sunlit, and how
+        # dark the observer's sky is (sun below -6 degrees geometric,
+        # civil twilight, the Heavens-Above convention).  A pass is
+        # visible when ANY of its sampled instants qualifies -- sampling
+        # the whole pass catches the mid-pass fade into Earth's shadow
+        # that a culmination-only test misclassifies.
+        all_stamps = [s for rise, culms, set_ in raw
+                      for s in [rise] + culms + [set_]]
+        t_all = sky.ts.from_datetimes(
+            [datetime.fromtimestamp(s, timezone.utc) for s in all_stamps])
+        alt, az, _ = (sat - geographic).at(t_all).altaz()
+        sunlit = sat.at(t_all).is_sunlit(sky.planets)
+        sun_alt, _, _ = observer.at(t_all).observe(sky.sun).apparent().altaz()
+        alt_d, az_d, sun_d = alt.degrees, az.degrees, sun_alt.degrees
+        passes: List[Dict[str, Any]] = []
+        base = 0
+        for rise, culms, set_ in raw:
+            idx = list(range(base, base + len(culms) + 2))
+            base += len(idx)
+            # The culmination: the highest, when find_events reports more
+            # than one for a single pass.
+            c = max(idx[1:-1], key=lambda k: alt_d[k])
+            passes.append({
+                'rise': rise, 'culmination': all_stamps[c], 'set': set_,
+                'max_altitude': float(alt_d[c]),
+                'rise_azimuth': float(az_d[idx[0]]),
+                'culmination_azimuth': float(az_d[c]),
+                'set_azimuth': float(az_d[idx[-1]]),
+                'visible': any(bool(sunlit[k]) and sun_d[k] < SAT_DARK_SUN_ALT_DEGREES
+                               for k in idx),
+            })
+        return passes
+
+    def _next_sat_pass(self, passes: List[Dict[str, Any]],
+                       visible_only: bool) -> Optional[Dict[str, Any]]:
+        """The next pass from the almanac's time.  A pass in progress IS
+        the next pass (rise <= now < set: the countdown rolls into
+        "overhead now, sets in three minutes").  The visible variant adds
+        the go-watch bar: a qualifying visibility sample and a
+        culmination of at least 10 degrees; plain next_pass is the
+        unfiltered fact."""
+        time_ts = self.almanac.time_ts
+        for p in passes:
+            if p['set'] <= time_ts:
+                continue
+            if visible_only and not (
+                    p['visible'] and
+                    p['max_altitude'] >= SAT_VISIBLE_MIN_CULMINATION_DEGREES):
+                continue
+            return p
+        return None
 
 
 def register_almanac(sky: Sky) -> bool:

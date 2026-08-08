@@ -36,6 +36,14 @@ LONGITUDE  = -122.143
 ALTITUDE_M = 9.0
 TIME_TS    = 1750532400      # 2025-06-21 12:00:00 PDT
 GAP_TS     = 1785178800      # 2026-07-27 12:00:00 PDT (moon transits ~midnight)
+PASS_TS    = 1750533112      # culmination of the ISS's (invisible) noon pass
+SHADOW_TS  = 1750503830      # ISS 29° up pre-dawn 2025-06-21, in Earth's shadow
+
+# Satellite element fixtures, shared with test_almanac.py: the ISS and
+# Tiangong TLEs as captured 2025-06-21, so the page's satellite panel and
+# dome arc pin deterministically.
+SAT_DATA_DIR = os.path.join(TEST_DIR, 'data')
+SATELLITES = {'iss': 25544, 'tiangong': 48274}
 
 # The footer links the extension's name to the manual, in every language.
 LINKED_NAME = ('<a href="%s">weewx-skyfield</a>'
@@ -44,7 +52,8 @@ LINKED_NAME = ('<a href="%s">weewx-skyfield</a>'
 
 @pytest.fixture(scope='module')
 def sky():
-    s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=True)
+    s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=True,
+                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
     assert s.is_valid()
     return s
 
@@ -240,7 +249,8 @@ class TestPanels:
                                                converter=weewx.units.Converter(groups))
             for method in ('header_sub', 'countdown_html', 'moon_svg', 'dome_svg',
                            'ribbons_svg', 'orrery_svg', 'analemma_svg', 'sunpath_svg',
-                           'daylength_svg', 'lunation_svg', 'chips_html', 'table_html'):
+                           'daylength_svg', 'lunation_svg', 'chips_html', 'table_html',
+                           'satellites_html'):
                 # A fresh SkyPage per render: the per-page memo is keyed on
                 # the almanac's time, which both almanacs share.
                 want = getattr(wxskyfield_sky.SkyPage(), method)(plain)
@@ -292,38 +302,26 @@ class TestPanels:
 
 
 class TestCatalogDome:
-    """With a full hip_main.dat installed the dome plots every catalog
-    star to star_mag_limit -- named or not -- while labels stay on named
-    stars; without one it keeps the named-star chart."""
+    """The dome plots every catalog star to star_mag_limit -- named or
+    not -- while labels stay on named stars.  Since 2.0 the complete
+    Hipparcos catalog ships with the extension, so this is the dome
+    everyone gets."""
 
-    @pytest.fixture()
-    def full_almanac(self, tmp_path):
-        from test_almanac import make_full_catalog_root
-        s = wxskyfield.Sky(make_full_catalog_root(tmp_path), load_stars=True)
-        assert s.is_valid()
-        with saved_almanacs():
-            assert wxskyfield.register_almanac(s)
-            yield weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
-                                        formatter=weewx.units.get_default_formatter())
-
-    def test_unnamed_stars_plotted_never_labeled(self, full_almanac):
-        page = wxskyfield_sky.SkyPage({'star_mag_limit': '5.0'})
-        svg = page.dome_svg(full_almanac)
+    def test_unnamed_stars_plotted_never_labeled(self, almanac, page):
+        svg = page.dome_svg(almanac)
         assert_balanced(svg)
         # Gamma Cas (HIP 4427, mag 2.15, circumpolar here) has no
-        # IAU-CSN/PyEphem name: a dot with a HIP tooltip, never a label.
+        # IAU-CSN/PyEphem name: a dot with a HIP tooltip, never a label
+        # -- at the DEFAULT settings, the star Jacques missed is simply
+        # there.
         assert 'HIP 4427' in svg
         assert not re.search(r'<text[^>]*>HIP \d', svg)
         assert 'starlab' in svg              # named stars still label
 
-    def test_default_limit_includes_gamma_cas(self, full_almanac, page):
-        # 2.15 is brighter than the default 2.6 limit: the star Jacques
-        # missed appears with no settings at all once the catalog is in.
-        assert 'HIP 4427' in page.dome_svg(full_almanac)
-
-    def test_raised_limit_adds_stars(self, full_almanac):
-        few = wxskyfield_sky.SkyPage().dome_svg(full_almanac)
-        many = wxskyfield_sky.SkyPage({'star_mag_limit': '5.0'}).dome_svg(full_almanac)
+    def test_lowered_limit_restores_sparse_chart(self, almanac):
+        few = wxskyfield_sky.SkyPage({'star_mag_limit': '2.6'}).dome_svg(almanac)
+        many = wxskyfield_sky.SkyPage().dome_svg(almanac)
+        # The pre-2.0 defaults remain the escape hatch to the sparse look.
         assert many.count('<circle') > few.count('<circle')
 
 
@@ -369,7 +367,11 @@ class TestConstellationDome:
                 TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
                 formatter=weewx.units.get_default_formatter(),
                 texts={'Constellations': {'UMi': 'Kleiner Bär'}})
-            svg = wxskyfield_sky.SkyPage().dome_svg(alm)
+            # The sparse pre-2.0 star settings: this test is about the
+            # translation plumbing, and at the dense defaults Ursa
+            # Major's label legitimately yields to a star label.
+            svg = wxskyfield_sky.SkyPage({'star_mag_limit': '2.6',
+                                          'star_label_mag': '1.1'}).dome_svg(alm)
         # UMi reads its [Almanac] [[Constellations]] translation; an
         # untranslated constellation keeps its Latin name.
         assert '>Kleiner Bär</text>' in svg
@@ -386,6 +388,202 @@ class TestConstellationDome:
             svg = page.dome_svg(alm)
         assert_balanced(svg)
         assert '<polyline' not in svg
+
+
+class TestSatellitePanel:
+    """The satellite rail panel and the Next Visible Pass chart (2.0): the
+    anticipation half of the satellite feature.  One row per configured
+    satellite giving its next VISIBLE pass; the soonest of those passes
+    charted on its own single-epoch sky (the sky at the pass's
+    culmination -- the dome draws no future arc); and a dome position
+    marker only when a satellite is above the horizon at generation
+    time."""
+
+    def test_rows_give_next_visible_pass(self, almanac, page):
+        html = page.satellites_html(almanac)
+        assert_balanced(html)
+        assert html.count('class="chip"') == 2
+        # The ISS: the next morning's dark-sky pass, 15 hours out from
+        # the fixture noon.  (ISS spelling needs the [Almanac] texts a
+        # real report supplies; bare almanacs title-case the tag name.)
+        assert 'Iss' in html
+        assert 'Jun 22 03:11 · in 15 h' in html
+        assert 'appears SSW · peaks 19° SE · disappears ENE · 10 min' in html
+        # Tiangong crosses all week but never visibly: the honest dash.
+        assert 'no visible pass in the coming week' in html
+
+    def test_has_satellites(self, almanac, page):
+        assert page.has_satellites() is True
+
+    def test_satellite_names_public(self, almanac, page):
+        """satellite_names() is PUBLIC contract: embedding skins enumerate
+        the configured satellites through it (weewx-celestial 8.0 builds
+        its roster and live layer from the list), config order preserved."""
+        assert page.satellite_names() == ['iss', 'tiangong']
+
+    def test_no_satellites_hides_everything(self, page):
+        """A station with no [[Satellites]]: the template guard hides the
+        section, and the dome draws no arc and no marker."""
+        plain = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                               load_stars=False)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(plain)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert page.has_satellites() is False
+            assert page.satellite_names() == []
+            assert page.satellites_html(alm) == ''
+            assert page.pass_chart_html(alm) == ''
+            svg = page.dome_svg(alm)
+        assert 'satlab' not in svg
+
+    def test_pass_chart_draws_soonest_visible_pass(self, almanac, page):
+        """The Next Visible Pass chart: the sky at the pass's culmination with
+        the arc across it (clipped, tooltipped, rise and set times at
+        the ends -- the 1.10 moon-curve idiom), a dated head line
+        (2025-06-22 is a Sunday), and the chart-epoch satellite loop
+        putting the ISS's own dot at the peak of its arc.  That dot is
+        the HOLLOW ring: this morning pass rises in Earth's shadow and
+        exits it at 03:17, just after culmination -- the chart honestly
+        shows the pass flaring into view mid-sky, not at the horizon."""
+        html = page.pass_chart_html(almanac)
+        assert_balanced(html)
+        assert '<span class="passname">Iss</span>' in html
+        assert 'Sun Jun 22 · 03:11 → 03:21 · peak 19°' in html
+        assert '<title>Iss pass — 03:11 → 03:21, peak 19°</title>' in html
+        assert '>03:11</text>' in html and '>03:21</text>' in html
+        assert '<g class="dome-body" data-body="iss" data-sunlit="0">' in html
+        assert 'alt 19.4°, az 130.2° — in shadow' in html
+        assert 'class="satlab"' in html
+
+    def test_dome_shows_only_the_current_sky(self, almanac, page):
+        """The dome draws no future arc as of the pass chart's arrival:
+        an undated future track on the now-sky read as tonight's, and
+        mixed epochs on one chart drew a sky that will never exist.  No
+        track group, no arc tooltip, and no marker while the ISS is
+        below the horizon at the fixture noon."""
+        svg = page.dome_svg(almanac)
+        assert_balanced(svg)
+        assert 'dome-track' not in svg
+        assert 'Iss pass' not in svg
+        assert 'Iss — alt' not in svg
+
+    def test_pass_chart_ids_distinct_from_dome(self, almanac, page):
+        """Both charts share one page, so their SVG gradient/clipPath
+        ids must differ -- duplicate ids are invalid HTML."""
+        dome = page.dome_svg(almanac)
+        chart = page.pass_chart_html(almanac)
+        assert 'id="skyg"' in dome and 'id="domec"' in dome
+        assert 'id="skygp"' in chart and 'url(#domecp)' in chart
+        assert 'id="skyg"' not in chart and 'id="domec"' not in chart
+
+    def test_pass_chart_twilight_cutoffs(self, almanac, page):
+        """The chart plots a twilight sky (PASS_STAR_MAG_LIMIT, not the
+        dome's option): far fewer stars than the dome's mag-5.0 field."""
+        assert wxskyfield_sky.PASS_STAR_MAG_LIMIT < wxskyfield_sky.STAR_MAG_LIMIT
+        chart = page.pass_chart_html(almanac)
+        dome = page.dome_svg(almanac)
+        assert 0 < chart.count('<circle') < dome.count('<circle')
+
+    def test_dome_body_hooks(self, almanac, page):
+        """Every dome mark and its label carry data-body="<tag>" -- the
+        consumer contract weewx-celestial's live dome uses to reposition
+        marks between report cycles (the <title> text is translated and
+        cannot serve as a selector).  The pass arc's group names its
+        satellite the same way -- on the pass chart, the arc's home."""
+        svg = page.dome_svg(almanac)
+        assert '<g class="dome-body" data-body="sun">' in svg
+        assert re.search(r'<text[^>]*class="bodylab"[^>]*data-body="sun"', svg)
+        chart = page.pass_chart_html(almanac)
+        assert '<g class="dome-track" data-body="iss" ' in chart
+        assert re.search(r'<text[^>]*class="satlab"[^>]*data-body="iss"', chart)
+
+    def test_dome_marker_only_when_overhead(self, sky):
+        """At mid-pass the dome gets a position marker (the dome's 'sky
+        at time T' contract); the pass chart meanwhile still shows the
+        next VISIBLE pass, which this noon pass is not."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(PASS_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            mid_page = wxskyfield_sky.SkyPage()
+            svg = mid_page.dome_svg(alm)
+            chart = mid_page.pass_chart_html(alm)
+        assert_balanced(svg)
+        assert re.search(r'<title>Iss — alt 35\.\d°, az 22\d\.\d°</title>', svg)
+        assert '<g class="dome-body" data-body="iss" data-sunlit="1">' in svg
+        assert '<title>Iss pass — 03:11 → 03:21, peak 19°</title>' in chart
+
+    def test_shadowed_satellite_is_hollow(self, sky):
+        """Pre-dawn the ISS crosses 29° up inside Earth's shadow: the
+        marker inverts to the hollow ring -- brass stroke, halo fill, same
+        footprint -- the tooltip says so, and data-sunlit="0" carries the
+        state for weewx-celestial's live dome.  (The sunlit noon marker
+        in test_dome_marker_only_when_overhead pins the solid form.)"""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(SHADOW_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = wxskyfield_sky.SkyPage().dome_svg(alm)
+        assert_balanced(svg)
+        assert re.search(r'<g class="dome-body" data-body="iss" data-sunlit="0">'
+                         r'<circle [^>]*fill="#0A0F22" stroke="#D3A94C"', svg)
+        assert re.search(r'<title>Iss — alt 29\.\d°, az 16\d\.\d° — in shadow</title>',
+                         svg)
+
+    def test_sunlit_satellite_is_solid(self, sky):
+        """The noon marker keeps the solid brass dot -- fill and stroke
+        the exact inverse of the shadowed ring's."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(PASS_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = wxskyfield_sky.SkyPage().dome_svg(alm)
+        assert re.search(r'<g class="dome-body" data-body="iss" data-sunlit="1">'
+                         r'<circle [^>]*fill="#D3A94C" stroke="#0A0F22"', svg)
+        assert 'in shadow' not in svg
+
+    def test_stale_elements_point_at_log(self, sky):
+        """Eight days past the fixture the elements are beyond the 7-day
+        cutoff: every row says so (instead of a silently wrong pass), the
+        dome drops its marker, and the pass chart is the empty state."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(TIME_TS + 8 * 86400, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            stale_page = wxskyfield_sky.SkyPage()
+            html = stale_page.satellites_html(alm)
+            svg = stale_page.dome_svg(alm)
+            assert stale_page.pass_chart_html(alm) == ''
+        assert_balanced(html)
+        assert html.count('no usable orbital elements — see the weewxd log') == 2
+        assert 'satlab' not in svg
+
+    def test_geostationary_only_no_track(self):
+        """A configuration whose only satellite never rises: an honest
+        no-pass row and no pass chart -- the page must not invent a
+        pass."""
+        geo_sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                                 load_stars=False,
+                                 satellites={'geosat': 90000},
+                                 sat_dir=SAT_DATA_DIR)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(geo_sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            geo_page = wxskyfield_sky.SkyPage()
+            html = geo_page.satellites_html(alm)
+            svg = geo_page.dome_svg(alm)
+            assert geo_page.pass_chart_html(alm) == ''
+        assert html.count('class="chip"') == 1
+        assert 'no visible pass in the coming week' in html
+        assert 'satlab' not in svg
 
 
 class TestStarOptions:
@@ -440,7 +638,7 @@ class TestFooter:
         """A live star catalog but an unreadable wxskyfield_lines.dat: no
         figures are drawn, so no Stellarium credit -- but the star credits
         stay (the catalog is fine)."""
-        for name in ('wxskyfield_de421.bsp', 'wxskyfield_stars.dat'):
+        for name in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
             os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', name),
                        os.path.join(str(tmp_path), name))
         lineless = wxskyfield.Sky(str(tmp_path), load_stars=True)
@@ -747,6 +945,32 @@ class TestSkinFiles:
         assert "'HTML_ROOT': 'skyfield'" in installer
         assert 'public_html' not in installer
 
+    def test_template_guards_satellite_section(self):
+        """A station with no [[Satellites]] must not render an empty
+        section: the template wraps the panel in the has_satellites
+        guard."""
+        with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
+            source = f.read()
+        assert '#if $sky_page.has_satellites()' in source
+        assert 'satellites_html' in source
+
+    def test_tap_tooltip_script_wired(self):
+        """sky.js turns the SVG <title> hover tooltips into tap-to-show
+        chips -- without it every tooltip is dead on a touch screen (no
+        hover on an iPad).  The template must load it, the CopyGenerator
+        must copy it beside sky.css, and the chip's .skytip rule must
+        exist in sky.css."""
+        with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
+            assert '<script src="sky.js" defer></script>' in f.read()
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.SKIN_DIR, 'skin.conf'))
+        assert conf['CopyGenerator']['copy_once'] == ['sky.css', 'sky.js']
+        with open(os.path.join(self.SKIN_DIR, 'sky.css')) as f:
+            assert '.skytip' in f.read()
+        with open(os.path.join(self.SKIN_DIR, 'sky.js')) as f:
+            js = f.read()
+        assert "getElementsByTagName('title')" in js
+
     def test_installer_lists_lang_files(self):
         with open(os.path.join(REPO_ROOT, 'install.py')) as f:
             installer = f.read()
@@ -814,6 +1038,10 @@ class TestI18n:
         assert len(conf['Almanac']['moon_phases']) == 8
         for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
             assert conf['Almanac'][body] == body.title()
+        # The default satellites (and the documented hst example) carry
+        # display names, so ISS never renders as "Iss".
+        for sat, label in (('iss', 'ISS'), ('tiangong', 'Tiangong'), ('hst', 'HST')):
+            assert conf['Almanac'][sat] == label
         # English constellation names are the Latin ones -- the
         # [[Constellations]] section is the key reference for translators
         # and must mirror the engine's table exactly.
@@ -918,6 +1146,8 @@ class TestI18n:
             assert len(conf['Almanac']['moon_phases']) == 8, name
             for body in ['sun', 'moon', 'earth'] + wxskyfield_sky.PLANETS:
                 assert conf['Almanac'][body], (name, body)
+            for sat in ('iss', 'tiangong', 'hst'):
+                assert conf['Almanac'][sat], (name, sat)
             # Constellation keys are the IAU abbreviations; a key outside
             # the engine's table would silently never be looked up.
             for abbr in conf['Almanac']['Constellations']:
@@ -944,6 +1174,18 @@ class TestI18n:
     def test_da_conf_is_complete(self):
         """Danish likewise ships complete."""
         self.check_complete('da.conf')
+
+    def test_it_conf_is_complete(self):
+        """Italian likewise ships complete."""
+        self.check_complete('it.conf')
+
+    def test_no_conf_is_complete(self):
+        """Norwegian likewise ships complete."""
+        self.check_complete('no.conf')
+
+    def test_sv_conf_is_complete(self):
+        """Swedish likewise ships complete."""
+        self.check_complete('sv.conf')
 
     def check_complete(self, name):
         configobj = pytest.importorskip('configobj')
@@ -974,8 +1216,9 @@ class TestI18n:
             table = page.table_html(alm)
             ribbons = page.ribbons_svg(alm)
             chips = page.chips_html(alm)
+            sats = page.satellites_html(alm)
             footer = page.footer_html()
-        for markup in (dome, table, ribbons, chips):
+        for markup in (dome, table, ribbons, chips, sats):
             assert_balanced(markup)
         assert '>O</text>' in dome                       # German east cardinal
         assert '>Mond</text>' in dome
@@ -986,6 +1229,11 @@ class TestI18n:
         # The chips' constellations carry the German names, through the
         # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
         assert 'im Sternbild Löwe' in chips
+        # The satellite rows: the ISS label from [Almanac], the pass line
+        # translated, the compass ordinals from [[Ordinates]] (SE -> SO).
+        assert '>ISS</div>' in sats
+        assert 'erscheint SSW · Höchststand 19° SO · verschwindet ONO · 10 min' in sats
+        assert 'kein sichtbarer Überflug in der kommenden Woche' in sats
         assert 'Berechnet mit ' + LINKED_NAME in footer
         assert 'IAU-CSN-Sternnamen' in footer
         # German moon phase names flow through the same texts dict.
@@ -1101,4 +1349,115 @@ class TestI18n:
         assert 'Calculado con ' + LINKED_NAME in footer
         assert 'Nombres de estrellas IAU-CSN' in footer
         # Spanish moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_italian_renders(self, sky):
+        """The shipped it.conf, fed through the same channels the report
+        engine uses, renders Italian panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'it.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>E</text>' in dome                       # Italian east cardinal
+        assert '>Luna</text>' in dome
+        assert '<th>Astro</th>' in table
+        assert '</span>Nettuno</td>' in table            # not "Neptune"
+        assert '<th>Levata</th>' in table and '<th>Tramonto</th>' in table
+        assert '>adesso 12:00</text>' in ribbons
+        # The chips' constellations carry the Italian names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'costellazione: Leone' in chips
+        assert 'Calcolato con ' + LINKED_NAME in footer
+        assert 'Nomi di stelle IAU-CSN' in footer
+        # Italian moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_norwegian_renders(self, sky):
+        """The shipped no.conf, fed through the same channels the report
+        engine uses, renders Norwegian panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'no.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>Ø</text>' in dome                       # Norwegian east cardinal
+        assert '>Månen</text>' in dome
+        assert '<th>Himmellegeme</th>' in table
+        assert '</span>Merkur</td>' in table             # not "Mercury"
+        assert '<th>Oppgang</th>' in table and '<th>Nedgang</th>' in table
+        assert '>nå 12:00</text>' in ribbons
+        # The chips' constellations carry the Norwegian names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'i stjernebildet Løven' in chips
+        assert 'Beregnet med ' + LINKED_NAME in footer
+        assert 'IAU-CSN-stjernenavn' in footer
+        # Norwegian moon phase names flow through the same texts dict.
+        assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+    def test_shipped_swedish_renders(self, sky):
+        """The shipped sv.conf, fed through the same channels the report
+        engine uses, renders Swedish panels."""
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.LANG_DIR, 'sv.conf'),
+                                   encoding='utf-8', file_error=True)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.Formatter(
+                    ordinate_names=list(conf['Units']['Ordinates']['directions'])),
+                texts=dict(conf['Almanac']))
+            page = wxskyfield_sky.SkyPage(
+                {'Texts': dict(conf['Texts']),
+                 'Labels': {'hemispheres': list(conf['Labels']['hemispheres'])}})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            ribbons = page.ribbons_svg(alm)
+            chips = page.chips_html(alm)
+            footer = page.footer_html()
+        for markup in (dome, table, ribbons, chips):
+            assert_balanced(markup)
+        assert '>O</text>' in dome                       # Swedish east cardinal (ost)
+        assert '>Månen</text>' in dome
+        assert '<th>Himlakropp</th>' in table
+        assert '</span>Merkurius</td>' in table          # not "Mercury"
+        assert '<th>Uppgång</th>' in table and '<th>Nedgång</th>' in table
+        assert '>nu 12:00</text>' in ribbons
+        # The chips' constellations carry the Swedish names, through the
+        # [[Constellations]] subsection: Mars stands in Leo on 2025-06-21.
+        assert 'i stjärnbilden Lejonet' in chips
+        assert 'Beräknat med ' + LINKED_NAME in footer
+        assert 'IAU-CSN-stjärnnamn' in footer
+        # Swedish moon phase names flow through the same texts dict.
         assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])

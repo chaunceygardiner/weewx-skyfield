@@ -11,7 +11,7 @@ Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
 NOT required.**
 
 Skyfield 1.47 is the minimum supported version; development and the test suite track the
-current Skyfield release (1.54 as of July 2026), so if you have an earlier version installed,
+current Skyfield release (1.55 as of August 2026), so if you have an earlier version installed,
 upgrading is recommended — see [Upgrading Skyfield](#upgrading-skyfield).
 
 
@@ -21,15 +21,25 @@ weewx-skyfield replaces WeeWX's built-in almanac (PyEphem or weeutil) for report
 generation.  Report tags such as `$almanac.sunrise`, `$almanac.moon.transit`,
 `$almanac(horizon=-6).sun(use_center=1).rise` and `$almanac.next_full_moon` (as used, for
 example, in the Seasons skin's Celestial page) are computed with Skyfield and JPL's DE421
-ephemeris, which is installed with the extension — no downloads at runtime, and *much* more
-accurate values than PyEphem, which is deprecated by its own author in favor of Skyfield.
+ephemeris, which is installed with the extension — *much* more accurate values than PyEphem,
+which is deprecated by its own author in favor of Skyfield.
 As of version 1.6 the ephemeris is read fully into memory at startup (about 16 MB), so
 upgrading this extension over a running WeeWX cannot disturb — or crash — the running
 almanac; the new files take effect on the restart that follows the install.
 
+As of 2.0 the almanac also tracks earth satellites — any satellite, by NORAD catalog
+number, with the ISS and Tiangong configured out of the box; `$almanac.iss.next_visible_pass`
+says when to step outside and watch the ISS cross your sky — and the *complete* 118,218-star
+Hipparcos catalog ships with the extension, so the Sky page's dome is a full sky map and
+every `$almanac.hip_<number>` tag works out of the box, nothing to download.  Satellite
+orbital elements are the one thing the extension fetches at runtime — orbits go stale in
+days, so elements cannot ship in a release — and the fetch is on by default with one switch
+to turn it off: see [Satellites](#satellites).
+
 And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
 translatable through WeeWX's own lang-file mechanisms, and complete German, French, Danish,
-Dutch and Spanish translations ship with the skin — see [Translations (i18n)](#translations-i18n) below.
+Dutch, Spanish, Italian, Norwegian and Swedish translations ship with the skin — see
+[Translations (i18n)](#translations-i18n) below.
 
 ### The Sky page
 
@@ -41,10 +51,10 @@ it is computed for *your* station's location and elevation, taken automatically 
 `weewx.conf`:
 
 - a **sky dome** of everything above your horizon right now — the sun, the moon drawn at its
-  true phase, the planets, and the bright IAU-named stars sized by magnitude, with hover
-  coordinates on every mark (when the sun is up, the stars are shown dimmed, standing where
-  they are behind the daylight); install the full Hipparcos catalog and the dome plots
-  *every* star down to a configurable magnitude limit — a true sky map;
+  true phase, the planets, every Hipparcos catalog star down to a configurable magnitude
+  limit — a true sky map — and the 88 constellations' stick figures, with hover coordinates
+  on every mark (when the sun is up, the stars are shown dimmed, standing where they are
+  behind the daylight);
 - today's **rise & set ribbons** for the sun, moon and planets, over civil/nautical/
   astronomical twilight bands, with transit ticks and a "now" line;
 - today's **sun path** — the altitude/azimuth arc hour by hour, the moon's path dashed
@@ -56,13 +66,20 @@ it is computed for *your* station's location and elevation, taken automatically 
 - an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic;
 - an **analemma** — the sun's altitude and azimuth at local standard noon for every week of
   the year, with this week's point marked;
+- the **next visible pass** of each configured satellite — the ISS and Tiangong out of the
+  box — when it appears, how high it peaks, when it disappears, with the soonest pass
+  charted on its own dated sky: the whole sky as it will stand at the pass's peak, the
+  pass arced across it;
 - moon phase and illumination, countdowns to the next equinox, solstice, new and full moon —
   and to the next eclipse visible from your station — Jupiter's central meridian longitudes,
   Saturn's ring tilt, the constellation each planet stands in, and a full almanac table.
 
-The page is self-contained HTML and inline SVG — no JavaScript libraries, no web fonts, and
-nothing fetched at run time — so it requires nothing beyond what the extension already
-requires, works offline, and renders fine on a Raspberry Pi.  It regenerates with live values
+The page is self-contained HTML and inline SVG — no JavaScript libraries, no web fonts,
+nothing fetched from anywhere but the page's own directory (a stylesheet, and a few lines
+of script that make the tooltips answer taps on touch screens) — so it requires nothing beyond what the
+extension already requires and renders fine on a Raspberry Pi (the satellite rows draw on
+orbital elements weewxd keeps fresh separately — see [Satellites](#satellites); everything
+else works entirely offline).  It regenerates with live values
 every report cycle; it is the most computation-hungry page in a typical install (the solar-year
 chart runs several hundred rise/set searches, the analemma evaluates the almanac 53 times).
 The result cache absorbs most of that — the year-scale samples are anchored to fixed instants
@@ -78,10 +95,10 @@ A `theme` option in the `[[SkyfieldReport]]` section selects the page's plate: `
 default — the night plate), `light` (a paper-atlas plate), or `auto` — light while the sun is
 up at the moment the page is generated, dark otherwise.  The page regenerates each report
 cycle, so the auto flip follows sunrise and sunset within one archive interval; the colors are
-baked in at generation time, still with no JavaScript.
+baked in at generation time, not switched in the browser.
 
-The page is translatable, German, French, Danish, Dutch and Spanish translations included — see
-[Translations (i18n)](#translations-i18n) below.
+The page is translatable, German, French, Danish, Dutch, Spanish, Italian, Norwegian and
+Swedish translations included — see [Translations (i18n)](#translations-i18n) below.
 
 The Skyfield almanac natively computes, for the sun, the moon and all planets (plus Pluto):
 rise/set/transit (including `next_`/`previous_` rising, setting, transit and antitransit), custom
@@ -133,22 +150,118 @@ Star Names (every entry of the Working Group on Star Names' IAU-CSN list with a 
 number), plus PyEphem's 115 star names for backward compatibility (a few of those are legacy
 spellings of the same stars, e.g. `albereo` for `albireo`) — 420 names in all, covering 412
 stars.  Multi-word names use underscores and diacritics are dropped
-(`$almanac.kaus_australis.rise`, `$almanac.barnards_star.mag`).  Any other Hipparcos star can be
-addressed by catalog number: `$almanac.hip_57939.rise`.  The star positions, proper motions,
-parallaxes and magnitudes come from `wxskyfield_stars.dat`, an excerpt of the Hipparcos Catalogue
-(The Hipparcos and Tycho Catalogues, ESA SP-1200, 1997; distributed by CDS as VizieR catalog
-I/239) which is installed along with the extension; install a full `hip_main.dat` alongside it to
-serve all 118,218 Hipparcos stars.  Unlike PyEphem, `earth_distance` and `sun_distance` work for
-stars (in astronomical units, like the planets — e.g., `$almanac.proxima_centauri.earth_distance`),
-computed from the star's Hipparcos parallax.  Star support can be turned off by setting
-`stars = false` in the `Skyfield` section of `weewx.conf`.
+(`$almanac.kaus_australis.rise`, `$almanac.barnards_star.mag`).  And any other Hipparcos star
+can be addressed by catalog number — `$almanac.hip_57939.rise` — because as of 2.0 the
+*complete* Hipparcos Catalogue ships with the extension as `wxskyfield_stars.dat.gz` (The
+Hipparcos and Tycho Catalogues, ESA SP-1200, 1997; distributed by CDS as VizieR catalog
+I/239): the star positions, proper motions, parallaxes and magnitudes of all 118,218
+Hipparcos stars, nothing to download.  Unlike PyEphem, `earth_distance` and `sun_distance`
+work for stars (in astronomical units, like the planets — e.g.,
+`$almanac.proxima_centauri.earth_distance`), computed from the star's Hipparcos parallax.
 
 Anything this extension does not compute falls through to the next almanac in WeeWX's list —
-the built-in PyEphem almanac when PyEphem is installed (e.g., named stars when the star catalog
-is disabled, or direct PyEphem data attributes such as `$almanac.moon.a_epoch`).  Almanac
+the built-in PyEphem almanac when PyEphem is installed (e.g., direct PyEphem data attributes
+such as `$almanac.moon.a_epoch`).  Almanac
 times outside the span of the bundled DE421 ephemeris (mid-1899 through 2053) fall through the
 same way.  Without PyEphem, such tags simply report per-tag errors rather than breaking report
-generation.
+generation.  (Satellite tags never fall through: the built-in almanac has no satellites, so an
+unrecognized satellite attribute reports a per-tag error directly.)
+
+### Satellites
+
+New in 2.0, the almanac tracks earth satellites.  The `[Skyfield]` `[[Satellites]]` section
+of `weewx.conf` maps tag names to NORAD catalog numbers; the installer writes the default
+set — the two naked-eye space stations, whose orbits make them visible from essentially all
+inhabited latitudes:
+
+```
+[Skyfield]
+    satellite_downloads = true
+    [[Satellites]]
+        iss = 25544          # the International Space Station
+        tiangong = 48274     # Tiangong, the Chinese space station
+```
+
+Each entry becomes a body tag with the almanac's usual position surface:
+`$almanac.iss.alt`/`.az`/`.ra`/`.dec` (decimal degrees) and their unit-aware siblings
+`.altitude`/`.azimuth`/`.topo_ra`/`.topo_dec`; `.distance`, the slant range from observer to
+satellite, a ValueHelper honoring the report's distance units; and `.sunlit` — whether the
+satellite is in sunlight.  `$almanac.sat_25544.alt` is an alternate spelling for a *listed*
+satellite, mirroring `hip_<number>`; it never fetches an unlisted one.  `.rise`, `.transit`
+and `.set` are the *next* occurrence from the almanac's time — transit meaning culmination —
+because passes are minutes long and "today's" is rarely the interesting one.  The heart of
+the surface, though, is the pass:
+
+- `$almanac.iss.next_pass` — the next pass, or the one in progress: once the satellite is
+  up, `next_pass` is the current pass until it sets.  Its attributes: `.rise`,
+  `.culmination` and `.set` (times), `.max_altitude` (an angle ValueHelper),
+  `.rise_azimuth`, `.culmination_azimuth` and `.set_azimuth` (compass ValueHelpers, so
+  `.ordinal_compass` renders "WSW"), `.duration`, and `.visible`.
+- `$almanac.iss.next_visible_pass` — the same attributes, for the next pass *worth
+  watching*: the satellite sunlit while your sky is dark (sun below −6° — the
+  civil-twilight convention Heavens-Above uses) at some moment of the pass, and peaking at
+  least 10° up.
+
+A pass runs rise → culmination → set across the geometric horizon — no refraction, which is
+irrelevant to satellite watching — and the almanac's existing horizon argument applies:
+`$almanac(horizon=10).iss.next_pass` counts only the portion above 10°.  When no qualifying
+pass exists within the elements' validity window (below), every attribute honestly reads
+"N/A" — Hubble from northern Europe, for example, never rises.  Deliberately absent: an
+apparent-magnitude tag (satellite brightness models are hand-wavy; `sunlit` and
+`.max_altitude` are served honestly instead) and pass *lists* — ask if you need tonight's
+passes as a table.
+
+**Where the elements come from.**  Satellite positions are computed (by Skyfield's SGP4
+implementation) from published orbital elements, which age quickly — a reboost or maneuver
+makes week-old elements minutes wrong — so, unlike the ephemeris and the star catalog, they
+cannot ship in a release.  They are fetched from [CelesTrak](https://celestrak.org): once at
+install time, then by weewxd, which checks for missing or stale elements at every startup —
+a satellite just added to the configuration is live seconds after the restart — and
+refreshes about every three hours thereafter, on a worker thread that never blocks reports;
+on a failed fetch the old file is kept and the retry backs off gently.  Each satellite's elements live in their own file, `wxskyfield_sat_<norad>.tle`, in
+a `wxskyfield` directory beside the station's SQLite database (under `SQLITE_ROOT`), and
+survive restarts.  Elements whose epoch is more than seven days older than the almanac's
+time are *not used*: every tag for that satellite reads "N/A" rather than reporting
+confidently wrong pass times, a warning is logged (once at the crossing, not per tag), and
+the always-live diagnostic tags `$almanac.iss.elements_epoch` and
+`$almanac.iss.elements_age` say why.
+
+**This is the extension's only network access, and it has a switch.**  Set
+`satellite_downloads = false` in the `[Skyfield]` section and the extension fetches
+nothing, ever — the behavior every release before 2.0 had unconditionally.  In that mode
+`[[Satellites]]` still works if you maintain the element files yourself: an air-gapped
+station can copy `wxskyfield_sat_<norad>.tle` files in by any means it likes (each file is
+one satellite's CelesTrak TLE — the name line and two element lines); the seven-day age
+cutoff applies all the same, because stale elements cannot predict passes no matter how
+they arrived.  With no `[[Satellites]]` configured, likewise, nothing is ever fetched.  The
+fetch identifies itself as `weewx-skyfield/<version>` with the project URL, and `weectl
+extension uninstall` does not remove the cached element files — delete the `wxskyfield`
+directory yourself if you want them gone.
+
+**Choosing satellites.**  Any satellite CelesTrak carries can be added by NORAD number
+([satellite catalog search](https://celestrak.org/satcat/search.php)).  Keep the list
+short — each entry is a separate fetch every three hours.  One caveat worth knowing: a
+satellite's orbital inclination bounds the latitudes it can appear over.  Hubble
+(`hst = 20580`), inclined 28.5°, never climbs usefully above the horizon for stations
+poleward of about ±35° latitude — most of Europe and much of North America would see a
+permanent "no visible pass", which is the truth, not a bug.  The defaults avoid this: the
+ISS (51.6°) and Tiangong (41.5°) put on the show for essentially everyone.
+
+**Naming satellites.**  A satellite's display name rides the same `[Almanac]` channel as
+every body's (`$almanac.iss.label`): the shipped lang files name the defaults (`iss = ISS`,
+`tiangong = Tiangong`, plus `hst = HST`), and a satellite you add yourself shows its tag
+name title-cased — `zenit23088` renders "Zenit23088" — until a report names it.  The best
+home for that entry is usually `[StdReport]` `[[Defaults]]` in `weewx.conf` rather than any
+single report's section: one line names the satellite in every report at once — a
+weewx-loopdata target report included, whose `[Almanac]` is what live `.label` fields
+render with — and it survives extension upgrades:
+
+```
+[StdReport]
+    [[Defaults]]
+        [[[Almanac]]]
+            zenit23088 = Zenit-2 23088
+```
 
 ### Using the Sky panels in your own skin
 
@@ -176,8 +289,15 @@ English:
    `count`, the `chip` family and the table rules for the HTML blocks.  Copy the rules you
    need (or the whole file) into your skin's stylesheet.  If you copied individual rules,
    re-check on each upgrade: a release that adds marks to a panel can add a class (1.10
-   added `moonlab`, the sun-path moon-time labels), and text with no rule renders at the
+   added `moonlab`, the sun-path moon-time labels; 2.0 added `satlab`, the dome's satellite
+   name label), and text with no rule renders at the
    16px SVG default in the wrong color — changes.txt calls out new classes.
+
+   The panels' tooltips are native SVG `<title>` elements, so they work on hover with no
+   help — but hover does not exist on a touch screen.  The bundled skin ships
+   `skins/Skyfield/sky.js`, a small dependency-free script that shows the same tooltip text
+   on tap; copy it (and the `.skytip` rule from `sky.css`) and load it with
+   `<script src="sky.js" defer></script>` if your page's visitors use tablets or phones.
 
 4. Non-English skins only: bring the translations along the same way.  The panels read
    `[Texts]` and `[Almanac]` from *your* report, not from the bundled skin, so without this
@@ -207,32 +327,31 @@ $sky_page.dome_svg($almanac)
 
 Everything above the horizon right now, in sky-chart orientation — north at the top, east at
 the left, as if lying on your back looking up: the sun, the moon drawn at its true phase, the
-planets, and the bright IAU-named stars sized by magnitude, with hover coordinates on every
+planets, and the stars sized by magnitude, with hover coordinates on every
 mark.  When the sun is up the stars are shown dimmed, standing where they are behind the
 daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally takes
 `label_scale` (default 1.0), which grows every label by that factor with the collision layout
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
 smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
 
-With only the bundled catalog excerpt installed, the dome draws from the 412 named stars.
-Install the full Hipparcos catalog (see
-[Serving every Hipparcos star](#serving-every-hipparcos-star)) and it plots *every* catalog
-star down to the magnitude limit instead — automatically, nothing to configure — so the
-bright-but-unnamed stars (γ Cassiopeiae, the middle of Cassiopeia's W, brightest among them)
-no longer leave holes in the constellations.  Labels stay on named stars; an unnamed star's
-hover tooltip gives its Hipparcos number.  Two report options set the cutoffs (magnitudes run
-backwards: 6.5 is the naked-eye limit, Sirius is −1.4):
+The dome plots *every* star of the bundled Hipparcos catalog down to its magnitude limit — a
+true sky map, so the bright-but-unnamed stars (γ Cassiopeiae, the middle of Cassiopeia's W,
+brightest among them) leave no holes in the constellations.  Labels stay on named stars; an
+unnamed star's hover tooltip gives its Hipparcos number.  Two report options set the cutoffs
+(magnitudes run backwards: 6.5 is the naked-eye limit, Sirius is −1.4):
 
 ```
 [StdReport]
     [[SkyfieldReport]]
-        star_mag_limit = 2.6     # plot stars at least this bright (default 2.6)
-        star_label_mag = 1.1     # label named stars at least this bright (default 1.1)
+        star_mag_limit = 5.0     # plot stars at least this bright (default 5.0)
+        star_label_mag = 2.5     # label named stars at least this bright (default 2.5)
 ```
 
 The cost stays modest: the whole field is computed in one vectorized Skyfield observe (a few
-milliseconds per render once the catalog scan is cached), and at `star_mag_limit = 5.0` the
-dome draws roughly 800 stars.
+milliseconds per render once the catalog scan is cached), and at the default
+`star_mag_limit = 5.0` the dome draws roughly 800 stars.  Before 2.0 the dome drew only the
+named stars unless a full catalog was installed alongside; `star_mag_limit = 2.6` with
+`star_label_mag = 1.1` (the old defaults) restores that sparser look.
 
 The dome also draws the **constellation figures**: the 88 IAU constellations' stick figures,
 each substantially-risen figure labeled with the constellation's name at the centroid of its
@@ -240,8 +359,7 @@ visible stars (the names yield to star and body labels when space is tight).  A 
 figure is clipped at the horizon rim, planetarium-style, instead of losing limbs star by
 star.  The names translate with the rest of the page, through the same
 `[Almanac] [[Constellations]]` table the `.constellation` tag reads — the German page prints
-FUHRMANN under Auriga.  The figures work with the bundled catalog alone (a full `hip_main.dat`
-adds nothing to them), are on by default, and one report option turns them off:
+FUHRMANN under Auriga.  The figures are on by default, and one report option turns them off:
 
 ```
 [StdReport]
@@ -253,6 +371,49 @@ The line figures ship as `wxskyfield_lines.dat`, distilled from the
 [Stellarium](https://stellarium.org) project's "modern" sky culture (`skycultures/modern`,
 data licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); credit: the
 Stellarium contributors).
+
+With satellites configured (see [Satellites](#satellites)), a satellite above the horizon
+at generation time gets a position dot on the dome like any other body — solid when the
+satellite is sunlit, a hollow ring when it is inside Earth's shadow (present but not
+shining), with the tooltip saying "in shadow" — but the dome is
+strictly the *current* sky, one chart, one instant.  An upcoming pass is charted by the
+next visible pass chart, below, at the pass's own epoch.
+
+An embedding skin that repositions dome marks between report cycles — weewx-celestial's live
+dome is the consumer — locates them by machine name, never by tooltip text (which is
+translated): the sun's, moon's and each planet's marks are wrapped in
+`<g class="dome-body" data-body="mars">`, their name labels carry the same `data-body`
+attribute, and a satellite's position dot gets its tag name the same way plus
+`data-sunlit="1"` or `"0"` (so a live layer can flip the dot between solid and hollow as
+the satellite crosses the shadow line); the pass arc's
+group, `<g class="dome-track" data-body="iss">`, lives on the next visible pass chart.  These hooks
+are a stable contract, and so is `$sky_page.satellite_names()`, through which an embedding
+skin enumerates the configured satellites — the tag names in config order, empty when none
+are configured or the almanac is not registered.
+
+#### The next visible pass chart — `pass_chart_html`
+
+```
+$sky_page.pass_chart_html($almanac)
+```
+
+<img src="screenshots/panel_passchart.png" width="440" alt="The next visible pass chart panel">
+
+The whole sky as it will stand at the culmination of the **soonest upcoming visible pass**
+among the configured satellites, the pass arced across it dashed and time-labeled — rise
+and set times at the endpoints, the satellite's own dot at the peak — under a dated head
+line ("ISS · Sun Jun 22 · 03:11 → 03:21 · peak 19°").  One chart, one epoch, so the arc
+crosses the stars it will actually cross — the per-pass convention sky charts have always
+used for future events — and the star field is cut off at magnitude 3.5, the stars a
+half-dark pass-watching sky actually shows.  The peak dot can be the hollow in-shadow
+ring: a pass is visible when *any* of it is sunlit in a dark sky, and a morning pass often
+exits Earth's shadow just after culminating — the chart honestly shows it flaring into
+view mid-sky.  One track only, the next thing worth
+watching; the method returns an empty string when no configured satellite has a visible
+pass in its elements' validity window (wrap it in a guard as the bundled template does),
+and its SVG ids stay distinct from the dome's so both charts share a page cleanly.  Like
+`dome_svg` it takes `palette` and `label_scale`; the `passhead`/`passname`/`passwhen` CSS
+rules style its head line.
 
 #### Rise & set ribbons — `ribbons_svg`
 
@@ -369,6 +530,27 @@ then each planet with its rise time or current position, the constellation it st
 magnitude, distance and elongation — plus Jupiter's central meridian longitudes and Saturn's
 ring tilt.  The `chips` wrapper provides the single-column layout.
 
+#### The satellites panel — `satellites_html`
+
+```
+#if $sky_page.has_satellites()
+<div class="chips">
+  $sky_page.satellites_html($almanac)
+</div>
+#end if
+```
+
+<img src="screenshots/panel_satellites.png" width="340" alt="Satellites panel">
+
+One card per configured satellite (see [Satellites](#satellites)): its next visible pass —
+the date and countdown in the countdown-chip idiom, rolling into "overhead now" during the
+pass itself, then "appears WSW · peaks 45° SSW · disappears NE · 6 min".  The rows are
+honest about nothing-to-see: a satellite with no visible pass in the coming week says so,
+and one with no usable orbital elements says *that*, pointing at the weewxd log — the panel
+never shows a stale pass.  `$sky_page.has_satellites()` returns whether any satellites are
+configured, so a template can skip the whole section when there are none — the bundled page
+does exactly that.
+
 #### Countdown chips — `countdown_html`
 
 ```
@@ -420,15 +602,15 @@ the embeddable panels, and the almanac's body names — entirely through WeeWX's
 mechanisms: lang files, the `[Texts]` section, the `[Almanac]` section.  If you have
 translated a WeeWX skin before, there is nothing new to learn.
 
-- **Complete German, French, Danish, Dutch and Spanish translations ship with the skin** —
-  the German and French native-speaker reviewed, the Danish contributed by native speaker
-  Gert Andersen, the Dutch and Spanish in Beta pending their reviews.  One line turns one
-  on:
+- **Complete German, French, Danish, Dutch, Spanish, Italian, Norwegian and Swedish
+  translations ship with the skin** — the German and French native-speaker reviewed, the
+  Danish contributed by native speaker Gert Andersen, the Dutch, Spanish, Italian,
+  Norwegian (Bokmål) and Swedish in Beta pending their reviews.  One line turns one on:
 
   ```
   [StdReport]
       [[SkyfieldReport]]
-          lang = de                # or fr, da, nl, or es
+          lang = de                # or fr, da, nl, es, it, no, or sv
   ```
 
   Corrections are welcome — as are further languages: a lang file is a self-contained,
@@ -581,19 +763,33 @@ accomplished with this extension.
 
 weewx-skyfield computes at report time: its tags — and the Sky page built from them — refresh
 once per report cycle.  For pages that update continuously in the browser, add
-[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) (same author, 5.0 or
+[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) (same author, 6.9 or
 later): its *almanac fields* — report almanac tags with the `$` removed — are evaluated
 against the registered almanac (this extension's, once installed) on every loop packet and
 published in `loop-data.txt` for the page's JavaScript to pick up.  One computation engine
 serves the report tags and the live values, so they always agree.
-[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) is a
-complete worked example — a live Geocentric panel built entirely from loopdata almanac
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.0 or
+later) is a complete worked example — a live Geocentric panel built entirely from loopdata almanac
 fields — and the paloaltoweather.com pages shown above update the same way.
+
+![weewx-skyfield's sky dome during a Tiangong zenith pass, animated live on the weewx-celestial page](screenshots/live_dome_tiangong.gif)
+
+*The animation is the [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial)
+live page at work, moved by
+[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) fields —
+weewx-skyfield's own Sky page stays static, refreshing once per report cycle.  The chart
+itself is this extension's dome, embedded there.  Tiangong — one of the two satellites the
+installer configures out of the box — crosses the exact center of the dome, and partway
+across the marker inverts to a hollow ring as Tiangong slips into Earth's shadow — still
+overhead, no longer shining.  In the opening seconds Terra is finishing its own low western
+pass: two satellites on the dome at once.  2-second frames played at 15 fps (about 30×
+speed), replayed through the live page with the orbital elements Space-Track archived for
+July 15.*
 
 ### Relationship to other extensions
 
-- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author) ships a
-  live celestial page driven by weewx-loopdata almanac fields (see
+- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.0 or
+  later) ships a live celestial page driven by weewx-loopdata almanac fields (see
   [Live-updating pages](#live-updating-pages) above).  Since celestial 6.0 it runs no service
   and computes nothing itself, so the two extensions coexist with no configuration —
   weewx-skyfield is the atlas, weewx-celestial the live instrument.  Only the historical
@@ -621,6 +817,8 @@ fields — and the paloaltoweather.com pages shown above update the same way.
 
 1. Download the latest release, weewx-skyfield.zip, from
    [weewx-skyfield GitHub Repository](https://github.com/chaunceygardiner/weewx-skyfield).
+   It is about 32 MB: the bundled DE421 ephemeris (16 MB) and the complete Hipparcos star
+   catalog (15 MB gzipped) account for nearly all of it.
 
 1. Install the skyfield extension.
 
@@ -636,7 +834,7 @@ built-in almanac.  The Sky page appears alongside your existing reports at
 ## Upgrading Skyfield
 
 Skyfield 1.47 or later works, but the extension is developed and its test suite run against
-the current Skyfield release — 1.54 as of July 2026 — and upgrading to it is recommended.  To
+the current Skyfield release — 1.55 as of August 2026 — and upgrading to it is recommended.  To
 see what you have:
 
 ```
@@ -659,7 +857,10 @@ install with pip as described in the installation instructions instead.
 ```
 [Skyfield]
     enable = true
-    stars = true
+    satellite_downloads = true
+    [[Satellites]]
+        iss = 25544
+        tiangong = 48274
 ```
 
 (This is weewx-skyfield's own top-level `[Skyfield]` section.  It is unrelated to the
@@ -668,35 +869,35 @@ extension.)
 
  * `enable`: When true (the default), the Skyfield almanac is registered and reports are
    generated with Skyfield almanac values rather than WeeWX's built-in PyEphem/weeutil almanac.
- * `stars` : When true (the default), named stars (e.g., `$almanac.rigel.rise`) are available
-   in the report almanac, computed from the bundled Hipparcos catalog excerpt
-   (`wxskyfield_stars.dat`).
+ * `satellite_downloads`: When true (the default), satellite orbital elements are fetched
+   from CelesTrak — at install, at any weewxd startup that finds them missing or stale,
+   then about every three hours.  Set it false on an isolated network; see
+   [Satellites](#satellites) for what that changes.
+ * `[[Satellites]]`: tag name = NORAD catalog number, one line per satellite.  This one
+   list drives both the satellite tags and the fetch list.
 
-These are the section's only options — anything else there draws a log warning and is
-ignored.  The Sky page's options (`theme`, `star_mag_limit`, `star_label_mag`,
+These are the section's only entries — anything else there draws a log warning and is
+ignored.  (The `stars` option was removed in 2.0: the complete star catalog now ships with
+the extension, and stars are simply always available.)  The Sky page's options (`theme`,
+`star_mag_limit`, `star_label_mag`,
 `constellation_lines`, `lang`) are *report* options and belong under `[StdReport]`
 `[[SkyfieldReport]]`.
 
 ## Serving every Hipparcos star
 
-The bundled `wxskyfield_stars.dat` covers the 412 named stars (and, since 1.19, the
-constellation figures' vertices).  To address *any* Hipparcos star
-by catalog number (`$almanac.hip_57939.rise`), download the full Hipparcos catalog `hip_main.dat`
-(from [CDS VizieR I/239](https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239)) and place it in
-WeeWX's user directory (e.g., `/home/weewx/bin/user/hip_main.dat`).  When present, `hip_<number>`
-lookups read it and all 118,218 stars are served.  (The named stars are still loaded from the
-bundled excerpt at startup — its records are identical to the full catalog's, and reading the
-excerpt keeps startup fast.)
-
-The full catalog also upgrades [The Sky page's dome](#the-sky-dome--dome_svg): it plots every
-catalog star down to `star_mag_limit` — a true sky map — instead of drawing from the named
-stars alone.
+Nothing to do: as of 2.0 the complete Hipparcos catalog ships with the extension (as
+`wxskyfield_stars.dat.gz`), so every catalog star is addressable by number
+(`$almanac.hip_57939.rise`) and [The Sky page's dome](#the-sky-dome--dome_svg) plots the
+whole field down to `star_mag_limit` out of the box.  Before 2.0 this took downloading
+`hip_main.dat` yourself and placing it in WeeWX's user directory; if you did, that copy is
+now redundant — the extension no longer reads it, and it can be deleted.
 
 ## Testing
 
 A pytest test suite lives in the `tests` directory.  It exercises the Skyfield almanac
 (sun/moon rise/set/transit, twilight horizons, equinoxes/solstices, moon phases, positions,
-magnitudes/sizes/phases, named stars, and polar day/night edge cases).  It also contains two
+magnitudes/sizes/phases, named stars, satellites and passes, and polar day/night edge
+cases).  It also contains two
 permanent audits: one verifying that, with PyEphem installed, everything WeeWX's built-in almanac
 can do still works (including direct PyEphem attributes such as `$almanac.moon.a_epoch`);
 and one verifying that on a system *without* PyEphem, all standard-skin tags (and much more) work
@@ -707,8 +908,9 @@ WeeWX virtual environment (WeeWX, Skyfield and pytest must be installed in that 
 /home/weewx/weewx-venv/bin/python -m pytest tests
 ```
 
-The star tests use the bundled Hipparcos catalog excerpt (`bin/user/wxskyfield_stars.dat`),
-which is part of this repository, so no additional downloads are needed.
+The star tests use the bundled Hipparcos catalog (`bin/user/wxskyfield_stars.dat.gz`) and
+the satellite tests use archived orbital-element fixtures in `tests/data`, all part of this
+repository, so the suite never touches the network.
 
 ## Known Skyfield Issues
 
@@ -733,8 +935,8 @@ discards it, so the worst case is a single rise or set tag coming up empty for a
 while — in practice pages render complete.  weewx-skyfield's author diagnosed the
 root cause in issue #1114 and submitted
 [pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140), which
-Skyfield merged on August 4, 2026, closing the issue; the warning will disappear once
-the first Skyfield release after 1.54 ships the fix.
+Skyfield merged on August 4, 2026, closing the issue, and shipped in Skyfield 1.55 on
+August 7, 2026; upgrading to Skyfield 1.55 or later makes the warning disappear.
 
 ## Why require Python 3.9 or later?
 
@@ -773,8 +975,13 @@ weewx-skyfield stands on the work of others:
  * **NASA's Jet Propulsion Laboratory (JPL)**, whose DE421 planetary ephemeris (bundled as
    `wxskyfield_de421.bsp`) provides the positions of the sun, moon, and planets.
  * The **European Space Agency (ESA)**, whose Hipparcos mission produced the star catalog
-   from which the bundled excerpt (`wxskyfield_stars.dat`) is drawn, and the
-   **CDS (Strasbourg astronomical Data Centre)**, which distributes it via VizieR.
+   bundled as `wxskyfield_stars.dat.gz`, and the
+   **CDS (Strasbourg astronomical Data Centre)**, which distributes it via VizieR
+   (catalog I/239).
+ * **[CelesTrak](https://celestrak.org)** (T.S. Kelso), whose GP element service supplies
+   the satellite orbital elements.
+ * The **[Stellarium](https://stellarium.org) project's contributors**, whose "modern" sky
+   culture supplies the constellation stick figures (bundled as `wxskyfield_lines.dat`).
  * The **International Astronomical Union (IAU)** Working Group on Star Names, whose Catalog
    of Star Names supplies the named-star tags.
  * The **U.S. Naval Observatory (USNO)** and **Jean Meeus**, whose published definitions and
@@ -788,6 +995,11 @@ weewx-skyfield stands on the work of others:
 
 weewx-skyfield is licensed under the GNU Public License v3.
 
-The bundled star catalog excerpt (`wxskyfield_stars.dat`) contains data from the Hipparcos and
+The bundled star catalog (`wxskyfield_stars.dat.gz`) contains data from the Hipparcos and
 Tycho Catalogues, which ESA distributes under the
 [CC BY-NC 3.0 IGO](https://creativecommons.org/licenses/by-nc/3.0/igo/) licence.  Credit: ESA.
+
+The bundled constellation figures (`wxskyfield_lines.dat`) are distilled from the
+[Stellarium](https://stellarium.org) project's "modern" sky culture, whose data is licensed
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).  Credit: the Stellarium
+contributors.

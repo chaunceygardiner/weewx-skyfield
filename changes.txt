@@ -1,14 +1,166 @@
 weewx-skyfield change history
 -----------------------------
 
-1.19.1 (in progress)
---------------------
-- Docs only: the Known Skyfield Issues section in the README and page
+2.0 (2026/08/08)
+-----------------
+- ACTION REQUIRED (isolated networks only): 2.0 is this extension's
+  first release that downloads anything at runtime.  With satellites
+  configured -- the installer configures the ISS and Tiangong -- weewxd
+  fetches each satellite's orbital elements (a ~200-byte TLE) from
+  CelesTrak at install time, at any startup that finds them missing or
+  stale -- a satellite added to weewx.conf is live seconds after the
+  restart -- and then about every three hours, on a worker thread that
+  never blocks reports.  Set satellite_downloads =
+  false in the [Skyfield] section of weewx.conf to fetch nothing,
+  ever; [[Satellites]] still works in that mode if you maintain the
+  element files yourself -- the README's Satellites section has the
+  air-gapped story.  Stations that do nothing get working satellite
+  tags and pass predictions out of the box.
+- The almanac tracks earth satellites.  [Skyfield] [[Satellites]] maps
+  tag names to NORAD catalog numbers (iss = 25544; the one list drives
+  both the tags and the fetch list), and each entry serves the usual
+  position surface -- $almanac.iss.alt/.az/.ra/.dec, their unit-aware
+  siblings, .distance (slant range), .sunlit -- plus the pass family,
+  first of its kind in WeeWX: $almanac.iss.next_pass and
+  .next_visible_pass, each with .rise/.culmination/.set,
+  .max_altitude, .rise_azimuth/.culmination_azimuth/.set_azimuth
+  (compass ValueHelpers, .ordinal_compass renders "WSW"), .duration
+  and .visible.  Visible means sunlit while your sky is dark (sun
+  below -6 degrees) at some moment of the pass, peaking at least 10
+  degrees up; a pass is a geometric horizon crossing and
+  $almanac(horizon=10).iss.next_pass reuses the existing horizon
+  argument; an in-progress pass IS next_pass until it sets.  For a
+  satellite, .rise/.transit/.set are the next occurrence from the
+  almanac's time, transit meaning culmination.  sat_<norad> is an
+  alternate spelling for a listed satellite, mirroring hip_<number>.
+  Elements whose epoch is more than seven days older than the almanac
+  time are never used: every tag honestly reads "N/A" rather than
+  reporting confidently wrong pass times (one log warning at the
+  crossing, one at recovery), and the always-live diagnostics
+  .elements_epoch and .elements_age say why.  On a failed fetch the
+  old file is kept and the retry backs off; element files live one per
+  satellite, wxskyfield_sat_<norad>.tle, in a wxskyfield directory
+  under SQLITE_ROOT, and survive restarts (weectl extension uninstall
+  does not remove them).  Deliberately absent: an apparent-magnitude
+  tag (brightness models are hand-wavy; sunlit and max_altitude are
+  served honestly instead).
+- Live-updating pages want the companion releases shipped alongside
+  2.0: weewx-loopdata 6.9 or later -- earlier versions could cache a
+  temporarily-unavailable satellite field's "N/A" until the day rolled
+  over instead of recovering with the elements -- and weewx-celestial
+  8.0 or later, built against this release's satellite and dome
+  contracts.  The docs' live-updating sections now name both floors
+  (loopdata was previously "5.0 or later"), and both sections show what
+  the pairing buys: an animated capture of this extension's dome on the
+  weewx-celestial page (screenshots/live_dome_tiangong.gif) -- Tiangong's
+  July 15 zenith pass, marker inverting to a hollow ring mid-crossing as
+  it enters Earth's shadow, replayed through the live page on the
+  orbital elements Space-Track archived that day.
+- The Sky page shows the anticipation half of the satellites: a
+  Satellites panel -- one card per configured satellite with its next
+  visible pass, countdown-chip date rolling into "overhead now",
+  then "appears WSW / peaks 45 degrees SSW / disappears NE / 6 min" --
+  and a Next Visible Pass chart, the soonest upcoming visible pass drawn on
+  its own sky: the whole sky as it will stand at the pass's
+  culmination, the pass arced across it dashed and time-labeled, rise
+  and set times at the endpoints, the satellite's own dot at the peak,
+  under a dated head line ("ISS / Sun Jun 22 / 03:11 -> 03:21 / peak
+  19 deg").  One chart, one epoch: a future track on the "now" dome
+  would cross stars it will never cross and read its undated times as
+  tonight's, so the pass gets the per-pass chart convention
+  (Heavens-Above's) and the main dome stays strictly the current sky,
+  drawing a satellite only as a position dot when one is genuinely
+  overhead at generation time.  The pass chart's star field is cut
+  off at magnitude 3.5 -- the stars a half-dark pass-watching sky
+  actually shows -- and the panel disappears entirely when no
+  satellite has a visible pass in the coming week.  The rows are
+  honest: no visible pass in the coming week says so, and no usable
+  orbital elements says that instead, pointing at the weewxd log.
+  Stations with no [[Satellites]] configured render the page exactly
+  as before, no satellite section at all.  Embedding skins pick the
+  chart up as $sky_page.pass_chart_html (empty string when passless;
+  SVG ids distinct from the dome's) and, if copying individual CSS
+  rules, need the new .satlab rule (the satellite name label) plus
+  .passhead/.passname/.passwhen (the chart's dated head line); the
+  panel strings are new [Texts] keys, translated in all nine shipped
+  languages, and the satellite display names come from [Almanac]
+  (iss = ISS), where the shipped lang files also carry tiangong and
+  hst.
+- The dome's satellite dot tells sunlit from shadowed: a sunlit
+  satellite is the solid brass dot, and one inside Earth's shadow
+  inverts to a hollow ring -- the open-symbol convention for
+  present-but-not-shining -- with its tooltip ending "in shadow"
+  (translated in all nine shipped languages).  On the Next Visible Pass
+  chart the peak dot can be that hollow ring: a pass is visible when
+  any of it is sunlit in a dark sky, and a morning pass often exits
+  Earth's shadow just after culminating, so the chart honestly shows
+  the satellite flaring into view mid-sky.  The marker group carries
+  data-sunlit="1"/"0" alongside data-body -- part of the consumer
+  contract below -- so weewx-celestial's live dome can flip the dot
+  live as a satellite crosses the shadow line.
+- Every dome mark an embedding skin might reposition carries a
+  machine-readable hook: the sun's, moon's and each planet's marks are
+  wrapped in <g class="dome-body" data-body="mars">, their name labels
+  carry the same data-body attribute, and a satellite's position dot
+  gets its tag name the same way; the pass arc's group,
+  <g class="dome-track" data-body="iss">, lives on the Next Visible Pass
+  chart, whose marks carry the same hooks as the dome's.  The tooltip
+  text is translated and was never a usable selector.  And the
+  configured satellite list is enumerable: $sky_page.satellite_names()
+  returns the tag names in config order (empty when none are
+  configured or the almanac is not registered).  Both are consumer
+  contracts -- weewx-celestial's live dome (celestial 8.0) repositions
+  marks between report cycles through the hooks and builds its
+  satellite roster and live layer from the list -- so they are stable.
+- The page's tooltips now answer taps.  Every mark's tooltip is a
+  native SVG <title>, which browsers show only on hover -- and a touch
+  screen has no hover, so on an iPad every tooltip was simply dead.  A
+  small dependency-free script, sky.js, installed and copied beside
+  sky.css, now shows the same text in a floating chip when a mark is
+  tapped: the tap snaps to the nearest mark within 24 CSS px (the
+  dome's fainter stars are 1-3 px dots, blunter than any finger), a
+  tap on empty sky, a scroll or Escape dismisses it, and mouse users
+  keep the native hover tooltips unchanged -- a click now also pins
+  the chip.  The two captions that said "Hover any mark" now say
+  "Hover or tap", reworded in all nine shipped languages.  Embedding
+  skins get the same fix by copying sky.js and sky.css's new .skytip
+  rule and loading the script with <script src="sky.js" defer> -- the
+  panels' markup is unchanged.
+- The complete Hipparcos catalog now ships with the extension, as
+  wxskyfield_stars.dat.gz -- all 118,218 stars, replacing the ~400
+  star excerpt.  Every $almanac.hip_<number> tag works out of the box
+  (here, and on celestial and loopdata almanac fields), and the Sky
+  page's dome is a full sky map for everyone.  If you had downloaded
+  hip_main.dat into WeeWX's user directory per the old instructions,
+  that copy is now redundant: the extension no longer reads it, and it
+  can be deleted.  The release download grows to about 32 MB.
+- With the full catalog always present, the dome's defaults change:
+  star_mag_limit 2.6 -> 5.0 (roughly 800 stars) and star_label_mag
+  1.1 -> 2.5.  The report options remain the escape hatch -- the old
+  values restore the pre-2.0 sparse look.
+- The [Skyfield] stars option is removed: stars are simply always
+  available.  A leftover stars = ... line is ignored with a log
+  warning that says so; nothing else changes.
+- Complete Italian, Norwegian and Swedish translations ship with the
+  skin (Beta, awaiting their native-speaker reviews): lang/it.conf,
+  lang/no.conf (Bokmål; no is WeeWX's own code for Norwegian) and
+  lang/sv.conf translate the page prose, every panel string including
+  the new satellite strings, the body names, moon phases, compass
+  points (Swedish spells east O in its compass winds but Ö in
+  coordinates -- the file carries both correctly) and all 88
+  constellation names, each set as on that language's Wikipedia list
+  of the 88 constellations.  Select one with lang = it, no, or sv in
+  the [[SkyfieldReport]] section of weewx.conf.  Tests keep all three
+  complete the same way they keep the German, French, Danish, Dutch
+  and Spanish.
+- Docs: the Known Skyfield Issues section in the README and page
   in the user manual now say that Skyfield merged pull request #1140 --
   the fix for the rare benign RuntimeWarning from almanac.py line 339
-  (skyfield issue #1114) -- on August 4, 2026, closing the issue.  The
-  warning disappears once the first Skyfield release after 1.54 ships
-  the fix; these docs then get their final update naming that version.
+  (skyfield issue #1114) -- on August 4, 2026, closing the issue, and
+  shipped the fix in Skyfield 1.55 on August 7, 2026: upgrading to
+  Skyfield 1.55 or later makes the warning disappear.  The docs'
+  current-Skyfield-release mentions move from 1.54 to 1.55, which the
+  full test suite runs green against.
 
 1.19 2026/08/03
 ---------------

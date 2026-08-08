@@ -50,7 +50,7 @@ weewx-skyfield's author diagnosed the root cause — with a deterministic
 reproduction — in
 [issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114) and submitted
 [pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140) with the
-fix and a regression test.  **Skyfield merged the fix on August 4, 2026**, closing the
-issue; the warning will disappear once the first Skyfield release after 1.54 ships it.
-Upgrading Skyfield, once that release is out, is routine — see
+fix and a regression test.  **Skyfield merged the fix on August 4, 2026, closing the
+issue, and shipped it in Skyfield 1.55 on August 7, 2026** — upgrading to Skyfield 1.55
+or later makes the warning disappear.  Upgrading is routine — see
 [Upgrading Skyfield](installation.md#upgrading-skyfield).

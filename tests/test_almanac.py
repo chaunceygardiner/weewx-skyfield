@@ -54,16 +54,42 @@ TIME_TOL    = 5.0             # seconds, for event regression values
 ANGLE_TOL   = 0.05            # degrees
 EPHEM_TOL   = 120.0           # seconds, when comparing against PyEphem
 
-# The named stars come from wxskyfield_stars.dat, a small excerpt of the
-# Hipparcos catalog that ships with the extension.
+# The stars come from wxskyfield_stars.dat.gz, the complete Hipparcos
+# catalog that ships with the extension.
 CATALOG_PRESENT = os.path.exists(os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE))
 needs_catalog = pytest.mark.skipif(not CATALOG_PRESENT, reason='%s not present' % wxskyfield.STAR_FILE)
+
+# Satellite element fixtures: real archived TLEs (CelesTrak's stations
+# group as captured 2025-06-21, epochs 0.26/0.88 days before TIME_TS) for
+# the ISS and Tiangong, committed as test data, plus a fabricated
+# geostationary satellite parked over the far side of the Earth --
+# deterministic never-rises.  SGP4 is pure math: canned TLE + TIME_TS +
+# Palo Alto = deterministic, so pass times pin like sun -17.6239.
+SAT_DATA_DIR = os.path.join(TEST_DIR, 'data')
+ISS_NORAD, TIANGONG_NORAD, GEOSAT_NORAD = 25544, 48274, 90000
+SATELLITES = {'iss': ISS_NORAD, 'tiangong': TIANGONG_NORAD}
+ISS_EPOCH_TS = 1750510380.388
+
+
+def read_tle(norad: int) -> str:
+    with open(os.path.join(SAT_DATA_DIR, wxskyfield.SAT_FILE_FORMAT % norad)) as f:
+        return f.read()
+
+
+def raw(value_helper, unit):
+    """A tag's value in the given unit, or None -- .raw honors any report
+    unit-group override, so the unit is always pinned explicitly."""
+    try:
+        return value_helper.convert(unit).raw
+    except Exception:
+        return None
 
 
 @pytest.fixture(scope='session')
 def sky():
     s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
-                       load_stars=CATALOG_PRESENT)
+                       load_stars=CATALOG_PRESENT,
+                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
     assert s.is_valid()
     return s
 
@@ -162,11 +188,17 @@ class TestService:
             service = wxskyfield.WxSkyfield(engine, make_config())
             assert len(service.sky.stars) == len(set(wxskyfield.NAMED_STARS))
 
-    def test_service_stars_disabled(self):
-        with saved_almanacs():
+    @needs_catalog
+    def test_removed_stars_option_warns_and_stars_still_load(self, caplog):
+        """The stars option was removed in 2.0 (the full catalog always
+        ships); an old config's stars = false must be called out with the
+        removal hint -- and must not disable anything."""
+        with saved_almanacs(), caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
             engine = StubEngine()
             service = wxskyfield.WxSkyfield(engine, make_config(stars='false'))
-            assert service.sky.stars == {}
+        assert 'unrecognized [Skyfield] option: stars' in caplog.text
+        assert 'removed in 2.0' in caplog.text
+        assert len(service.sky.stars) == len(set(wxskyfield.NAMED_STARS))
 
     def test_service_missing_enable_defaults_to_enabled(self):
         """A missing 'enable' key means enabled, per the README -- and must
@@ -202,7 +234,7 @@ class TestService:
 
     def test_recognized_options_do_not_warn(self, caplog):
         with saved_almanacs(), caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
-            wxskyfield.WxSkyfield(StubEngine(), make_config(stars='true'))
+            wxskyfield.WxSkyfield(StubEngine(), make_config(satellite_downloads='true'))
         assert 'unrecognized' not in caplog.text
 
     def test_old_skyfield_declines(self, monkeypatch):
@@ -941,22 +973,20 @@ class TestStars:
         assert sky.stars['alula_australis'][0].dec.degrees == pytest.approx(31.53, abs=0.01)
 
     def test_hip_number_tags(self, almanac, sky):
-        """Any Hipparcos star in the available catalog can be addressed by
-        number: $almanac.hip_57939.  Loaded lazily and cached; misses are
-        cached too and fall through to the next almanac (AttributeError)."""
+        """Any of the catalog's 118,218 stars can be addressed by number:
+        $almanac.hip_57939.  Loaded lazily and cached; misses are cached
+        too and fall through to the next almanac (AttributeError)."""
         # HIP 32349 is Sirius: the hip_ tag serves the same star as the name.
         assert almanac.hip_32349.mag == almanac.sirius.mag
         assert almanac.hip_32349.rise.raw == pytest.approx(almanac.sirius.rise.raw, abs=1.0)
         assert 'hip_32349' in sky.stars    # cached
-        # A HIP number not in the bundled excerpt (Groombridge 1830, mag 6.4)
-        # is a miss unless a full hip_main.dat is installed.
-        full_catalog = os.path.exists(os.path.join(REPO_ROOT, 'bin', 'user', 'hip_main.dat'))
-        if full_catalog:
-            assert almanac.hip_57939.mag == pytest.approx(6.42, abs=0.1)
-        else:
-            with pytest.raises(AttributeError):
-                almanac.hip_57939.mag
-            assert 57939 in sky.hip_misses    # the miss is cached
+        # A star far beyond the named ~400 works out of the box:
+        # Groombridge 1830 (HIP 57939), mag 6.4.
+        assert almanac.hip_57939.mag == pytest.approx(6.42, abs=0.1)
+        # A number the catalog has never heard of is a cached miss.
+        with pytest.raises(AttributeError):
+            almanac.hip_999999.mag
+        assert 999999 in sky.hip_misses
 
     def test_hip_tag_leading_zeros(self, almanac):
         """Catalogs zero-pad HIP numbers ('HIP 032349'); the zero-padded tag
@@ -987,30 +1017,19 @@ class TestStars:
                 alm.hip_32349.mag
 
     @needs_catalog
-    def test_named_stars_load_from_excerpt_not_full_catalog(self, tmp_path):
-        """Named stars load from the bundled excerpt even when a full
-        hip_main.dat is installed: the excerpt's records are identical, and
-        scanning 118,218 catalog records at every startup buys nothing."""
-        (tmp_path / wxskyfield.STAR_FILE).symlink_to(
-            os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE))
-        # An empty stand-in full catalog: were it preferred, nothing would load.
-        (tmp_path / 'hip_main.dat').write_text('')
-        stars = wxskyfield.Sky.load_named_stars(str(tmp_path))
-        assert len(stars) == len(set(wxskyfield.NAMED_STARS))
-
-    @needs_catalog
-    def test_corrupt_full_catalog_degrades_per_tag(self, tmp_path):
-        """A corrupt (non-text) hip_main.dat appearing after startup must
-        degrade hip_<n> tags to per-tag misses, never leak
-        UnicodeDecodeError into report generation."""
+    def test_corrupt_catalog_after_startup_degrades_per_tag(self, tmp_path):
+        """A catalog corrupted after startup (e.g. a broken reinstall
+        rewriting the file) must degrade hip_<n> tags to per-tag misses,
+        never leak a gzip error into report generation."""
         (tmp_path / 'wxskyfield_de421.bsp').symlink_to(
             os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp'))
         (tmp_path / wxskyfield.STAR_FILE).symlink_to(
             os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE))
         s = wxskyfield.Sky(str(tmp_path), load_stars=True)
         assert s.is_valid() and s.load_stars
-        # A still-gzipped download dropped in place of the text catalog.
-        (tmp_path / 'hip_main.dat').write_bytes(b'\x1f\x8b\x08\x00\xff\xfe garbage \xff')
+        # Garbage bytes wearing a gzip magic number replace the catalog.
+        (tmp_path / wxskyfield.STAR_FILE).unlink()
+        (tmp_path / wxskyfield.STAR_FILE).write_bytes(b'\x1f\x8b\x08\x00\xff\xfe garbage \xff')
         assert 12345 not in wxskyfield.NAMED_STARS.values()
         assert not s.get_star_by_hip(12345)
         assert 12345 in s.hip_misses    # the miss is cached
@@ -1026,8 +1045,10 @@ class TestStars:
     def test_malformed_record_skips_only_that_star(self, tmp_path):
         """One bad catalog record must disable only that star, not the
         whole catalog."""
+        import gzip
         good = None
-        with open(os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE)) as f:
+        with gzip.open(os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE),
+                       'rt') as f:
             for line in f:
                 if line.startswith('H|') and line.split('|')[1].strip() == '32349':
                     good = line
@@ -1038,7 +1059,8 @@ class TestStars:
         bad_mag = good.split('|')
         bad_mag[1] = '%12d' % wxskyfield.NAMED_STARS['rigel']
         bad_mag[5] = ' x.xx'
-        (tmp_path / wxskyfield.STAR_FILE).write_text(good + truncated + '|'.join(bad_mag))
+        with gzip.open(str(tmp_path / wxskyfield.STAR_FILE), 'wt') as f:
+            f.write(good + truncated + '|'.join(bad_mag))
         stars = wxskyfield.Sky.load_named_stars(str(tmp_path))
         assert 'sirius' in stars
         assert 'vega' not in stars
@@ -1114,11 +1136,13 @@ PYEPHEM_PARITY_EXPRESSIONS = [
     "almanac.sun.visible", "almanac.sun.visible_change()", "almanac.moon.visible",
 ]
 
-HIP_MAIN_PRESENT = os.path.exists(os.path.join(REPO_ROOT, 'bin', 'user', 'hip_main.dat'))
+# HIP 4427 (gamma Cassiopeiae, mag 2.15) is the brightest star with
+# neither an IAU-CSN nor a PyEphem name, so it can only ever come from the
+# catalog scan, never from NAMED_STARS -- the star whose absence prompted
+# the catalog dome (1.18), and the canary for the full-catalog paths.
+GAMMA_CAS_HIP = 4427
 
-# The real hip_main.dat record for HIP 4427 (gamma Cassiopeiae, mag 2.15) --
-# the brightest star with neither an IAU-CSN nor a PyEphem name, so it can
-# only ever come from a full catalog, never from NAMED_STARS.
+# Its real hip_main.dat record, for fabricating small stand-in catalogs.
 GAMMA_CAS_RECORD = (
     'H|        4427| |00 56 42.50|+60 43 00.3| 2.15|1|H|014.17708808|+60.71674966| '
     '|   5.32|   25.65|   -3.82|  0.35|  0.38|  0.56|  0.42|  0.44|-0.24| 0.19| 0.04'
@@ -1126,94 +1150,97 @@ GAMMA_CAS_RECORD = (
     '|0.003| |-0.046|0.003|T|-.02|0.00|L| | 2.1379|0.0008|0.009|154| | 2.12| 2.16|  '
     '     |U|2| |00567+6043|I| 1| 1| | | |  |   |       |     |     |    |S| |P|  '
     '5394|B+59  144 |          |          |0.01|B0IV:evar   |X \n')
-GAMMA_CAS_HIP = 4427
 
 
-def make_full_catalog_root(tmp_path, extra_records: str = GAMMA_CAS_RECORD) -> str:
-    """A user_root whose hip_main.dat stands in for the full catalog: the
-    bundled excerpt's real records plus extra_records.  The ephemeris and
-    excerpt are symlinked from the repo."""
-    for f in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
-        os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', f), os.path.join(tmp_path, f))
-    with open(os.path.join(REPO_ROOT, 'bin', 'user', wxskyfield.STAR_FILE)) as f:
-        excerpt = f.read()
-    with open(os.path.join(tmp_path, 'hip_main.dat'), 'w') as f:
-        f.write(excerpt + extra_records)
+def make_catalog_root(tmp_path, records: str) -> str:
+    """A user_root whose star catalog is a small fabricated gzip holding
+    just the given hip_main.dat records; the ephemeris is symlinked from
+    the repo."""
+    import gzip
+    os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp'),
+               os.path.join(tmp_path, 'wxskyfield_de421.bsp'))
+    with gzip.open(os.path.join(tmp_path, wxskyfield.STAR_FILE), 'wt') as f:
+        f.write(records)
     return str(tmp_path)
 
 
 @needs_catalog
 class TestCatalogStarField:
-    """star_field/catalog_stars: with a full hip_main.dat the dome plots
-    every catalog star to a magnitude limit, positions computed in one
-    vectorized observe that must agree with the binder's scalar path."""
-
-    @pytest.fixture()
-    def full_almanac(self, tmp_path):
-        s = wxskyfield.Sky(make_full_catalog_root(tmp_path), load_stars=True)
-        assert s.is_valid()
-        with saved_almanacs():
-            assert wxskyfield.register_almanac(s)
-            yield weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
-                                        formatter=weewx.units.get_default_formatter())
+    """star_field/catalog_stars: the dome plots every catalog star to a
+    magnitude limit, positions computed in one vectorized observe that
+    must agree with the binder's scalar path.  Pinned against the real
+    shipped catalog -- since 2.0 the full 118,218 records ARE the bundled
+    star file."""
 
     @staticmethod
     def almanac_type():
         return [a for a in weewx.almanac.almanacs
                 if isinstance(a, wxskyfield.SkyfieldAlmanacType)][0]
 
-    def test_field_matches_binder(self, full_almanac):
+    def test_shipped_catalog_is_complete(self):
+        """The bundled file is the complete Hipparcos main catalog, and
+        the magnitude scan finds the known populations (the same counts
+        as the 1.18 field measurements against a user-installed
+        hip_main.dat)."""
+        import gzip
+        n = 0
+        with gzip.open(os.path.join(REPO_ROOT, 'bin', 'user',
+                                    wxskyfield.STAR_FILE), 'rt') as f:
+            for _line in f:
+                n += 1
+        assert n == 118218
+
+    def test_star_counts_pinned(self, sky):
+        assert len(sky.catalog_stars(2.6)[0]) == 102
+        assert len(sky.catalog_stars(5.0)[0]) == 1627
+
+    def test_field_matches_binder(self, almanac):
         field = {hip: (az, alt, mag) for hip, az, alt, mag
-                 in self.almanac_type().star_field(full_almanac, 5.0)}
+                 in self.almanac_type().star_field(almanac, 5.0)}
         # Gamma Cas is circumpolar at the test latitude, so it must be up.
         assert GAMMA_CAS_HIP in field
         for name, hip in (('rigel', 24436), ('polaris', 11767),
                           ('hip_%d' % GAMMA_CAS_HIP, GAMMA_CAS_HIP)):
             az, alt, mag = field[hip]
-            b = getattr(full_almanac, name)
+            b = getattr(almanac, name)
             assert abs(alt - b.alt) < 1e-6
             assert abs(az - b.az) < 1e-6
         for hip, (az, alt, mag) in field.items():
             assert alt > 0.0
             assert mag <= 5.0
 
-    def test_limit_filters(self, full_almanac):
-        field = self.almanac_type().star_field(full_almanac, 2.0)
+    def test_limit_filters(self, almanac):
+        field = self.almanac_type().star_field(almanac, 2.0)
         hips = {hip for hip, _az, _alt, _mag in field}
         # Rigel (0.18) passes a 2.0 limit; gamma Cas (2.15) must not.
         assert 24436 in hips
         assert GAMMA_CAS_HIP not in hips
 
-    def test_empty_field(self, full_almanac):
+    def test_empty_field(self, almanac):
         # Nothing is brighter than magnitude -2 (Sirius is -1.44).
-        assert self.almanac_type().star_field(full_almanac, -2.0) == []
+        assert self.almanac_type().star_field(almanac, -2.0) == []
 
-    def test_cached_per_limit(self, full_almanac):
+    def test_cached_per_limit(self, almanac):
         sky = self.almanac_type().sky
         assert sky.catalog_stars(5.0) is sky.catalog_stars(5.0)
 
-    @pytest.mark.skipif(HIP_MAIN_PRESENT, reason='a full hip_main.dat is installed in bin/user')
-    def test_none_without_full_catalog(self, almanac, sky):
-        # Only the bundled excerpt: the dome must fall back to named stars.
-        assert sky.catalog_stars(2.6) is None
-        assert self.almanac_type().star_field(almanac, 2.6) is None
-
     def test_malformed_record_skipped(self, tmp_path):
-        root = make_full_catalog_root(
-            tmp_path, extra_records=GAMMA_CAS_RECORD + 'H|garbage|record\n')
+        root = make_catalog_root(
+            tmp_path, GAMMA_CAS_RECORD + 'H|garbage|record\n')
         s = wxskyfield.Sky(root, load_stars=True)
         assert s.is_valid()
         hips, star, mags = s.catalog_stars(5.0)
         assert GAMMA_CAS_HIP in hips
 
     def test_corrupt_catalog_degrades(self, tmp_path):
-        for f in ('wxskyfield_de421.bsp', wxskyfield.STAR_FILE):
-            os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', f), os.path.join(tmp_path, f))
-        with open(os.path.join(tmp_path, 'hip_main.dat'), 'wb') as f:
-            f.write(b'\x1f\x8b\x00\x00not really text\xff\xfe')
+        os.symlink(os.path.join(REPO_ROOT, 'bin', 'user', 'wxskyfield_de421.bsp'),
+                   os.path.join(tmp_path, 'wxskyfield_de421.bsp'))
+        with open(os.path.join(tmp_path, wxskyfield.STAR_FILE), 'wb') as f:
+            f.write(b'\x1f\x8b\x00\x00not really gzip\xff\xfe')
         s = wxskyfield.Sky(str(tmp_path), load_stars=True)
+        # The named-star load fails too, so star support is disabled and
+        # catalog_stars must return None, not raise.
         assert s.is_valid()
-        # Not text at all: catalog_stars must return None, not raise.
         assert s.catalog_stars(2.6) is None
 
 
@@ -1450,6 +1477,611 @@ class TestEclipses:
             assert sydney.next_solar_eclipse_type == 'total'
 
 
+# ── satellites ───────────────────────────────────────────────────────────────
+
+class TestSatelliteConfig:
+    """[Skyfield] [[Satellites]] parsing, the cache directory convention,
+    and the sat_<norad> tag spelling."""
+
+    def test_parse_satellites(self):
+        parsed = wxskyfield.parse_satellites(
+            {'Satellites': {'ISS': '25544', 'tiangong': '48274'}})
+        assert parsed == {'iss': 25544, 'tiangong': 48274}
+
+    def test_bad_norad_disables_only_that_entry(self, caplog):
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            parsed = wxskyfield.parse_satellites(
+                {'Satellites': {'iss': '25544', 'hubble': 'HST'}})
+        assert parsed == {'iss': 25544}
+        assert 'hubble' in caplog.text and 'NORAD' in caplog.text
+
+    def test_shadowing_names_refused(self, caplog):
+        """A name that is already an almanac tag would silently never be
+        served (body dispatch checks planets, stars and the number forms
+        first), so it is refused loudly."""
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            parsed = wxskyfield.parse_satellites(
+                {'Satellites': {'mars': '1', 'rigel': '2', 'hip_87937': '3',
+                                'sat_25544': '4', 'sun': '5', 'earth': '6',
+                                'iss': '25544'}})
+        assert parsed == {'iss': 25544}
+        assert caplog.text.count('already an almanac tag') == 6
+
+    def test_missing_section_means_no_satellites(self):
+        assert wxskyfield.parse_satellites({}) == {}
+        assert wxskyfield.parse_satellites({'Satellites': {}}) == {}
+
+    def test_sat_dir_under_sqlite_root(self):
+        config = {'WEEWX_ROOT': '/home/weewx',
+                  'DatabaseTypes': {'SQLite': {'SQLITE_ROOT': 'archive'}}}
+        assert wxskyfield.get_sat_dir(config) == '/home/weewx/archive/wxskyfield'
+        # An absolute SQLITE_ROOT wins the join, as in weewx's own manager.
+        config['DatabaseTypes']['SQLite']['SQLITE_ROOT'] = '/var/lib/weewx'
+        assert wxskyfield.get_sat_dir(config) == '/var/lib/weewx/wxskyfield'
+
+    def test_sat_dir_mysql_fallback(self):
+        """A MySQL-only station has no SQLITE_ROOT; the cache falls back
+        to WEEWX_ROOT."""
+        config = {'WEEWX_ROOT': '/home/weewx'}
+        assert wxskyfield.get_sat_dir(config) == '/home/weewx/./wxskyfield'
+
+    def test_sat_norad_spellings(self, sky):
+        """sat_<norad> is only an alternate spelling for a LISTED
+        satellite -- never a trigger to serve (and so fetch) an unlisted
+        one, unlike hip_<n>, whose catalog is already on disk."""
+        assert sky.sat_norad('iss') == ISS_NORAD
+        assert sky.sat_norad('sat_25544') == ISS_NORAD
+        assert sky.sat_norad('sat_20580') is None
+        assert sky.sat_norad('mars') is None
+
+    def test_tle_lines_named(self):
+        name, l1, l2 = wxskyfield.tle_lines(read_tle(ISS_NORAD), ISS_NORAD)
+        assert name == 'ISS (ZARYA)'
+        assert l1.startswith('1 25544U') and l2.startswith('2 25544')
+
+    def test_tle_lines_nameless(self):
+        bare = '\n'.join(read_tle(ISS_NORAD).splitlines()[1:])
+        name, _l1, _l2 = wxskyfield.tle_lines(bare, ISS_NORAD)
+        assert name == 'NORAD 25544'
+
+    def test_tle_lines_rejects_wrong_satellite(self):
+        with pytest.raises(ValueError, match='48274, not 25544'):
+            wxskyfield.tle_lines(read_tle(TIANGONG_NORAD), ISS_NORAD)
+
+    def test_tle_lines_rejects_non_tle(self):
+        # CelesTrak's miss answer, and a truncated download.
+        with pytest.raises(ValueError):
+            wxskyfield.tle_lines('No GP data found', ISS_NORAD)
+        with pytest.raises(ValueError):
+            wxskyfield.tle_lines(read_tle(ISS_NORAD).splitlines()[1], ISS_NORAD)
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestSatelliteFetcher:
+    """The element fetcher and the service's refresh scheduling.  No test
+    here ever touches the network or sleeps: downloads are monkeypatched
+    and staleness comes from synthetic mtimes."""
+
+    def make_service(self, tmp_path, **skyfield_options):
+        options = dict(Satellites={'iss': str(ISS_NORAD)})
+        options.update(skyfield_options)
+        config = make_config(**options)
+        config['DatabaseTypes'] = {'SQLite': {'SQLITE_ROOT': str(tmp_path)}}
+        with saved_almanacs():
+            engine = StubEngine()
+            service = wxskyfield.WxSkyfield(engine, config)
+        return engine, service
+
+    def test_fetch_writes_validated_payload(self, tmp_path, monkeypatch):
+        payload = read_tle(ISS_NORAD)
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen['url'] = request.full_url
+            seen['ua'] = request.get_header('User-agent')
+            return FakeResponse(payload.encode('ascii'))
+
+        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
+        wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
+        with open(path) as f:
+            assert f.read() == payload
+        assert not os.path.exists(path + '.tmp')
+        # The wire format: bare gp.php?CATNR returns CSV; FORMAT=TLE is
+        # required.  And the identifying User-Agent CelesTrak asks for.
+        assert 'CATNR=25544' in seen['url'] and 'FORMAT=TLE' in seen['url']
+        assert seen['ua'] == wxskyfield.SAT_USER_AGENT
+        assert wxskyfield.WXSKYFIELD_VERSION in seen['ua']
+        assert 'github.com/chaunceygardiner/weewx-skyfield' in seen['ua']
+
+    def test_fetch_failure_keeps_old_file(self, tmp_path, monkeypatch):
+        old = read_tle(ISS_NORAD)
+        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
+        with open(path, 'w') as f:
+            f.write(old)
+
+        def fake_urlopen(request, timeout=None):
+            raise OSError('network unreachable')
+
+        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        with pytest.raises(OSError):
+            wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
+        with open(path) as f:
+            assert f.read() == old
+        assert not os.path.exists(path + '.tmp')
+
+    def test_fetch_corrupt_payload_keeps_old_file(self, tmp_path, monkeypatch):
+        """The payload is validated BEFORE the write: a CSV answer (the
+        FORMAT-less wire format), an HTML error page, or a miss answer
+        must never replace working elements with garbage."""
+        old = read_tle(ISS_NORAD)
+        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
+        with open(path, 'w') as f:
+            f.write(old)
+        for payload in (b'OBJECT_NAME,OBJECT_ID,EPOCH\nISS (ZARYA),1998-067A,x\n',
+                        b'No GP data found',
+                        read_tle(TIANGONG_NORAD).encode('ascii')):
+            monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen',
+                                lambda request, timeout=None, p=payload: FakeResponse(p))
+            with pytest.raises(ValueError):
+                wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
+            with open(path) as f:
+                assert f.read() == old
+            assert not os.path.exists(path + '.tmp')
+
+    def test_no_network_at_startup(self, tmp_path, monkeypatch):
+        """Sky.__init__ (and the whole service constructor) never touches
+        the network: elements load lazily at tag time, and the first
+        fetch waits for the engine's STARTUP event, on a worker thread --
+        the constructor only binds."""
+        def boom(*args, **kwargs):
+            raise AssertionError('network access at startup')
+
+        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', boom)
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
+        assert s.is_valid()
+        assert s.satellite_elements(ISS_NORAD) is not None
+        self.make_service(tmp_path)
+
+    def test_service_binds_startup_and_archive_events(self, tmp_path):
+        """STARTUP is what makes a just-added satellite live within
+        seconds of a restart instead of one archive interval in -- a
+        satellite configured and restarted into showed N/A tags for
+        minutes before this binding existed."""
+        engine, _service = self.make_service(tmp_path)
+        assert engine.bound == [weewx.STARTUP, weewx.NEW_ARCHIVE_RECORD]
+
+    def test_downloads_off_binds_nothing(self, tmp_path):
+        """satellite_downloads = false is user-supplied-file mode: the
+        tags still serve whatever TLEs the user maintains in the cache
+        directory; the service just never fetches."""
+        engine, service = self.make_service(tmp_path, satellite_downloads='false')
+        assert engine.bound == []
+        assert service.sky.satellites == {'iss': ISS_NORAD}
+
+    def test_no_satellites_binds_nothing(self, tmp_path):
+        engine, _service = self.make_service(tmp_path, Satellites={})
+        assert engine.bound == []
+
+    def test_stale_satellites_age_driven(self, tmp_path):
+        """Missing file: maximally stale, due at the first archive cycle
+        (offline install, or a satellite added to the config later).
+        Fresh mtime: not due.  Older than the cadence: due -- age-driven,
+        not schedule-driven, so a weewxd started after a long stop
+        refreshes immediately."""
+        _engine, service = self.make_service(tmp_path)
+        now = time.time()
+        assert service.stale_satellites(now) == [ISS_NORAD]
+        path = service.sky.sat_path(ISS_NORAD)
+        os.makedirs(service.sky.sat_dir, exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(read_tle(ISS_NORAD))
+        os.utime(path, (now, now))
+        assert service.stale_satellites(now) == []
+        os.utime(path, (now - wxskyfield.SAT_REFRESH_SECS - 1,
+                        now - wxskyfield.SAT_REFRESH_SECS - 1))
+        assert service.stale_satellites(now) == [ISS_NORAD]
+        # A satellite inside its failure backoff window is skipped.
+        service._sat_retry_ts[ISS_NORAD] = now + 60
+        assert service.stale_satellites(now) == []
+
+    def test_backoff_doubles_and_caps(self, tmp_path, monkeypatch):
+        """On failure, retry SOONER than the normal cadence -- five
+        minutes, doubling per consecutive failure, capped at the three-
+        hour cadence -- so a recovered network refreshes quickly and
+        CelesTrak is never hammered.  Success resets the backoff."""
+        _engine, service = self.make_service(tmp_path)
+
+        def failing(norad, path):
+            raise OSError('offline')
+
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', failing)
+        delays = []
+        for _ in range(8):
+            before = time.time()
+            service._fetch_worker([ISS_NORAD])
+            delays.append(service._sat_retry_ts[ISS_NORAD] - before)
+        assert delays[0] == pytest.approx(wxskyfield.SAT_RETRY_BASE_SECS, abs=5)
+        assert delays[1] == pytest.approx(2 * wxskyfield.SAT_RETRY_BASE_SECS, abs=5)
+        assert max(delays) <= wxskyfield.SAT_REFRESH_SECS + 5
+        assert delays[-1] == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5)
+
+        def succeeding(norad, path):
+            with open(path, 'w') as f:
+                f.write(read_tle(norad))
+
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', succeeding)
+        service._fetch_worker([ISS_NORAD])
+        assert ISS_NORAD not in service._sat_retry_ts
+        assert ISS_NORAD not in service._sat_retry_delay
+        assert os.path.exists(service.sky.sat_path(ISS_NORAD))
+
+    def test_refresh_fetches_stale_on_worker_thread(self, tmp_path, monkeypatch):
+        """The one callback serves both bindings: at STARTUP the cache is
+        missing or stale and this is the immediate fetch; at every
+        NEW_ARCHIVE_RECORD it is the three-hour cadence."""
+        _engine, service = self.make_service(tmp_path)
+        fetched = []
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements',
+                            lambda norad, path: fetched.append(norad))
+        service.refresh_satellite_elements(None)
+        assert service._sat_thread is not None
+        service._sat_thread.join(10)
+        assert not service._sat_thread.is_alive()
+        assert fetched == [ISS_NORAD]
+
+    def test_refresh_skips_fresh_elements(self, tmp_path, monkeypatch):
+        """A normal restart with fresh cache files spawns no thread and
+        fetches nothing -- the STARTUP binding never hammers CelesTrak."""
+        _engine, service = self.make_service(tmp_path)
+        path = service.sky.sat_path(ISS_NORAD)
+        os.makedirs(service.sky.sat_dir, exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(read_tle(ISS_NORAD))
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements',
+                            lambda norad, p: pytest.fail('fetched fresh elements'))
+        service.refresh_satellite_elements(None)
+        assert service._sat_thread is None
+
+
+class TestSatellitePositions:
+    """Topocentric satellite tags at the standard fixture.  SGP4 is pure
+    math, so these pin like every other regression value."""
+
+    def test_position_pins(self, almanac):
+        iss = almanac.iss
+        assert iss.alt == pytest.approx(-17.7318, abs=ANGLE_TOL)
+        assert iss.az == pytest.approx(309.1526, abs=ANGLE_TOL)
+        assert iss.ra == pytest.approx(303.6499, abs=ANGLE_TOL)
+        assert iss.dec == pytest.approx(16.9973, abs=ANGLE_TOL)
+        assert raw(iss.distance, 'km') == pytest.approx(5004.9, abs=1.0)
+        assert iss.sunlit is True
+
+    def test_value_helper_forms(self, almanac):
+        assert raw(almanac.iss.altitude, 'degree_angle') == pytest.approx(-17.7318, abs=ANGLE_TOL)
+        assert raw(almanac.iss.azimuth, 'degree_compass') == pytest.approx(309.1526, abs=ANGLE_TOL)
+        assert raw(almanac.iss.topo_ra, 'degree_compass') == pytest.approx(303.6499, abs=ANGLE_TOL)
+        assert raw(almanac.iss.topo_dec, 'degree_angle') == pytest.approx(16.9973, abs=ANGLE_TOL)
+        assert almanac.iss.azimuth.ordinal_compass() == 'NW'
+
+    def test_tiangong_pins(self, almanac):
+        tg = almanac.tiangong
+        assert tg.alt == pytest.approx(-78.9339, abs=ANGLE_TOL)
+        assert tg.az == pytest.approx(254.9652, abs=ANGLE_TOL)
+        assert raw(tg.distance, 'km') == pytest.approx(12911.4, abs=1.0)
+        assert tg.sunlit is False
+
+    def test_sat_number_is_alternate_spelling(self, almanac):
+        assert almanac.sat_25544.alt == almanac.iss.alt
+        assert raw(almanac.sat_25544.next_pass.rise, 'unix_epoch') \
+            == raw(almanac.iss.next_pass.rise, 'unix_epoch')
+
+    def test_unlisted_sat_number_raises(self, almanac):
+        # The config list IS the fetch list: sat_<n> never serves an
+        # unlisted satellite (unlike hip_<n>, whose catalog is on disk).
+        with pytest.raises(AttributeError):
+            almanac.sat_20580.alt
+
+    def test_unsupported_attributes_raise(self, almanac):
+        """A satellite's tag surface is its own: no magnitude (models are
+        hand-wavy; sunlit + max_altitude are the honest answer), no
+        planet verbs, no PyEphem fallback."""
+        for attr in ('mag', 'visible', 'constellation', 'phase',
+                     'earth_distance', 'moon_fullness', 'a_epoch'):
+            with pytest.raises(AttributeError):
+                getattr(almanac.iss, attr)
+
+    def test_name_and_label(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter(),
+                                        texts={'iss': 'ISS'})
+            assert alm.iss.label == 'ISS'
+            assert alm.tiangong.label == 'Tiangong'
+            assert alm.iss.name == 'Iss'
+
+    def test_separation_takes_coordinate_path(self, almanac):
+        """A satellite binder cannot take separation's exact-vector path
+        (skyfield only observe()s from the barycenter); the coordinate
+        path must serve it instead of raising ValueError."""
+        sep = almanac.separation(almanac.iss, almanac.mars)
+        assert 0.0 <= sep.degrees <= 180.0
+        sep2 = almanac.separation(almanac.mars, almanac.iss)
+        assert sep2.degrees == pytest.approx(sep.degrees, abs=0.01)
+
+
+class TestSatellitePasses:
+    """The next_pass family, per the settled semantics: geometric horizon
+    (default 0, the almanac's horizon argument), the 7-day element-
+    validity search window, whole-pass visibility sampling against a -6
+    degree dark sky, and the 10-degree go-watch bar for the visible
+    variant."""
+
+    def test_next_pass_pins(self, almanac):
+        p = almanac.iss.next_pass
+        assert raw(p.rise, 'unix_epoch') == pytest.approx(1750532794.085, abs=1.0)
+        assert raw(p.culmination, 'unix_epoch') == pytest.approx(1750533111.680, abs=1.0)
+        assert raw(p.set, 'unix_epoch') == pytest.approx(1750533427.069, abs=1.0)
+        assert raw(p.max_altitude, 'degree_angle') == pytest.approx(35.54, abs=ANGLE_TOL)
+        assert raw(p.duration, 'second') == pytest.approx(633.0, abs=2.0)
+        # A midday pass: geometrically fine, invisible (the sky is bright).
+        assert p.visible is False
+        assert p.rise_azimuth.ordinal_compass() == 'WNW'
+        assert p.culmination_azimuth.ordinal_compass() == 'SW'
+        assert p.set_azimuth.ordinal_compass() == 'SSE'
+
+    def test_next_visible_pass_pins(self, almanac):
+        """The next VISIBLE pass skips ahead to the next morning's dark-
+        sky pass (03:11 local): sunlit satellite, observer past civil
+        dusk, culmination over the 10-degree bar."""
+        v = almanac.iss.next_visible_pass
+        assert raw(v.rise, 'unix_epoch') == pytest.approx(1750587085.008, abs=1.0)
+        assert raw(v.max_altitude, 'degree_angle') == pytest.approx(19.34, abs=ANGLE_TOL)
+        assert raw(v.duration, 'second') == pytest.approx(592.0, abs=2.0)
+        assert v.visible is True
+        assert v.rise_azimuth.ordinal_compass() == 'SSW'
+        assert v.culmination_azimuth.ordinal_compass() == 'SE'
+        assert v.set_azimuth.ordinal_compass() == 'ENE'
+        # It is a later pass than the unfiltered next_pass.
+        assert raw(v.rise, 'unix_epoch') > raw(almanac.iss.next_pass.set, 'unix_epoch')
+
+    def test_horizon_override(self, almanac):
+        """$almanac(horizon=10) reuses the existing horizon argument; the
+        pass shrinks to its above-10-degrees core."""
+        p10 = almanac(horizon=10).iss.next_pass
+        assert raw(p10.rise, 'unix_epoch') == pytest.approx(1750532925.215, abs=1.0)
+        assert raw(p10.rise, 'unix_epoch') > raw(almanac.iss.next_pass.rise, 'unix_epoch')
+        assert raw(p10.set, 'unix_epoch') < raw(almanac.iss.next_pass.set, 'unix_epoch')
+
+    def test_in_progress_pass_is_next(self, sky, almanac):
+        """rise <= now < set: the current pass IS next_pass -- the
+        countdown rolls into 'overhead now, sets in three minutes'."""
+        culmination_ts = raw(almanac.iss.next_pass.culmination, 'unix_epoch')
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            mid = weewx.almanac.Almanac(int(culmination_ts), LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            p = mid.iss.next_pass
+            assert raw(p.rise, 'unix_epoch') == pytest.approx(1750532794.085, abs=1.0)
+            assert raw(p.rise, 'unix_epoch') < mid.time_ts < raw(p.set, 'unix_epoch')
+            assert mid.iss.alt == pytest.approx(35.56, abs=ANGLE_TOL)
+
+    def test_rise_transit_set_are_next_occurrence(self, almanac):
+        """For a satellite these are the NEXT events from the almanac's
+        time (transit meaning culmination), not the planets' anytime-
+        today verbs: passes are minutes long and 'today's' is rarely the
+        interesting one."""
+        p = almanac.iss.next_pass
+        assert raw(almanac.iss.rise, 'unix_epoch') == raw(p.rise, 'unix_epoch')
+        assert raw(almanac.iss.transit, 'unix_epoch') == raw(p.culmination, 'unix_epoch')
+        assert raw(almanac.iss.set, 'unix_epoch') == raw(p.set, 'unix_epoch')
+
+    def test_whole_window_pass_stats(self, sky, almanac):
+        """The pass list spans the element-validity window (a day before
+        the epoch through the 7-day cutoff), every pass ordered, with the
+        fixture's known census: visibility sampled over the WHOLE pass
+        (rise, every culmination, set) and the 10-degree bar applied only
+        by the visible variant."""
+        binder = almanac.iss
+        sat, epoch_ts = sky.satellite_elements(ISS_NORAD)
+        passes = binder._sat_passes(sat, epoch_ts)
+        assert len(passes) == 59
+        assert sum(1 for p in passes if p['visible']) == 17
+        assert sum(1 for p in passes
+                   if p['visible'] and p['max_altitude'] >= 10.0) == 16
+        for p in passes:
+            assert epoch_ts - 86400 <= p['rise']
+            assert p['set'] <= epoch_ts + wxskyfield.SAT_MAX_ELEMENT_AGE_SECS
+            assert p['rise'] < p['culmination'] < p['set']
+
+    def test_tiangong_honest_na(self, almanac):
+        """Tiangong crosses Palo Alto's sky all week (a plain next_pass
+        exists) but never sunlit-in-a-dark-sky above 10 degrees: the
+        visible variant answers N/A, honestly, not with the least-bad
+        pass."""
+        p = almanac.tiangong.next_pass
+        assert raw(p.rise, 'unix_epoch') == pytest.approx(1750534664.550, abs=1.0)
+        assert raw(p.max_altitude, 'degree_angle') == pytest.approx(37.25, abs=ANGLE_TOL)
+        v = almanac.tiangong.next_visible_pass
+        assert raw(v.rise, 'unix_epoch') is None
+        assert v.visible is None
+        assert 'N/A' in str(v.rise)
+        assert 'N/A' in str(v.max_altitude)
+
+    def test_geostationary_never_rises(self):
+        """The fabricated far-side geostationary satellite: find_events
+        yields nothing, so every pass tag is N/A while the position tags
+        stay live -- deterministic never-rises."""
+        geo_sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                                 load_stars=False,
+                                 satellites={'geosat': GEOSAT_NORAD},
+                                 sat_dir=SAT_DATA_DIR)
+        assert geo_sky.is_valid()
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(geo_sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.geosat.alt < -50.0
+            assert raw(alm.geosat.rise, 'unix_epoch') is None
+            assert raw(alm.geosat.transit, 'unix_epoch') is None
+            assert raw(alm.geosat.next_pass.rise, 'unix_epoch') is None
+            assert alm.geosat.next_pass.visible is None
+
+    def test_loopdata_chain_walk(self, almanac):
+        """loopdata walks tag chains with plain getattr -- no Cheetah
+        autocall -- so every pass attribute must be an already-computed
+        value, never a method (the parallactic_angle lesson, baked in on
+        day one)."""
+        binder = getattr(almanac, 'iss')
+        p = getattr(binder, 'next_pass')
+        for attr in ('rise', 'culmination', 'set', 'max_altitude',
+                     'rise_azimuth', 'culmination_azimuth', 'set_azimuth',
+                     'duration'):
+            value = getattr(p, attr)
+            assert not callable(value), attr
+            assert isinstance(value, weewx.units.ValueHelper), attr
+        assert getattr(p, 'visible') is False
+
+
+class TestSatelliteStale:
+    """The unified no-usable-elements state: missing, unparseable, or
+    epoch beyond the seven-day cutoff (measured against the almanac's
+    time, never the file's mtime) all collapse to N/A -- never a silently
+    wrong pass time.  Only the element diagnostics stay live: they are
+    how a user sees WHY."""
+
+    def test_element_diagnostics(self, almanac):
+        assert raw(almanac.iss.elements_epoch, 'unix_epoch') \
+            == pytest.approx(ISS_EPOCH_TS, abs=1.0)
+        assert raw(almanac.iss.elements_age, 'second') \
+            == pytest.approx(TIME_TS - ISS_EPOCH_TS, abs=1.0)
+
+    def test_stale_elements_collapse_to_na(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            stale = weewx.almanac.Almanac(TIME_TS + 8 * 86400, LATITUDE, LONGITUDE,
+                                          altitude=ALTITUDE_M,
+                                          formatter=weewx.units.get_default_formatter())
+            assert stale.iss.alt is None
+            assert stale.iss.az is None
+            assert stale.iss.sunlit is None
+            assert raw(stale.iss.distance, 'km') is None
+            assert raw(stale.iss.rise, 'unix_epoch') is None
+            p = stale.iss.next_pass
+            assert raw(p.rise, 'unix_epoch') is None
+            assert p.visible is None
+            assert 'N/A' in str(p.rise)
+            # The diagnostics ignore the cutoff -- they explain the N/As.
+            assert raw(stale.iss.elements_epoch, 'unix_epoch') \
+                == pytest.approx(ISS_EPOCH_TS, abs=1.0)
+            assert raw(stale.iss.elements_age, 'second') \
+                == pytest.approx(8 * 86400 + (TIME_TS - ISS_EPOCH_TS), abs=1.0)
+
+    def test_cutoff_warns_once_per_crossing(self, caplog):
+        """The cutoff crossing logs ONE warning per satellite (not one
+        per tag evaluation), and recovery logs once too."""
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
+        with saved_almanacs(), caplog.at_level(logging.INFO, logger=wxskyfield.log.name):
+            assert wxskyfield.register_almanac(s)
+            fresh = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                          formatter=weewx.units.get_default_formatter())
+            assert fresh.iss.alt is not None
+            stale = weewx.almanac.Almanac(TIME_TS + 8 * 86400, LATITUDE, LONGITUDE,
+                                          altitude=ALTITUDE_M,
+                                          formatter=weewx.units.get_default_formatter())
+            assert stale.iss.alt is None
+            assert stale.iss.sunlit is None
+            assert raw(stale.iss.distance, 'km') is None
+            assert caplog.text.count('no usable elements') == 1
+            assert fresh.iss.az is not None
+            assert caplog.text.count('usable elements again') == 1
+
+    def test_corrupt_cache_costs_only_that_satellite(self, tmp_path, caplog):
+        cache = tmp_path / 'wxskyfield'
+        cache.mkdir()
+        (cache / ('wxskyfield_sat_%d.tle' % ISS_NORAD)).write_text('garbage\n')
+        (cache / ('wxskyfield_sat_%d.tle' % TIANGONG_NORAD)).write_text(
+            read_tle(TIANGONG_NORAD))
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites=dict(SATELLITES), sat_dir=str(cache))
+        with saved_almanacs(), caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.iss.alt is None
+            assert alm.tiangong.alt == pytest.approx(-78.9339, abs=ANGLE_TOL)
+        assert 'satellite_elements' in caplog.text
+
+    def test_configured_but_no_file(self, tmp_path):
+        """A satellite added to the config before any fetch: every tag
+        N/A (including the diagnostics -- there is nothing to date), and
+        nothing raises."""
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites={'iss': ISS_NORAD}, sat_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.iss.alt is None
+            assert raw(alm.iss.next_pass.rise, 'unix_epoch') is None
+            assert raw(alm.iss.elements_epoch, 'unix_epoch') is None
+            assert raw(alm.iss.elements_age, 'second') is None
+
+    def test_cache_reloads_on_mtime_change(self, tmp_path):
+        """The element cache is keyed on the file's mtime: a fetch (or a
+        user replacing a file by hand) is picked up at the next tag
+        evaluation, per tag, without a restart."""
+        path = tmp_path / ('wxskyfield_sat_%d.tle' % ISS_NORAD)
+        path.write_text('garbage\n')
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites={'iss': ISS_NORAD}, sat_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.iss.alt is None
+            path.write_text(read_tle(ISS_NORAD))
+            future = time.time() + 10
+            os.utime(str(path), (future, future))
+            assert alm.iss.alt == pytest.approx(-17.7318, abs=ANGLE_TOL)
+
+
+class TestPyEphemSatelliteSanity:
+    """A one-time independent check of the satellite observer plumbing --
+    NOT a parity commitment (loose tolerance, no runtime dependency):
+    PyEphem's readtle on the same TLE, time and place must agree to a
+    fraction of a degree, catching the self-consistent-wrong-pin class of
+    error that regression pins cannot."""
+
+    def test_readtle_altaz_agrees(self, almanac):
+        ephem = pytest.importorskip('ephem')
+        import math
+        lines = read_tle(ISS_NORAD).splitlines()
+        sat = ephem.readtle(lines[0], lines[1], lines[2])
+        observer = pyephem_observer()
+        observer.pressure = 0
+        sat.compute(observer)
+        assert math.degrees(sat.alt) == pytest.approx(almanac.iss.alt, abs=0.2)
+        assert math.degrees(sat.az) == pytest.approx(almanac.iss.az, abs=0.2)
+
+
 # These raise AttributeError on the built-in almanac too (PyEphem limitations);
 # the Skyfield almanac must fail the same way rather than crash differently.
 PYEPHEM_PARITY_ATTRIBUTE_ERRORS = [
@@ -1538,6 +2170,25 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.previous_solar_eclipse", "almanac.previous_solar_eclipse_type",
     "almanac.next_eclipse", "almanac.next_eclipse_type", "almanac.next_eclipse_kind",
     "almanac.previous_eclipse", "almanac.previous_eclipse_type", "almanac.previous_eclipse_kind",
+    # Satellites are Skyfield-native: the built-in almanac never served
+    # them, so the whole surface must be whole without PyEphem.
+    "almanac.iss.alt", "almanac.iss.az", "almanac.iss.ra", "almanac.iss.dec",
+    "almanac.iss.altitude", "almanac.iss.azimuth",
+    "almanac.iss.topo_ra", "almanac.iss.topo_dec",
+    "almanac.iss.azimuth.ordinal_compass()",
+    "almanac.iss.distance", "almanac.iss.sunlit",
+    "almanac.iss.rise", "almanac.iss.transit", "almanac.iss.set",
+    "almanac.iss.next_pass.rise", "almanac.iss.next_pass.culmination",
+    "almanac.iss.next_pass.set", "almanac.iss.next_pass.max_altitude",
+    "almanac.iss.next_pass.rise_azimuth.ordinal_compass()",
+    "almanac.iss.next_pass.culmination_azimuth", "almanac.iss.next_pass.set_azimuth",
+    "almanac.iss.next_pass.duration",
+    "almanac.iss.next_visible_pass.rise", "almanac.iss.next_visible_pass.visible",
+    "almanac(horizon=10).iss.next_pass.rise",
+    "almanac.iss.elements_epoch", "almanac.iss.elements_age",
+    "almanac.sat_25544.alt", "almanac.iss.name", "almanac.iss.label",
+    "almanac.tiangong.next_pass.rise",
+    "almanac.separation(almanac.iss, almanac.mars)",
 ]
 
 SKYFIELD_ONLY_STAR_EXPRESSIONS = [
