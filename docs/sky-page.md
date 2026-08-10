@@ -32,10 +32,16 @@ it is computed for *your* station's location and elevation, taken automatically 
 - the **solar year** — sunrise, sunset and solar noon for every week of the year over the
   twilight bands, with today marked;
 - the **lunar month** — the current lunation as thirty phase discs, the principal phases
-  dated, today's disc ringed;
-- an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic;
+  dated, today's disc ringed, the next perigee and apogee below — and a **supermoon**
+  callout whenever the next full moon falls within a day of perigee;
+- an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic —
+  configured comets included, each a diamond at its current sun distance (comets also ride
+  the rise & set ribbons, the chips rail, the almanac table, and — when a perihelion lies
+  ahead within a year — the header's countdown row);
+- the **equation of time** — sundial minus clock for every week of the year, the classic
+  double-humped curve, today's value on the brass point;
 - an **analemma** — the sun's altitude and azimuth at local standard noon for every week of
-  the year, with this week's point marked;
+  the year, with today's point marked;
 - the **next visible pass** of each configured satellite — the ISS and Tiangong out of the
   box — when it appears, how high it peaks, when it disappears, with the soonest pass
   charted on its own dated sky: the whole sky as it will stand at the pass's peak, the
@@ -113,10 +119,15 @@ visible pass happens while the sky is only half dark.  The main dome stays stric
 current sky, drawing a satellite only as a position dot when one is genuinely overhead at
 generation time — solid when sunlit, a hollow ring when it is inside Earth's shadow; the pass chart disappears when no satellite has a visible pass in the
 coming week.  A station with no `[[Satellites]]` configured renders the page with no
-satellite section at all.
+satellite section at all.  A configured [comet](tags.md#comets) above the horizon plots on
+the dome as a labeled diamond — solid brass when plausibly naked-eye, the hollow ring when
+fainter, its magnitude in the tooltip — and an active
+[meteor shower](tags.md#meteor-showers)'s radiant gets a rayed mark, while the header's
+countdown row always carries the next shower with the moon's peak-night illumination as
+the honest interference judgment.
 
 It is the most computation-hungry page in a typical install (the solar-year chart runs several
-hundred rise/set searches, the analemma evaluates the almanac 53 times).  The
+hundred rise/set searches, the analemma evaluates the almanac 54 times).  The
 [result cache](tags.md#the-result-cache) absorbs most of that — the year-scale samples are
 anchored to fixed instants and reused across cycles, so the full price is paid once at
 startup, not every cycle.  If the page is still too heavy for your hardware you can generate

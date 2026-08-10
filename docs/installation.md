@@ -92,9 +92,13 @@ The installer adds a `[Skyfield]` section to `weewx.conf` with the defaults:
 [Skyfield]
     enable = true
     satellite_downloads = true
+    comet_downloads = true
     [[Satellites]]
         iss = 25544
         tiangong = 48274
+    [[Comets]]
+        halley = 1P
+        hale_bopp = C/1995 O1
 ```
 
 - `enable`: When true (the default), the Skyfield almanac is registered and reports are
@@ -103,8 +107,14 @@ The installer adds a `[Skyfield]` section to `weewx.conf` with the defaults:
   CelesTrak — at install, at any weewxd startup that finds them missing or stale, then about
   every three hours.  Set it false on an isolated network; see [Satellites](#satellites)
   below for what that changes.
+- `comet_downloads`: When true (the default), the MPC's CometEls.txt is fetched — at install,
+  at any weewxd startup that finds it missing or stale, then about every two days.  Same
+  isolated-network story; see [Comets](#comets) below.
 - `[[Satellites]]`: tag name = NORAD catalog number, one line per satellite.  This one list
   drives both the [satellite tags](tags.md#satellites) and the fetch list.
+- `[[Comets]]`: tag name = MPC designation, one line per comet — `halley = 1P`,
+  `tsuchinshan_atlas = C/2023 A3`; see the [comet tags](tags.md#comets) for the matching
+  rules, and the README's Comets section for a ready-to-paste block of famous comets.
 
 These are the section's only entries — anything else there draws a log warning and is
 ignored.  (The `stars` option was removed in 2.0: the complete star catalog now ships with
@@ -156,6 +166,24 @@ satellite's orbital inclination bounds the latitudes it can appear over.  Hubble
 poleward of about ±35° latitude — most of Europe and much of North America would see a
 permanent "no visible pass", which is the truth, not a bug.  The defaults avoid this: the
 ISS (51.6°) and Tiangong (41.5°) put on the show for essentially everyone.
+
+## Comets
+
+Comet orbital elements are the MPC's published
+[CometEls.txt](https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt) — one ~160 KB
+file carrying every comet with a current orbit, cached as `wxskyfield_comets.txt` in the
+same `wxskyfield` directory as the satellite TLEs.  It follows the satellites' fetch shape
+at a gentler cadence: fetched at install, at any weewxd startup that finds it missing or
+stale, then about every two days, on a worker thread that never blocks reports — written
+atomically, the old file kept on any failure, backoff on retry.  Set
+`comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
+ever: an air-gapped station maintains the one `wxskyfield_comets.txt` file by any means it
+likes (it is the MPC file verbatim).  Unlike satellite elements there is no age cutoff —
+two-body comet elements degrade gracefully over months, not days — and `weectl extension
+uninstall` leaves the cache file, like the satellite TLEs.  The MPC drops comets that have
+faded from observability, so a configured comet can vanish from a fresh download: its tags
+then read "N/A" with a once-per-crossing log warning naming it — see the
+[comet tags](tags.md#comets).
 
 ## Serving every Hipparcos star
 

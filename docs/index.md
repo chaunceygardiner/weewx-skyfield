@@ -1,12 +1,12 @@
 ---
 title: weewx-skyfield — The drop-in upgrade for WeeWX's almanac
-description: Skyfield-powered $almanac tags, stars, satellites, eclipses, and a planetarium-style Sky page for WeeWX 5.2+.
+description: Skyfield-powered $almanac tags, stars, satellites, comets, eclipses, and a planetarium-style Sky page for WeeWX 5.2+.
 ---
 
 # weewx-skyfield
 
 **The drop-in upgrade for WeeWX's almanac** — Skyfield-powered `$almanac` tags, stars,
-satellites, eclipses, and a planetarium-style Sky page.
+satellites, comets, eclipses, and a planetarium-style Sky page.
 
 [Installation](installation.md) ·
 [Almanac tags](tags.md) ·
@@ -47,6 +47,18 @@ values.
   step outside and watch the ISS cross your sky — when it appears, how high it peaks, when
   it disappears — with orbital elements kept fresh automatically (one switch turns the
   fetching off).  See [the satellite tags](tags.md#satellites).
+- **Comets** — new in 2.1: any comet the Minor Planet Center tracks, added to `weewx.conf`
+  by designation, with Halley and Hale-Bopp configured out of the box.  Each serves the full
+  planet-style tag surface (`$almanac.halley.rise`, `.mag`, `.perihelion`) and rides the Sky
+  page — a tailed diamond on the dome, a marker in the orrery — with elements kept fresh
+  automatically, the satellites' way (one switch turns the fetching off).  See
+  [the comet tags](tags.md#comets).
+- **Meteor showers, supermoons, the equation of time** — also new in 2.1:
+  `$almanac.next_meteor_shower` counts down to a peak *computed* from the sun's ecliptic
+  longitude (the radiant marked on the dome while a shower is active); moon perigee/apogee
+  and `$almanac.next_supermoon` bring the supermoon rule into the almanac, with Earth's
+  perihelion and aphelion beside them; and solar time and the equation of time get tags and
+  a chart panel.  See [the meteor shower tags](tags.md#meteor-showers).
 - **Eclipses and constellations** — tag families with no PyEphem counterpart at all:
   `$almanac.next_eclipse` finds the next eclipse *visible from your station*, and every body
   reports the constellation it stands in (`$almanac.saturn.constellation`).
@@ -104,7 +116,7 @@ later): its *almanac fields* — report almanac tags with the `$` removed — ar
 against the registered almanac (this extension's, once installed) on every loop packet and
 published in `loop-data.txt` for the page's JavaScript to pick up.  One computation engine
 serves the report tags and the live values, so they always agree.
-[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (8.0 or later) is a
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (8.1 or later) is a
 complete worked example — a live Geocentric panel built entirely from loopdata almanac fields — and the
 paloaltoweather.com pages above update the same way.
 
@@ -124,7 +136,7 @@ July 15.*
 
 ## Relationship to other extensions
 
-- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.0 or
+- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.1 or
   later) ships a live celestial page driven by weewx-loopdata almanac fields (see
   [Live-updating pages](#live-updating-pages) above).  Since celestial 6.0 it runs no service
   and computes nothing itself, so the two extensions coexist with no configuration —

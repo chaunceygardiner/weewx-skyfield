@@ -28,7 +28,7 @@ import urllib.request
 
 from datetime import datetime
 from datetime import timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import jplephem.daf
 import jplephem.spk
@@ -41,7 +41,11 @@ import skyfield.eclipselib
 import skyfield.errors
 import skyfield.framelib
 import skyfield.jpllib
+import skyfield.constants
+import skyfield.data.spice
+import skyfield.keplerlib
 import skyfield.magnitudelib
+import skyfield.searchlib
 import skyfield.timelib
 import weeutil.weeutil
 import weewx
@@ -57,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.0'
+WXSKYFIELD_VERSION = '2.1'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -89,12 +93,13 @@ class WxSkyfield(StdService):
 
         # Only continue if the plugin is enabled.
         skyfield_config_dict = config_dict.get('Skyfield', {})
-        # [Skyfield] has exactly two options and one subsection.  Anything
-        # else here is a mistake -- most likely a report option that
-        # belongs under [StdReport] [[SkyfieldReport]] -- and would
+        # [Skyfield] has exactly three options and two subsections.
+        # Anything else here is a mistake -- most likely a report option
+        # that belongs under [StdReport] [[SkyfieldReport]] -- and would
         # otherwise be silently ignored.
         for key in skyfield_config_dict:
-            if key not in ('enable', 'satellite_downloads', 'Satellites'):
+            if key not in ('enable', 'satellite_downloads', 'Satellites',
+                           'comet_downloads', 'Comets'):
                 if key == 'stars':
                     hint = (' (removed in 2.0: the complete Hipparcos catalog now'
                             ' ships with the extension and stars are always available)')
@@ -122,8 +127,17 @@ class WxSkyfield(StdService):
                      % (', '.join('%s=%d' % (n, c) for n, c in satellites.items()),
                         sat_dir, 'on' if self.sat_downloads else 'off'))
 
+        comets = parse_comets(skyfield_config_dict, satellites)
+        comet_dir = get_sat_dir(config_dict) if comets else None
+        self.comet_downloads = to_bool(skyfield_config_dict.get('comet_downloads', True))
+        if comets:
+            log.info('comets: %s (elements cached in %s; downloads %s)'
+                     % (', '.join('%s=%s' % (n, d) for n, d in comets.items()),
+                        comet_dir, 'on' if self.comet_downloads else 'off'))
+
         self.sky = Sky(user_root, load_stars=True,
-                       satellites=satellites, sat_dir=sat_dir)
+                       satellites=satellites, sat_dir=sat_dir,
+                       comets=comets, comet_dir=comet_dir)
         if self.sky.is_valid():
             if register_almanac(self.sky):
                 log.info('Skyfield almanac registered; reports will use Skyfield for almanac computations.')
@@ -141,6 +155,16 @@ class WxSkyfield(StdService):
             if satellites and self.sat_downloads:
                 self.bind(weewx.STARTUP, self.refresh_satellite_elements)
                 self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_satellite_elements)
+            # The comet elements get the same treatment, as a parallel
+            # trio rather than a generalization (one file, so the backoff
+            # state is a pair of scalars, and the tested satellite path
+            # stays untouched).
+            self._comet_thread: Optional[threading.Thread] = None
+            self._comet_retry_ts = 0.0
+            self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
+            if comets and self.comet_downloads:
+                self.bind(weewx.STARTUP, self.refresh_comet_elements)
+                self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_comet_elements)
 
     def refresh_satellite_elements(self, event) -> None:
         """Refresh any stale satellite elements, on a worker thread so a
@@ -205,6 +229,57 @@ class WxSkyfield(StdService):
                 log.warning('Could not fetch satellite elements for %d (%s);'
                             ' keeping the cached elements, next try in %d minutes.'
                             % (norad, e, delay // 60))
+
+    def refresh_comet_elements(self, event) -> None:
+        """Refresh the CometEls cache file when stale, on a worker thread
+        so a slow MPC can never delay startup or the archive cycle.
+        Bound to STARTUP and NEW_ARCHIVE_RECORD like the satellite
+        refresher; the cadence is days, not hours -- two-body comet
+        elements stay serviceable for months.  Never raises."""
+        try:
+            if self._comet_thread is not None and self._comet_thread.is_alive():
+                return
+            if not self.comet_stale(time.time()):
+                return
+            self._comet_thread = threading.Thread(target=self._comet_fetch_worker,
+                                                  daemon=True,
+                                                  name='wxskyfield-comets')
+            self._comet_thread.start()
+        except Exception as e:
+            log.error('refresh_comet_elements: could not start the element fetch: %s' % e)
+
+    def comet_stale(self, now: float) -> bool:
+        """Whether the CometEls cache file is due for a fetch: mtime older
+        than the refresh cadence, or no file at all -- maximally stale.
+        Inside the failure backoff window, never due.  Age-driven, not
+        schedule-driven, like stale_satellites."""
+        if now < self._comet_retry_ts:
+            return False
+        try:
+            mtime = os.stat(self.sky.comet_path()).st_mtime
+        except OSError:
+            return True
+        return now - mtime >= COMET_REFRESH_SECS
+
+    def _comet_fetch_worker(self) -> None:
+        """Fetch the CometEls file.  A failure keeps the old file (the
+        fetcher is atomic) and backs off: retry in five minutes, doubling
+        per consecutive failure up to the normal cadence.  Never raises,
+        never touches the engine."""
+        try:
+            assert self.sky.comet_dir is not None
+            os.makedirs(self.sky.comet_dir, exist_ok=True)
+            fetch_comet_elements(self.sky.comet_path())
+            self._comet_retry_ts = 0.0
+            self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
+            log.info('Fetched comet elements into %s.' % self.sky.comet_path())
+        except Exception as e:
+            delay = min(self._comet_retry_delay, float(COMET_REFRESH_SECS))
+            self._comet_retry_ts = time.time() + delay
+            self._comet_retry_delay = delay * 2
+            log.warning('Could not fetch comet elements (%s); keeping the'
+                        ' cached elements, next try in %d minutes.'
+                        % (e, delay // 60))
 
 # Named stars available as report almanac tags (e.g., $almanac.rigel.rise)
 # unless disabled (stars = false in [Skyfield]).  Maps the tag name to the
@@ -708,8 +783,292 @@ SAT_VISIBLE_MIN_CULMINATION_DEGREES = 10.0
 # triggers a fetch of an unlisted one.
 SAT_TAG_RE = re.compile(r'sat_(\d+)$')
 
+# ── comets ───────────────────────────────────────────────────────────────────
+# One MPC CometEls.txt file (~160 KB, every comet with a current orbit -- 953
+# rows in August 2026) serves ALL configured comets, cached beside the
+# satellite TLEs under get_sat_dir.  [Skyfield] [[Comets]] maps tag names to
+# MPC designations (halley = 1P, hale_bopp = C/1995 O1); the friendly name is
+# the config KEY, and the value is matched against the file's readable
+# designation column after case/whitespace normalization ONLY -- no fuzzy
+# names, no packed designations, fragments named explicitly (C/1947 X1-B).
+COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
+COMET_FILE = 'wxskyfield_comets.txt'
+
+# MPC recomputes the file continuously, but unlike satellite TLEs (useless
+# after days) two-body comet elements stay serviceable for months: refresh on
+# the scale of days, not hours -- and there is no usability gate at all, only
+# the elements_epoch/elements_age diagnostics.
+COMET_REFRESH_SECS = 2 * 86400
+COMET_RETRY_BASE_SECS = 300
+
+# Periodic-comet readable designations start "12P/", "220P/", "73P-B/" (and
+# D for defunct, I for interstellar); everything else is the "C/1995 O1
+# (Hale-Bopp)" shape whose parenthesized name is decoration.
+COMET_PERIODIC_RE = re.compile(r'\d+[PDI]\b')
+
+
+class CometRow(NamedTuple):
+    """The orbital elements of one CometEls.txt row."""
+    designation_key: str        # normalized match key, e.g. 'C/1995 O1'
+    designation_full: str       # the readable column verbatim (stripped)
+    q: float                    # perihelion distance, AU
+    e: float                    # eccentricity
+    incl: float                 # inclination, degrees
+    node: float                 # longitude of the ascending node, degrees
+    argp: float                 # argument of perihelion, degrees
+    peri_year: int              # time of perihelion passage (TT)
+    peri_month: int
+    peri_day: float
+    g: Optional[float]          # absolute total magnitude (blank in some rows)
+    k: Optional[float]          # magnitude slope parameter
+    epoch_ts: Optional[float]   # perturbed-epoch column, or None when blank
+
+
+def normalize_comet_designation(text: Any) -> str:
+    """Case and whitespace normalization -- the ONLY liberty taken when
+    matching a [[Comets]] value against the file's designation column."""
+    return ' '.join(str(text).split()).upper()
+
+
+def comet_designation_key(readable: str) -> str:
+    """Reduce the readable designation column to the designation itself:
+    '12P/Pons-Brooks' -> '12P', 'C/1995 O1 (Hale-Bopp)' -> 'C/1995 O1',
+    fragments intact ('73P-B/Schwassmann-Wachmann' -> '73P-B')."""
+    text = readable.strip()
+    if COMET_PERIODIC_RE.match(text):
+        text = text.split('/', 1)[0]
+    else:
+        text = re.sub(r'\s*\(.*\)\s*$', '', text)
+    return normalize_comet_designation(text)
+
+
+def parse_comet_row(line: str) -> CometRow:
+    """Parse one CometEls.txt row (the 80-column orbital elements plus the
+    readable designation; format per
+    https://www.minorplanetcenter.net/iau/info/CometOrbitFormat.html).
+    Raises ValueError on a malformed row -- the caller disables only that
+    comet, hip_main-parser spirit."""
+    designation_full = line[102:158].strip()
+    if not designation_full:
+        raise ValueError('no designation')
+
+    def opt_float(field: str) -> Optional[float]:
+        field = field.strip()
+        return float(field) if field else None
+
+    epoch_field = line[81:89].strip()
+    epoch_ts: Optional[float] = None
+    if len(epoch_field) == 8 and epoch_field.isdigit():
+        try:
+            epoch_ts = datetime(int(epoch_field[:4]), int(epoch_field[4:6]),
+                                int(epoch_field[6:8]), tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            epoch_ts = None
+    return CometRow(
+        designation_key=comet_designation_key(designation_full),
+        designation_full=designation_full,
+        q=float(line[30:39]),
+        e=float(line[41:49]),
+        incl=float(line[71:79]),
+        node=float(line[61:69]),
+        argp=float(line[51:59]),
+        peri_year=int(line[14:18]),
+        peri_month=int(line[19:21]),
+        peri_day=float(line[22:29]),
+        g=opt_float(line[91:95]),
+        k=opt_float(line[96:100]),
+        epoch_ts=epoch_ts,
+    )
+
+
+def parse_comets(skyfield_config_dict: Dict[str, Any],
+                 satellites: Dict[str, int]) -> Dict[str, str]:
+    """The [Skyfield] [[Comets]] section as {tag name: normalized
+    designation}.  Mirrors parse_satellites: a bad entry disables only
+    itself, and a name that is already an almanac tag -- a body, a star,
+    the hip_/sat_ spellings, or a configured satellite (satellites
+    dispatch first, so a duplicate would silently shadow the comet) -- is
+    refused with an error naming it."""
+    comets: Dict[str, str] = {}
+    for name, value in (skyfield_config_dict.get('Comets', {}) or {}).items():
+        tag = str(name).lower()
+        designation = normalize_comet_designation(value)
+        if not designation:
+            log.error('Ignoring [Skyfield] [[Comets]] entry %s = %r: empty'
+                      ' designation.' % (name, value))
+            continue
+        if (tag in EPHEMERIS_KEYS or tag in NAMED_STARS or HIP_TAG_RE.match(tag)
+                or SAT_TAG_RE.match(tag) or tag in ('sun', 'earth')
+                or tag in satellites):
+            log.error('Ignoring [Skyfield] [[Comets]] entry %s: the name is'
+                      ' already an almanac tag.' % name)
+            continue
+        comets[tag] = designation
+    return comets
+
+
+def fetch_comet_elements(path: str, timeout: float = 30.0) -> None:
+    """Download CometEls.txt from the MPC into path.  Validates before any
+    write -- the payload must contain at least one parseable comet row,
+    never the CONFIGURED designations (a vanishing row is a tag-time
+    concern, not a download failure).  The write is atomic (temp file +
+    os.replace), so report threads never see a partial file; raises on any
+    failure, leaving the previous file in place -- callers own backoff."""
+    request = urllib.request.Request(COMET_URL,
+                                     headers={'User-Agent': SAT_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = response.read().decode('ascii', 'replace')
+    for line in payload.splitlines():
+        try:
+            parse_comet_row(line)
+            break
+        except ValueError:
+            continue
+    else:
+        raise ValueError('no parseable comet rows in the downloaded file')
+    tmp_path = '%s.tmp' % path
+    with open(tmp_path, 'w') as f:
+        f.write(payload)
+    os.replace(tmp_path, path)
+
+
+# ── meteor showers ───────────────────────────────────────────────────────────
+# The dozen MAJOR annual showers of the IMO working list.  Each peak is
+# anchored to the SUN'S ECLIPTIC LONGITUDE, the way meteor astronomy
+# states it -- the Perseids peak when the sun reaches 140.0 degrees,
+# whatever the calendar says -- so each year's peak instant is COMPUTED
+# from the ephemeris, never looked up, and the table needs no annual
+# maintenance.  Radiants are the peak-date positions (J2000); ZHR is the
+# nominal zenithal hourly rate; the activity window is in solar
+# longitude too (none of the twelve spans the March-equinox wrap).
+# A closed, named set like the constellations: display names translate
+# through [Almanac] [[MeteorShowers]], keyed by the snake_case key,
+# while .name stays stable English data.
+class MeteorShower(NamedTuple):
+    key: str
+    name: str
+    peak_lambda: float      # solar longitude of the peak, degrees
+    start_lambda: float     # activity window, solar longitudes
+    end_lambda: float
+    radiant_ra: float       # radiant at peak, degrees, J2000
+    radiant_dec: float
+    zhr: int
+    parent: str             # the parent body whose debris it is
+
+
+METEOR_SHOWERS: Tuple[MeteorShower, ...] = (
+    MeteorShower('quadrantids', 'Quadrantids', 283.16, 276.5, 291.0,
+                 230.0, 48.5, 110, '(196256) 2003 EH1'),
+    MeteorShower('lyrids', 'Lyrids', 32.32, 24.4, 40.0,
+                 271.0, 33.5, 18, 'C/1861 G1 (Thatcher)'),
+    MeteorShower('eta_aquariids', 'Eta Aquariids', 45.5, 29.0, 68.0,
+                 338.0, -1.0, 50, '1P/Halley'),
+    MeteorShower('delta_aquariids', 'Southern Delta Aquariids', 126.9, 109.0, 150.0,
+                 340.0, -16.0, 25, '96P/Machholz'),
+    MeteorShower('perseids', 'Perseids', 140.0, 114.5, 151.4,
+                 48.0, 58.0, 100, '109P/Swift-Tuttle'),
+    MeteorShower('draconids', 'Draconids', 195.4, 193.0, 197.0,
+                 262.0, 54.0, 10, '21P/Giacobini-Zinner'),
+    MeteorShower('orionids', 'Orionids', 208.0, 189.0, 225.0,
+                 95.0, 15.5, 20, '1P/Halley'),
+    MeteorShower('southern_taurids', 'Southern Taurids', 223.0, 167.0, 238.0,
+                 52.0, 15.0, 5, '2P/Encke'),
+    MeteorShower('northern_taurids', 'Northern Taurids', 230.0, 206.0, 258.0,
+                 58.0, 22.0, 5, '2P/Encke'),
+    MeteorShower('leonids', 'Leonids', 235.27, 224.0, 248.0,
+                 152.0, 21.8, 15, '55P/Tempel-Tuttle'),
+    MeteorShower('geminids', 'Geminids', 262.2, 252.0, 265.5,
+                 112.0, 32.5, 150, '(3200) Phaethon'),
+    MeteorShower('ursids', 'Ursids', 270.7, 265.0, 274.5,
+                 217.0, 75.8, 10, '8P/Tuttle'),
+)
+
+
+class _SunLongitudeCrossed:
+    """Whether the sun's longitude has passed target (within a half-turn),
+    shaped for skyfield's find_discrete (a vectorized callable carrying
+    step_days): flips False -> True as the longitude ascends through the
+    target -- the shower-peak crossing."""
+
+    step_days = 30.0
+
+    def __init__(self, almanac_type: Any, target: float):
+        self.almanac_type = almanac_type
+        self.target = target
+
+    def __call__(self, t: skyfield.timelib.Time) -> Any:
+        return (self.almanac_type.sun_longitude_degrees(t) - self.target) % 360.0 < 180.0
+
+
+class MeteorShowerInfo:
+    """One shower as $almanac.next_meteor_shower (and each item of
+    $almanac.active_meteor_showers) serves it: plain pre-computed
+    attributes, never methods, so loopdata's plain-getattr chains walk it.
+    name is stable English data; label is the report's [Almanac]
+    [[MeteorShowers]] translation, falling back to the name."""
+
+    def __init__(self, almanac_type: 'SkyfieldAlmanacType', almanac_obj,
+                 shower: MeteorShower, peak_ts: Optional[float]):
+        self.key = shower.key
+        self.name = shower.name
+        labels = (getattr(almanac_obj, 'texts', None) or {}).get('MeteorShowers')
+        self.label = (labels.get(shower.key, shower.name)
+                      if isinstance(labels, dict) else shower.name)
+        self.peak = almanac_type.time_value(almanac_obj, peak_ts, 'ephem_year')
+        self.zhr = shower.zhr
+        self.parent = shower.parent
+        self.radiant_ra = shower.radiant_ra
+        self.radiant_dec = shower.radiant_dec
+        alt, az = almanac_type.radiant_altaz(almanac_obj, shower.radiant_ra,
+                                             shower.radiant_dec)
+        self.radiant_alt = alt
+        self.radiant_az = az
+
+
 # Astronomical units per light year (IAU 2015 definitions).
 AU_PER_LIGHT_YEAR = 63241.077
+
+# Kilometers per astronomical unit (IAU 2012 definition of the au).
+KM_PER_AU = 149597870.7
+
+
+def register_units() -> None:
+    """Register the astronomical-unit plumbing with WeeWX's unit system.
+
+    The distance/distance_from_sun ValueHelper twins report in
+    group_distance_astronomical, whose display unit is the astronomical
+    unit in EVERY unit system -- interplanetary distances read naturally
+    in AU, not in ten-digit kilometers -- with conversions registered so
+    $almanac.mars.distance.km and .mile answer on ask (and skins can
+    override the group's unit wholesale via [Units] [[Groups]]).
+
+    Runs at module import, not service startup: weewx-loopdata parses
+    almanac fields against the unit system at its own service start, and
+    service ordering in weewx.conf must not decide whether the group
+    exists yet.  Re-registration (the module imports both as
+    user.wxskyfield and wxskyfield under the test suite) is harmless:
+    every write is an idempotent dict assignment.
+    """
+    for group_dict in (weewx.units.USUnits, weewx.units.MetricUnits,
+                       weewx.units.MetricWXUnits):
+        group_dict['group_distance_astronomical'] = 'astronomical_unit'
+    # WeeWX 5.5 ships these conversions itself; this extension runs on 5.2+,
+    # so register them unconditionally (same IAU factor, harmless overwrite).
+    weewx.units.conversionDict.setdefault('astronomical_unit', {}).update({
+        'km'   : lambda x: x * KM_PER_AU,
+        'meter': lambda x: x * KM_PER_AU * 1000.0,
+        'mile' : lambda x: x * KM_PER_AU / 1.609344,
+    })
+    weewx.units.conversionDict['km']['astronomical_unit'] = lambda x: x / KM_PER_AU
+    weewx.units.conversionDict['meter']['astronomical_unit'] = lambda x: x / (KM_PER_AU * 1000.0)
+    weewx.units.conversionDict['mile']['astronomical_unit'] = lambda x: x * 1.609344 / KM_PER_AU
+    # Four decimals keeps the moon (0.0024 AU) meaningful without turning
+    # Mars (1.8588 AU) into noise.
+    weewx.units.default_unit_format_dict['astronomical_unit'] = '%.4f'
+    weewx.units.default_unit_label_dict['astronomical_unit'] = ' AU'
+
+
+register_units()
 
 # Body name -> key in the DE421 ephemeris, for every body served by the
 # almanac (earth, the observer, is loaded separately).
@@ -800,6 +1159,58 @@ def find_discrete_events(f, t0, t1, code_sets: Tuple[Tuple[int, ...], ...],
         stamps = [t.utc_datetime().timestamp() for t, event in zip(times, events) if event in codes]
         results.append((stamps[-1] if previous else stamps[0]) if stamps else None)
     return results
+
+
+# The moon's perigee/apogee search window: one anomalistic month (27.55
+# days, perigee to perigee) plus margin, so the window always brackets one
+# extremum of each kind.  step_days samples the distance curve every three
+# days -- far finer than the ~13.8-day half-period of the oscillation, so
+# skyfield.searchlib cannot skip an extremum.
+APSIS_WINDOW_DAYS = 28.5
+APSIS_STEP_DAYS = 3.0
+# A full moon within a day of perigee is a supermoon -- the popular
+# definition.  THE engine's single copy of the rule: the Sky page's
+# lunation callout and the live pages' countdowns all read
+# $almanac.next_supermoon rather than re-deriving it.
+SUPERMOON_PERIGEE_GAP_S = 86400.0
+
+
+class MoonDistanceAU:
+    """The GEOMETRIC center-to-center earth-moon distance in AU as a
+    function of time, shaped for skyfield.searchlib (a vectorized callable
+    carrying step_days).  Geometric deliberately: the published apsis
+    tables (Meeus; Espenak) are geometric, and this reproduces them to the
+    minute, where the light-time-corrected observe() distance puts the
+    extremum about eight minutes off the accepted definition."""
+
+    step_days = APSIS_STEP_DAYS
+
+    def __init__(self, sky: 'Sky'):
+        self.moon_from_earth = sky.moon - sky.earth
+
+    def __call__(self, t: skyfield.timelib.Time):
+        return self.moon_from_earth.at(t).distance().au
+
+
+# Earth's own apsides: one extremum of each kind per anomalistic year
+# (365.26 days), so the window is a year plus margin; the 30-day step
+# samples the annual oscillation far finer than its ~183-day half-period.
+EARTH_APSIS_WINDOW_DAYS = 370.0
+EARTH_APSIS_STEP_DAYS = 30.0
+
+
+class EarthSunDistanceAU:
+    """The GEOMETRIC center-to-center earth-sun distance in AU, shaped
+    for skyfield.searchlib like MoonDistanceAU -- the same geometric
+    convention the published perihelion/aphelion tables use."""
+
+    step_days = EARTH_APSIS_STEP_DAYS
+
+    def __init__(self, sky: 'Sky'):
+        self.earth_from_sun = sky.earth - sky.sun
+
+    def __call__(self, t: skyfield.timelib.Time):
+        return self.earth_from_sun.at(t).distance().au
 
 
 def daylight_seconds(rise: Optional[float], set_: Optional[float],
@@ -947,7 +1358,9 @@ class Sky():
 
     def __init__(self, user_root: str, load_stars: bool = False,
                  satellites: Optional[Dict[str, int]] = None,
-                 sat_dir: Optional[str] = None):
+                 sat_dir: Optional[str] = None,
+                 comets: Optional[Dict[str, str]] = None,
+                 comet_dir: Optional[str] = None):
         log.info("Skyfield version: %d.%d." % (skyfield.VERSION[0], skyfield.VERSION[1]))
 
         self.valid    : bool = False
@@ -966,6 +1379,16 @@ class Sky():
         # than on every tag.
         self._sat_cache: Dict[int, Tuple[Optional[float], Optional[Tuple[Any, float]]]] = {}
         self._sat_usable: Dict[int, bool] = {}
+        # The configured comets (tag name -> normalized MPC designation),
+        # same lazy contract as the satellites: nothing is read here.  The
+        # one cached CometEls file is parsed on first use and re-parsed
+        # when its mtime changes; Kepler vectors are memoized per
+        # designation and cleared on reparse.
+        self.comets: Dict[str, str] = comets or {}
+        self.comet_dir: Optional[str] = comet_dir
+        self._comet_file: Tuple[Optional[float], Dict[str, CometRow]] = (None, {})
+        self._comet_vectors: Dict[str, Any] = {}
+        self._comet_usable: Dict[str, bool] = {}
         # Skyfield's constellation boundary map, loaded lazily on first
         # use by constellation_abbr_at (None: not yet tried; False: tried
         # and failed, don't retry).
@@ -1369,6 +1792,90 @@ class Sky():
         elif previous is not None:
             log.info('Satellite %d has usable elements again.' % norad)
 
+    def comet_path(self) -> str:
+        return os.path.join(self.comet_dir or '.', COMET_FILE)
+
+    def comet_elements(self, name: str) -> Optional[Tuple[Any, CometRow, float]]:
+        """The configured comet's (vector, elements row, file mtime), or
+        None when the cached CometEls file is missing, unreadable, or no
+        longer carries the designation -- MPC drops faded comets, so a
+        configured comet CAN vanish from a fresh download; the binder
+        serves the honest no-elements state, never an error.  Lazy and
+        mtime-invalidated like satellite_elements; only CONFIGURED
+        designations are parsed (six rows, not 953), and a malformed
+        matching row logs and disables only that comet."""
+        designation = self.comets.get(name)
+        if designation is None:
+            return None
+        try:
+            mtime = os.stat(self.comet_path()).st_mtime
+        except OSError:
+            return None
+        if self._comet_file[0] != mtime:
+            wanted = set(self.comets.values())
+            rows: Dict[str, CometRow] = {}
+            try:
+                with open(self.comet_path()) as f:
+                    for line in f:
+                        key = comet_designation_key(line[102:158])
+                        if key in wanted and key not in rows:
+                            try:
+                                rows[key] = parse_comet_row(line)
+                            except ValueError as e:
+                                log.error('comet_elements: could not parse the'
+                                          ' %s row in %s: %s'
+                                          % (key, self.comet_path(), e))
+            except OSError as e:
+                log.error('comet_elements: could not read %s: %s'
+                          % (self.comet_path(), e))
+                rows = {}
+            self._comet_file = (mtime, rows)
+            self._comet_vectors.clear()
+        row = self._comet_file[1].get(designation)
+        if row is None:
+            return None
+        vector = self._comet_vectors.get(designation)
+        if vector is None:
+            vector = self._comet_vector(row)
+            self._comet_vectors[designation] = vector
+        return vector, row, mtime
+
+    def _comet_vector(self, row: CometRow) -> Any:
+        """sun + the comet's Kepler orbit: skyfield.data.mpc.comet_orbit
+        reproduced verbatim, minus pandas (that module imports pandas at
+        module level, and pandas is deliberately not a dependency).
+        _KeplerOrbit._from_periapsis is private Skyfield API -- the
+        JPL-Horizons regression test pins its behavior, so a future
+        Skyfield change fails loudly in the suite, not in the field."""
+        if row.e == 1.0:
+            p = row.q * 2.0
+        else:
+            a = row.q / (1.0 - row.e)
+            p = a * (1.0 - row.e * row.e)
+        orbit = skyfield.keplerlib._KeplerOrbit._from_periapsis(
+            p, row.e, row.incl, row.node, row.argp,
+            self.ts.tt(row.peri_year, row.peri_month, row.peri_day),
+            skyfield.constants.GM_SUN_Pitjeva_2005_km3_s2, 10,
+            row.designation_full)
+        orbit._rotation = skyfield.data.spice.inertial_frames['ECLIPJ2000'].T
+        return self.sun + orbit
+
+    def note_comet_usable(self, name: str, usable: bool) -> None:
+        """Track each comet's has-elements state so the vanishing-row
+        crossing (and the recovery) is logged once, not per tag."""
+        previous = self._comet_usable.get(name)
+        if previous == usable:
+            return
+        self._comet_usable[name] = usable
+        if not usable:
+            log.warning('Comet %s (%s) has no elements in the cached CometEls'
+                        ' file (file missing or unreadable, or the designation'
+                        ' is gone from it); its tags will report N/A.'
+                        % (name, self.comets.get(name)))
+        elif previous is not None:
+            log.info('Comet %s (%s) has elements again.'
+                     % (name, self.comets.get(name)))
+
     @staticmethod
     def get_weewx_config_info(config_dict: Dict[str, Any]) -> str:
         """The user directory: where the ephemeris and star catalog were
@@ -1634,8 +2141,30 @@ HIP_TAG_RE = re.compile(r'hip_(\d+)$')
 # objects do.  earth_distance/sun_distance are not in this set: unlike
 # PyEphem, they ARE supported for stars with a measured parallax (e.g.,
 # $almanac.proxima_centauri.earth_distance).
-STAR_UNSUPPORTED = {'phase', 'moon_fullness',
+STAR_UNSUPPORTED = {'phase', 'moon_fullness', 'illumination',
                     'hlong', 'hlat', 'hlon', 'hlongitude', 'hlatitude'}
+
+# Moon apsis tags: attribute -> (apogee, previous).  The next_/previous_
+# spelling is load-bearing for weewx-loopdata, which event-tiers almanac
+# fields by that prefix; an unprefixed spelling would rerun the extrema
+# search on every loop packet.
+APSIS_ATTRS: Dict[str, Tuple[bool, bool]] = {
+    'next_perigee'    : (False, False),
+    'previous_perigee': (False, True),
+    'next_apogee'     : (True, False),
+    'previous_apogee' : (True, True),
+}
+
+# Earth's own apsides, served as top-level almanac tags (like
+# next_solstice): attribute -> (farthest, previous).  No clash with the
+# comets' per-body .perihelion attribute -- different namespace.  The
+# next_/previous_ spelling is load-bearing for weewx-loopdata, as above.
+EARTH_APSIS_ATTRS: Dict[str, Tuple[bool, bool]] = {
+    'next_perihelion'    : (False, False),
+    'previous_perihelion': (False, True),
+    'next_aphelion'      : (True, False),
+    'previous_aphelion'  : (True, True),
+}
 
 # Base class for almanac extensions.  WeeWX versions earlier than 5.2 do not
 # have weewx.almanac.AlmanacType, in which case register_almanac declines to
@@ -1758,6 +2287,183 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             else:
                 _DAY_CACHE[('event', cache_key)] = (time_ts, event_ts, event_ts)
         return self.time_value(almanac_obj, event_ts, 'ephem_year')
+
+    def find_apsis(self, almanac_obj, apogee: bool, previous: bool,
+                   cache_key: str, f: Any, window_days: float) -> ValueHelper:
+        """Time of the nearest apsis -- an extremum of the given distance
+        function f (the moon's perigee/apogee, Earth's own
+        perihelion/aphelion), found with skyfield.searchlib -- after (or
+        before) the almanac's time, within window_days of it.
+        Geocentric, so location plays no part in the cache key; cached
+        like find_event, valid from the time it was computed for through
+        the event itself.  Unlike find_event, the no-event outcome is
+        cached too: it is only reachable when the search window pokes
+        past the ephemeris span (every window here is wider than
+        covers()'s two-day margin), and weewx-loopdata deliberately
+        never caches a no-data event field -- every loop packet retries
+        it, and each retry must hit this cache, not a fresh search."""
+        time_ts = almanac_obj.time_ts
+        hit = _DAY_CACHE.get(('event', cache_key), _MISS)
+        if hit is not _MISS:
+            valid_from, valid_to, event_ts = hit
+            if valid_from <= time_ts <= valid_to:
+                return self.time_value(almanac_obj, event_ts, 'ephem_year')
+        window_s = window_days * 86400
+        start_ts = time_ts - window_s if previous else time_ts
+        end_ts = time_ts if previous else time_ts + window_s
+        find = (skyfield.searchlib.find_maxima if apogee
+                else skyfield.searchlib.find_minima)
+        event_ts = None
+        try:
+            times, _ = find(self.skyfield_time(start_ts),
+                            self.skyfield_time(end_ts),
+                            f)
+            stamps = [t.utc_datetime().timestamp() for t in times]
+            if previous:
+                stamps = [s for s in stamps if s <= time_ts]
+                event_ts = stamps[-1] if stamps else None
+            else:
+                stamps = [s for s in stamps if s >= time_ts]
+                event_ts = stamps[0] if stamps else None
+        except skyfield.errors.EphemerisRangeError:
+            event_ts = None
+        if len(_DAY_CACHE) >= _DAY_CACHE_CAP:
+            _DAY_CACHE.clear()
+        if previous:
+            _DAY_CACHE[('event', cache_key)] = (
+                start_ts if event_ts is None else event_ts, time_ts, event_ts)
+        else:
+            _DAY_CACHE[('event', cache_key)] = (
+                time_ts, end_ts if event_ts is None else event_ts, event_ts)
+        return self.time_value(almanac_obj, event_ts, 'ephem_year')
+
+    def next_supermoon_ts(self, almanac_obj) -> Optional[float]:
+        """The instant of the next supermoon: the next full moon falling
+        within SUPERMOON_PERIGEE_GAP_S of perigee.  Searches forward full
+        moon by full moon (one or two qualify per year; the bound of 30
+        lunations is a safety rail, never reached in practice), judging
+        each against its nearest perigee -- the same geometric-distance
+        extremum the apsis tags use.  Cached like the other events, and
+        the no-answer outcome (the search running past the ephemeris
+        edge) is cached too, the apsis-tag precedent for loopdata's
+        every-packet no-data retries."""
+        time_ts = almanac_obj.time_ts
+        hit = _DAY_CACHE.get(('event', 'next_supermoon'), _MISS)
+        if hit is not _MISS:
+            valid_from, valid_to, event_ts = hit
+            if valid_from <= time_ts <= valid_to:
+                return event_ts
+        f = skyfield.almanac.moon_phases(self.sky.planets)
+        found: Optional[float] = None
+        searched_to = time_ts
+        try:
+            t = time_ts
+            for _ in range(30):
+                full = find_discrete_events(f, self.skyfield_time(t),
+                                            self.skyfield_time(t + 35 * 86400),
+                                            ((2,),))[0]
+                if full is None:
+                    break
+                searched_to = full
+                times, _values = skyfield.searchlib.find_minima(
+                    self.skyfield_time(full - 16 * 86400),
+                    self.skyfield_time(full + 16 * 86400),
+                    MoonDistanceAU(self.sky))
+                stamps = [pt.utc_datetime().timestamp() for pt in times]
+                if stamps and min(abs(p - full) for p in stamps) <= SUPERMOON_PERIGEE_GAP_S:
+                    found = full
+                    break
+                t = full + 86400.0
+        except skyfield.errors.EphemerisRangeError:
+            found = None
+        if len(_DAY_CACHE) >= _DAY_CACHE_CAP:
+            _DAY_CACHE.clear()
+        _DAY_CACHE[('event', 'next_supermoon')] = (
+            time_ts, found if found is not None else searched_to, found)
+        return found
+
+    def sun_longitude_degrees(self, t: skyfield.timelib.Time) -> Any:
+        """The sun's apparent geocentric ecliptic longitude in degrees --
+        the solar longitude meteor astronomy anchors shower peaks to.
+        Vectorized: t may be a Time array (the crossing search needs it)."""
+        _, lon, _ = (self.sky.earth.at(t).observe(self.sky.sun).apparent()
+                     .frame_latlon(skyfield.framelib.ecliptic_frame))
+        return lon.degrees % 360.0
+
+    def find_sun_longitude(self, target: float, t0_ts: float, t1_ts: float) -> Optional[float]:
+        """The instant within [t0_ts, t1_ts] when the sun's longitude
+        ascends through target, or None if the window misses it."""
+        times, values = skyfield.almanac.find_discrete(
+            self.skyfield_time(t0_ts), self.skyfield_time(t1_ts),
+            _SunLongitudeCrossed(self, target))
+        stamps = [t.utc_datetime().timestamp()
+                  for t, v in zip(times, values) if v]
+        return stamps[0] if stamps else None
+
+    def radiant_altaz(self, almanac_obj,
+                      ra_degrees: float, dec_degrees: float) -> Tuple[float, float]:
+        """Refracted topocentric (alt, az) of a fixed J2000 direction --
+        a shower radiant -- at the almanac's time, through the same
+        machinery the stars use."""
+        _, observer = self.location(almanac_obj)
+        t = self.skyfield_time(almanac_obj.time_ts)
+        star = skyfield.api.Star(ra_hours=ra_degrees / 15.0,
+                                 dec_degrees=dec_degrees)
+        alt, az, _ = observer.at(t).observe(star).apparent().altaz(
+            temperature_C=almanac_obj.temperature,
+            pressure_mbar=almanac_obj.pressure)
+        return alt.degrees, az.degrees
+
+    def shower_peak_ts(self, shower: MeteorShower, near_ts: float,
+                       window_days: float) -> Optional[float]:
+        """The instant of the shower's peak within +/- window_days of
+        near_ts, through the event cache (geocentric: location-free).
+        One crossing per year, so any window under ~150 days brackets at
+        most one."""
+        key = ('event', 'meteor_peak', shower.key)
+        hit = _DAY_CACHE.get(key, _MISS)
+        if hit is not _MISS:
+            valid_from, valid_to, peak_ts = hit
+            if valid_from <= near_ts <= valid_to:
+                return peak_ts
+        peak_ts = self.find_sun_longitude(shower.peak_lambda,
+                                          near_ts - window_days * 86400,
+                                          near_ts + window_days * 86400)
+        if peak_ts is not None:
+            if len(_DAY_CACHE) >= _DAY_CACHE_CAP:
+                _DAY_CACHE.clear()
+            _DAY_CACHE[key] = (peak_ts - window_days * 86400,
+                               peak_ts + window_days * 86400, peak_ts)
+        return peak_ts
+
+    def next_meteor_shower_info(self, almanac_obj) -> MeteorShowerInfo:
+        """$almanac.next_meteor_shower: the shower whose peak lies next
+        ahead.  Ordering costs one observe -- the next peak is simply the
+        next peak_lambda ahead of today's solar longitude -- and only
+        that shower's crossing is solved precisely (cached; a fresh Info
+        is built per call so .label follows each report's language and
+        the radiant's alt/az the almanac's time)."""
+        time_ts = almanac_obj.time_ts
+        lam = float(self.sun_longitude_degrees(self.skyfield_time(time_ts)))
+        shower = min(METEOR_SHOWERS,
+                     key=lambda s: (s.peak_lambda - lam) % 360.0)
+        ahead_days = ((shower.peak_lambda - lam) % 360.0) / 360.0 * 365.2422
+        peak_ts = self.shower_peak_ts(shower, time_ts + ahead_days * 86400, 6.0)
+        return MeteorShowerInfo(self, almanac_obj, shower, peak_ts)
+
+    def active_meteor_showers_info(self, almanac_obj) -> Tuple[MeteorShowerInfo, ...]:
+        """$almanac.active_meteor_showers: every shower whose activity
+        window contains today's solar longitude, each carrying its own
+        apparition's peak (which may already lie days in the past --
+        honest: an active shower past maximum is still active)."""
+        time_ts = almanac_obj.time_ts
+        lam = float(self.sun_longitude_degrees(self.skyfield_time(time_ts)))
+        active = []
+        for shower in METEOR_SHOWERS:
+            if shower.start_lambda <= lam <= shower.end_lambda:
+                peak_ts = self.shower_peak_ts(shower, time_ts, 75.0)
+                active.append(MeteorShowerInfo(self, almanac_obj, shower, peak_ts))
+        return tuple(active)
 
     def eclipse_event(self, almanac_obj, attr: str):
         """Serve any name in ECLIPSE_ATTRS: the per-kind tags
@@ -1987,11 +2693,51 @@ class SkyfieldAlmanacType(_AlmanacTypeBase):
             if attr == 'sidereal_time':
                 return degrees
             return self.direction_value(almanac_obj, degrees)
+        elif attr in EARTH_APSIS_ATTRS:
+            # Earth's own perihelion (early January) and aphelion (early
+            # July) -- the closest-sun-in-northern-winter classic.
+            farthest, previous = EARTH_APSIS_ATTRS[attr]
+            return self.find_apsis(almanac_obj, farthest, previous, attr,
+                                   EarthSunDistanceAU(self.sky),
+                                   EARTH_APSIS_WINDOW_DAYS)
+        elif attr == 'next_supermoon':
+            return self.time_value(almanac_obj, self.next_supermoon_ts(almanac_obj),
+                                   'ephem_year')
+        elif attr == 'next_meteor_shower':
+            return self.next_meteor_shower_info(almanac_obj)
+        elif attr == 'active_meteor_showers':
+            return self.active_meteor_showers_info(almanac_obj)
+        elif attr in ('solar_time', 'solar_angle', 'equation_of_time'):
+            # Local apparent solar time -- what a sundial reads -- from the
+            # sun's local apparent hour angle, the same machinery behind the
+            # ha tag; and the equation of time, apparent MINUS mean solar
+            # time per the USNO sign convention (positive with the sundial
+            # ahead of the clock: ~+16 min in early November).
+            # solar_time/solar_angle mirror the sidereal pair: decimal
+            # degrees, 0-360, 180 at solar noon.
+            ha = SkyfieldAlmanacBinder(self, almanac_obj, 'sun').compute_angle('ha')
+            if attr == 'equation_of_time':
+                apparent_hours = ha / 15.0 + 12.0
+                mean_hours = ((almanac_obj.time_ts % 86400) / 3600.0
+                              + almanac_obj.lon / 15.0)
+                eot_hours = (apparent_hours - mean_hours + 12.0) % 24.0 - 12.0
+                return ValueHelper(ValueTuple(eot_hours * 3600.0, 'second', 'group_deltatime'),
+                                   context='ephem_day',
+                                   formatter=almanac_obj.formatter,
+                                   converter=almanac_obj.converter)
+            degrees = (ha + 180.0) % 360.0
+            if attr == 'solar_time':
+                return degrees
+            return self.direction_value(almanac_obj, degrees)
         elif attr in self.sky.orbs or attr in self.sky.stars:
             return SkyfieldAlmanacBinder(self, almanac_obj, attr)
         # A configured satellite, by its [[Satellites]] tag name or its
         # sat_<norad> spelling ($almanac.iss, $almanac.sat_25544).
         elif self.sky.sat_norad(attr) is not None:
+            return SkyfieldAlmanacBinder(self, almanac_obj, attr)
+        # A configured comet, by its [[Comets]] tag name.  No numeric
+        # alternate spelling: comets have no NORAD-style number worth one.
+        elif attr in self.sky.comets:
             return SkyfieldAlmanacBinder(self, almanac_obj, attr)
 
         # Any Hipparcos star by number: $almanac.hip_57939 (works for every
@@ -2121,7 +2867,12 @@ class SkyfieldAlmanacBinder:
         self.heavenly_body = heavenly_body
         self.norad: Optional[int] = almanac_type.sky.sat_norad(heavenly_body)
         self.is_satellite = self.norad is not None
-        self.is_star = (not self.is_satellite
+        # A comet must be recognized BEFORE the is_star fall-through:
+        # is_star is simply "nothing else", and an unrecognized comet
+        # would KeyError into the star catalog.
+        self.is_comet = (not self.is_satellite
+                         and heavenly_body in almanac_type.sky.comets)
+        self.is_star = (not self.is_satellite and not self.is_comet
                         and heavenly_body not in almanac_type.sky.orbs)
         self.use_center = False
 
@@ -2134,10 +2885,12 @@ class SkyfieldAlmanacBinder:
         raise AttributeError(self.heavenly_body)
 
     def target_body(self) -> Any:
-        """The skyfield object observed: a planet vector, a Star, or an
-        EarthSatellite (which raises like a missing attribute when its
-        elements are unusable -- callers landing here for a satellite,
-        e.g. separation, have no N/A convention to fall back on)."""
+        """The skyfield object observed: a planet vector, a Star, a comet's
+        sun-plus-Kepler-orbit vector, or an EarthSatellite (a satellite or
+        comet without elements raises like a missing attribute -- callers
+        landing here for one, e.g. separation, have no N/A convention to
+        fall back on; comet TAG evaluation never lands here elementless,
+        the _evaluate gate serves the N/A state first)."""
         sky = self.almanac_type.sky
         if self.is_satellite:
             assert self.norad is not None
@@ -2145,9 +2898,33 @@ class SkyfieldAlmanacBinder:
             if elements is None:
                 raise AttributeError(self.heavenly_body)
             return elements[0]
+        if self.is_comet:
+            comet = sky.comet_elements(self.heavenly_body)
+            if comet is None:
+                raise AttributeError(self.heavenly_body)
+            return comet[0]
         if self.is_star:
             return sky.stars[self.heavenly_body][0]
         return sky.orbs[self.heavenly_body]
+
+    @property
+    def cache_name(self) -> str:
+        """The body's identity in _DAY_CACHE/_POS_CACHE keys.  For every
+        body but a comet this is the name itself.  A comet's elements
+        change whenever the cached CometEls file is refreshed -- and
+        _DAY_CACHE survives across report cycles -- so the file's mtime
+        is folded in: a refresh invalidates the cached rise/set times
+        instead of serving old-element answers until the day rolls (the
+        satellite pass cache's epoch precedent).  Mtime rather than the
+        row's perturbed epoch, deliberately: the epoch column can be
+        blank -- most likely for the freshly-discovered comets users
+        actually configure -- and a refresh can revise the orbit without
+        moving the epoch."""
+        if not self.is_comet:
+            return self.heavenly_body
+        comet = self.almanac_type.sky.comet_elements(self.heavenly_body)
+        mtime = comet[2] if comet is not None else 0.0
+        return '%s@%d' % (self.heavenly_body, int(mtime))
 
     def start_of_day_ts(self) -> float:
         """Local midnight of the day containing the almanac's time."""
@@ -2167,7 +2944,7 @@ class SkyfieldAlmanacBinder:
         set share one horizon)."""
         a = self.almanac
         sod_ts = self.start_of_day_ts()
-        key = ('radius', self.heavenly_body, sod_ts, a.lat, a.lon, a.altitude)
+        key = ('radius', self.cache_name, sod_ts, a.lat, a.lon, a.altitude)
         return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
                        lambda: self._apparent_radius_degrees(sod_ts))
 
@@ -2203,7 +2980,7 @@ class SkyfieldAlmanacBinder:
     def find_rise_set(self, rise: bool, start_ts: float, end_ts: float, previous: bool = False) -> Optional[float]:
         a = self.almanac
         horizon = self.horizon_degrees()
-        key = ('rise' if rise else 'set', self.heavenly_body,
+        key = ('rise' if rise else 'set', self.cache_name,
                start_ts, end_ts, previous, a.lat, a.lon, a.altitude,
                round(horizon / _HORIZON_QUANTUM_DEGREES))
         return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
@@ -2224,7 +3001,7 @@ class SkyfieldAlmanacBinder:
 
     def find_transit(self, antitransit: bool, start_ts: float, end_ts: float, previous: bool = False) -> Optional[float]:
         a = self.almanac
-        key = ('antitransit' if antitransit else 'transit', self.heavenly_body,
+        key = ('antitransit' if antitransit else 'transit', self.cache_name,
                start_ts, end_ts, previous, a.lat, a.lon, a.altitude)
         return _cached(_DAY_CACHE, _DAY_CACHE_CAP, key,
                        lambda: self._find_transit(antitransit, start_ts, end_ts, previous))
@@ -2282,6 +3059,13 @@ class SkyfieldAlmanacBinder:
         then_almanac = self.almanac(
             almanac_time=self.start_of_day_ts() + 43200 - days_ago * 86400)
         then_visible = getattr(then_almanac, self.heavenly_body).visible
+        if today_visible.value_t[0] is None or then_visible.value_t[0] is None:
+            # Either day has no answer (a comet without elements): an
+            # honest empty ValueHelper, not a TypeError from None math.
+            return ValueHelper(ValueTuple(None, 'second', 'group_deltatime'),
+                               context='hour',
+                               formatter=self.almanac.formatter,
+                               converter=self.almanac.converter)
         diff_vt = today_visible.value_t - then_visible.value_t
         return ValueHelper(diff_vt,
                            context='hour',
@@ -2292,7 +3076,7 @@ class SkyfieldAlmanacBinder:
         """Apparent geocentric (right ascension, declination) of date, in
         decimal degrees.  One observation serves both angles (separation
         needs the pair; two compute_angle calls would observe twice)."""
-        key = ('gradec', self.heavenly_body, self.almanac.time_ts)
+        key = ('gradec', self.cache_name, self.almanac.time_ts)
         return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._geocentric_radec_degrees)
 
     def _geocentric_radec_degrees(self) -> Tuple[float, float]:
@@ -2311,7 +3095,7 @@ class SkyfieldAlmanacBinder:
         a = self.almanac
         # Temperature and pressure only matter for the refracted alt/az, but
         # keying on them unconditionally is merely a few extra cache misses.
-        key = ('angle', self.heavenly_body, attr, a.time_ts,
+        key = ('angle', self.cache_name, attr, a.time_ts,
                a.lat, a.lon, a.altitude, a.temperature, a.pressure)
         return _cached(_POS_CACHE, _POS_CACHE_CAP, key,
                        lambda: self._compute_angle(attr))
@@ -2378,7 +3162,7 @@ class SkyfieldAlmanacBinder:
         a = self.almanac
         # The moon's magnitude is topocentric; keying every body on location
         # costs nothing.
-        key = ('mag', name, a.time_ts, a.lat, a.lon, a.altitude)
+        key = ('mag', self.cache_name, a.time_ts, a.lat, a.lon, a.altitude)
         return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._magnitude)
 
     def _magnitude(self) -> float:
@@ -2400,13 +3184,30 @@ class SkyfieldAlmanacBinder:
             # Meeus, Astronomical Algorithms: m = -1.00 + 5 log10(r * delta).
             return -1.0 + 5.0 * math.log10(sky.distance_au(t, sky.pluto, origin=sky.sun)
                                            * sky.distance_au(t, sky.pluto))
+        elif self.is_comet:
+            # The MPC total-magnitude formula, m = g + 5 log10(delta)
+            # + 2.5 k log10(r), from the row's g/k parameters.  Comets
+            # notoriously deviate from it -- outbursts, disintegrations --
+            # so the docs carry the caveat.  A row without g/k serves no
+            # magnitude at all, like a catalog star without one.
+            comet = sky.comet_elements(name)
+            if comet is None:
+                raise AttributeError('mag')
+            vector, row, _ = comet
+            if row.g is None or row.k is None:
+                raise AttributeError('mag')
+            delta = sky.distance_au(t, vector)
+            r = sky.distance_au(t, vector, origin=sky.sun)
+            return row.g + 5.0 * math.log10(delta) + 2.5 * row.k * math.log10(r)
         else:
             return float(skyfield.magnitudelib.planetary_magnitude(
                 sky.earth.at(t).observe(sky.orbs[name])))
 
     def angular_radius_radians(self) -> float:
-        """Apparent (topocentric) angular radius of the body, in radians."""
-        if self.is_star:
+        """Apparent (topocentric) angular radius of the body, in radians.
+        Stars and comets are point sources: 0.0, before any observation
+        (a comet must not need elements to answer .size)."""
+        if self.is_star or self.is_comet:
             return 0.0
         _, observer = self.almanac_type.location(self.almanac)
         t = self.almanac_type.skyfield_time(self.almanac.time_ts)
@@ -2434,7 +3235,7 @@ class SkyfieldAlmanacBinder:
         (__getattr__ only runs for names not otherwise found, so the tag
         would evaluate to the bound method)."""
         a = self.almanac
-        key = ('constellation', self.heavenly_body, a.time_ts, a.lat, a.lon, a.altitude)
+        key = ('constellation', self.cache_name, a.time_ts, a.lat, a.lon, a.altitude)
         return _cached(_POS_CACHE, _POS_CACHE_CAP, key, self._constellation_lookup)
 
     def _constellation_lookup(self) -> Optional[str]:
@@ -2557,9 +3358,65 @@ class SkyfieldAlmanacBinder:
         return math.asin(math.sin(i) * math.cos(lat.radians) * math.sin(math.radians(lon.degrees - node))
                          - math.cos(i) * math.sin(lat.radians))
 
+    def _comet_missing_attr(self, attr: str):
+        """The no-elements comet surface: every tag the orb path would
+        serve, shaped honestly -- empty "N/A" ValueHelpers, None for the
+        plain-value tags, zero for the point-source sizes -- never a wrong
+        number and never a per-tag error.  Anything OUTSIDE the served
+        surface raises AttributeError, exactly as it would with elements
+        (the pyephem_fallback fence).  Must stay in lockstep with the orb
+        surface: the parametrized no-elements test enumerates it."""
+        a = self.almanac
+        if attr in ('rise', 'set', 'transit', 'perihelion',
+                    'next_rising', 'next_setting',
+                    'previous_rising', 'previous_setting',
+                    'next_transit', 'previous_transit',
+                    'next_antitransit', 'previous_antitransit'):
+            return self.almanac_type.time_value(a, None, 'ephem_day')
+        if attr in SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES:
+            _, flavor = SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES[attr]
+            if flavor == 'direction':
+                return self.almanac_type.direction_value(a, None)
+            return ValueHelper(ValueTuple(None, 'radian', 'group_angle'),
+                               context='ephem_day',
+                               formatter=a.formatter, converter=a.converter)
+        if attr in SkyfieldAlmanacBinder.FLOAT_ANGLES:
+            return None
+        if attr in ('mag', 'phase', 'moon_phase', 'earth_distance', 'sun_distance',
+                    'circumpolar', 'neverup', 'constellation', 'constellation_abbr'):
+            return None
+        if attr == 'illumination':
+            return ValueHelper(ValueTuple(None, 'percent', 'group_percent'),
+                               context='ephem_day',
+                               formatter=a.formatter, converter=a.converter)
+        if attr in ('distance', 'distance_from_sun'):
+            return ValueHelper(ValueTuple(None, 'astronomical_unit', 'group_distance_astronomical'),
+                               context='ephem_day',
+                               formatter=a.formatter, converter=a.converter)
+        if attr == 'visible':
+            return ValueHelper(ValueTuple(None, 'second', 'group_deltatime'),
+                               context='day',
+                               formatter=a.formatter, converter=a.converter)
+        if attr in ('size', 'radius'):
+            # A comet is a point source with or without elements.
+            return 0.0
+        if attr == 'radius_size':
+            return ValueHelper(ValueTuple(0.0, 'radian', 'group_angle'),
+                               context='ephem_day',
+                               formatter=a.formatter, converter=a.converter)
+        raise AttributeError("'%s' object has no attribute '%s'"
+                             % (self.heavenly_body.capitalize(), attr))
+
     def pyephem_fallback(self, attr: str):
         """Delegate an attribute Skyfield does not compute to the built-in
-        PyEphem almanac, if PyEphem is installed."""
+        PyEphem almanac, if PyEphem is installed.  Comets NEVER fall
+        through -- PyEphem has no comets, and this is the one choke point
+        every route passes (the _evaluate tail, __getattr__'s
+        EphemerisRangeError handler, the constellation-failure path): a
+        clean per-tag AttributeError instead, the satellite convention."""
+        if self.is_comet:
+            raise AttributeError("'%s' object has no attribute '%s'"
+                                 % (self.heavenly_body.capitalize(), attr))
         if getattr(weewx.almanac, 'ephem', None) is not None:
             binder = weewx.almanac.AlmanacBinder(self.almanac, self.heavenly_body)
             binder.use_center = self.use_center
@@ -2590,6 +3447,29 @@ class SkyfieldAlmanacBinder:
         # never served satellites), so anything unrecognized raises cleanly.
         if self.is_satellite and attr not in ('name', 'label'):
             return self._satellite_attr(attr)
+
+        # A comet takes the normal orb path below -- the whole planet-style
+        # surface comes free from its sun+Kepler-orbit vector -- but its
+        # elements can honestly not exist (cache file missing, or MPC
+        # dropped the designation from a fresh download).  The gate serves
+        # the element diagnostics always, and collapses everything else to
+        # the N/A state when there are no elements; wrong numbers and
+        # per-tag errors are both unacceptable there.
+        if self.is_comet and attr not in ('name', 'label'):
+            sky = self.almanac_type.sky
+            comet = sky.comet_elements(self.heavenly_body)
+            if attr in ('elements_epoch', 'elements_age'):
+                epoch_ts = comet[1].epoch_ts if comet is not None else None
+                if attr == 'elements_epoch':
+                    return self.almanac_type.time_value(self.almanac, epoch_ts, 'ephem_year')
+                age = (self.almanac.time_ts - epoch_ts) if epoch_ts is not None else None
+                return ValueHelper(ValueTuple(age, 'second', 'group_deltatime'),
+                                   context='hour',
+                                   formatter=self.almanac.formatter,
+                                   converter=self.almanac.converter)
+            sky.note_comet_usable(self.heavenly_body, comet is not None)
+            if comet is None:
+                return self._comet_missing_attr(attr)
 
         # For a star, attributes involving sun-body geometry make no sense.
         # PyEphem's own star objects raise AttributeError for these, and the
@@ -2635,6 +3515,16 @@ class SkyfieldAlmanacBinder:
         elif attr == 'moon_fullness' and self.heavenly_body == 'moon':
             # Same computation as 'phase' (percent illuminated).
             return self.phase
+        elif attr == 'illumination':
+            # ValueHelper twin of the raw phase percent (and of the moon's
+            # moon_fullness alias): the same value in group_percent,
+            # honoring the report's percent formatting.  mag deliberately
+            # has no twin: a magnitude is unitless, there is nothing to
+            # convert or label.
+            return ValueHelper(ValueTuple(self.phase, 'percent', 'group_percent'),
+                               context='ephem_day',
+                               formatter=self.almanac.formatter,
+                               converter=self.almanac.converter)
         elif attr in ('earth_distance', 'sun_distance'):
             # Supported for planets, and for stars with a measured parallax
             # (a zero parallax puts the star on skyfield's gigaparsec sphere,
@@ -2645,6 +3535,29 @@ class SkyfieldAlmanacBinder:
             t = self.almanac_type.skyfield_time(self.almanac.time_ts)
             origin = sky.sun if attr == 'sun_distance' else None
             return sky.distance_au(t, self.target_body(), origin=origin)
+        elif attr in ('distance', 'distance_from_sun'):
+            # ValueHelper twins of the raw earth_distance/sun_distance
+            # floats: the same AU value, served in
+            # group_distance_astronomical so it formats as "1.8588 AU" in
+            # every unit system and converts on ask
+            # ($almanac.mars.distance.km).  distance is from Earth,
+            # mirroring the satellite surface, where .distance already
+            # means distance from the observer.  A star without a measured
+            # parallax has no known distance: an empty "N/A" ValueHelper,
+            # never the PyEphem fallback (whose star objects have no such
+            # attribute).
+            sky = self.almanac_type.sky
+            au: Optional[float]
+            if self.is_star and not sky.stars[self.heavenly_body][0].parallax_mas:
+                au = None
+            else:
+                t = self.almanac_type.skyfield_time(self.almanac.time_ts)
+                origin = sky.sun if attr == 'distance_from_sun' else None
+                au = sky.distance_au(t, self.target_body(), origin=origin)
+            return ValueHelper(ValueTuple(au, 'astronomical_unit', 'group_distance_astronomical'),
+                               context='ephem_day',
+                               formatter=self.almanac.formatter,
+                               converter=self.almanac.converter)
         elif attr == 'mag':
             return self.magnitude()
         elif attr == 'phase':
@@ -2656,7 +3569,7 @@ class SkyfieldAlmanacBinder:
                 return 100.0
             sky = self.almanac_type.sky
             t = self.almanac_type.skyfield_time(self.almanac.time_ts)
-            return 100.0 * sky.earth.at(t).observe(sky.orbs[self.heavenly_body]).apparent().fraction_illuminated(sky.sun)
+            return 100.0 * sky.earth.at(t).observe(self.target_body()).apparent().fraction_illuminated(sky.sun)
         elif attr == 'size':
             # Apparent angular diameter in arcseconds.
             return math.degrees(2.0 * self.angular_radius_radians()) * 3600.0
@@ -2674,6 +3587,31 @@ class SkyfieldAlmanacBinder:
             return circumpolar if attr == 'circumpolar' else neverup
         elif attr == 'parallactic_angle':
             return CallableRadians(self._parallactic_angle())
+        elif attr == 'perihelion' and self.is_comet:
+            # The comet's time of perihelion passage, straight from the
+            # MPC row (a TT date).  The row references the current orbit
+            # solution's perihelion, which may lie in the past --
+            # Hale-Bopp's says 1997 -- so consumers judge upcoming-ness
+            # themselves (the Sky page's countdown chip shows it only
+            # when it lies ahead within a year).
+            comet = self.almanac_type.sky.comet_elements(self.heavenly_body)
+            if comet is None:
+                # The gate normally serves N/A first; this covers the
+                # race of the cache file vanishing mid-evaluation.
+                return self.almanac_type.time_value(self.almanac, None, 'ephem_year')
+            row = comet[1]
+            t = self.almanac_type.sky.ts.tt(row.peri_year, row.peri_month, row.peri_day)
+            return self.almanac_type.time_value(
+                self.almanac, t.utc_datetime().timestamp(), 'ephem_year')
+        elif attr in APSIS_ATTRS and self.heavenly_body == 'moon':
+            # Moon perigee/apogee times (the supermoon machinery).  Moon
+            # only: no other served body orbits the observer.  For any
+            # other body the name falls through to the PyEphem fallback,
+            # which raises AttributeError -- PyEphem has no apsides.
+            apogee, previous = APSIS_ATTRS[attr]
+            return self.almanac_type.find_apsis(
+                self.almanac, apogee, previous, attr,
+                MoonDistanceAU(self.almanac_type.sky), APSIS_WINDOW_DAYS)
         elif attr in ('libration_lat', 'libration_long', 'colong',
                       'subsolar_lat') and self.heavenly_body == 'moon':
             return Radians(self.moon_libration(attr))

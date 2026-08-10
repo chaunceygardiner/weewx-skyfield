@@ -173,6 +173,18 @@ PASS_STAR_LABEL_MAG = 1.5
 # the rim), while the polar projection's blowup toward the antipode stays
 # far away from the chart.
 CON_ALT_FLOOR = -15.0
+# The supermoon callout fires when the next full moon falls within a day
+# of perigee -- the popular definition.  A constant, not an option, until
+# a consumer asks.
+# A comet brighter than this is plausibly naked-eye: the dome's solid
+# marker.  Anything fainter -- or with no magnitude parameters in its MPC
+# row -- draws as the hollow ring: present but not visible to the eye.
+# A constant, not an option, until a consumer asks.
+COMET_NAKED_EYE_MAG = 6.0
+# The countdown row shows a comet's perihelion only when it lies ahead
+# within this window: the news-cycle chip, without Halley's 2061 date
+# squatting on the header for decades.
+COMET_PERIHELION_COUNTDOWN_S = 365 * 86400
 
 REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
 
@@ -194,6 +206,24 @@ def _raw(value_helper, unit: str) -> Optional[float]:
 
 def _t_hm(ts: Optional[float]) -> str:
     return time.strftime('%H:%M', time.localtime(ts)) if ts else '&#8212;'
+
+
+def _comet_tail(x: float, y: float, ux: float, uy: float, color: str) -> str:
+    """Three short rays fanning out from a comet marker along (ux, uy),
+    the unit ANTI-SUNWARD direction in chart coordinates -- a comet's
+    tail always points away from the sun, so the glyph is honest physics
+    as well as iconography (a bare diamond says nothing; a tailed one
+    reads as a comet at a glance)."""
+    rays = []
+    for angle, length, opacity in ((-0.18, 9.0, '0.55'), (0.0, 12.0, '0.9'),
+                                   (0.18, 9.0, '0.55')):
+        ca, sa = math.cos(angle), math.sin(angle)
+        rx, ry = ux * ca - uy * sa, ux * sa + uy * ca
+        rays.append('<line class="comet-tail" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                    'stroke="%s" stroke-width="1.2" opacity="%s"/>'
+                    % (x + 6.0 * rx, y + 6.0 * ry, x + (6.0 + length) * rx,
+                       y + (6.0 + length) * ry, color, opacity))
+    return ''.join(rays)
 
 
 def _esc(s: str) -> str:
@@ -352,14 +382,24 @@ class SkyPage:
         process locale, like the panels' month axis labels."""
         return time.strftime(self._t('%b %-d'), time.localtime(ts))
 
+    def _date_hm(self, ts: Optional[float]) -> str:
+        """A short panel date with its clock time, em-dash when unknown."""
+        return '%s %s' % (self._date(ts), _t_hm(ts)) if ts else '&#8212;'
+
     # ── shared data access (plain $almanac tags) ─────────────────────────────
     def _body(self, alm, name: str) -> Dict[str, Any]:
         key = (alm.time_ts, name)
         if key in self._memo:
             return self._memo[key]
         b = getattr(alm, name)
+        try:
+            mag: Optional[float] = b.mag
+        except AttributeError:
+            # A comet row without g/k parameters serves no magnitude at
+            # all; renderers show a dash.
+            mag = None
         d: Dict[str, Any] = {
-            'name': name, 'az': b.az, 'alt': b.alt, 'mag': b.mag,
+            'name': name, 'az': b.az, 'alt': b.alt, 'mag': mag,
             'rise': _raw(b.rise, 'unix_epoch'), 'set': _raw(b.set, 'unix_epoch'),
             'transit': _raw(b.transit, 'unix_epoch'),
             'visible': _raw(b.visible, 'second'),
@@ -538,6 +578,34 @@ class SkyPage:
         guard: a station with no [[Satellites]] hides the section."""
         return bool(self.satellite_names())
 
+    def comet_names(self) -> List[str]:
+        """The configured comets' tag names ([Skyfield] [[Comets]]), in
+        config order, from the registered engine.  Empty when none are
+        configured or the Skyfield almanac is not registered.  PUBLIC
+        CONTRACT like satellite_names: embedding skins enumerate the
+        comets through this, so the name and semantics are stable."""
+        sky = _find_sky()
+        return list(sky.comets) if sky is not None else []
+
+    def _comet_pos(self, alm, name: str) -> Dict[str, Any]:
+        """The comet's place and magnitude for the dome -- deliberately
+        NOT _body(): its rise/set/visible reads would cost day-window
+        searches per comet per render for marks the dome doesn't need.
+        alt/az are None when the comet has no elements (the marker simply
+        does not plot); mag is None when the MPC row carries no g/k
+        parameters (drawn as fainter than naked-eye)."""
+        key = (alm.time_ts, 'comet:' + name)
+        if key in self._memo:
+            return self._memo[key]
+        b = getattr(alm, name)
+        try:
+            mag: Optional[float] = b.mag
+        except AttributeError:
+            mag = None
+        d = {'alt': b.alt, 'az': b.az, 'mag': mag}
+        self._memo[key] = d
+        return d
+
     def _sat_pass(self, alm, name: str) -> Dict[str, Any]:
         """The satellite's next visible pass as plain numbers ('pass', None
         when there is none in the elements' validity window) -- 'usable'
@@ -666,6 +734,8 @@ class SkyPage:
                 parts.append(self._t('star catalog unavailable — see the weewxd log'))
             else:
                 parts.append(self._t('star catalog disabled'))
+            if sky.comets:
+                parts.append(self._t('Comet elements: Minor Planet Center'))
             parts.append(self._t('Regenerated every report cycle'))
         return sep.join(parts).replace(
             'weewx-skyfield', '<a href="%s">weewx-skyfield</a>' % REPO_URL)
@@ -720,6 +790,41 @@ class SkyPage:
                          % (kind_label,
                             time.strftime(self._t('%b %-d %Y'), time.localtime(ts)),
                             type_label, when_str(ts)))
+        # The next major meteor shower -- always: there is always a next
+        # one, rolling to the following shower as each peak passes.  The
+        # detail line carries the moon's interference judgment for the
+        # peak night (a bright moon washes out the faint meteors), the
+        # almanac-quality half of the chip.  A tag failure drops the
+        # chip, not the row.
+        try:
+            shower = alm.next_meteor_shower
+            shower_ts = _raw(shower.peak, 'unix_epoch')
+        except Exception:
+            shower, shower_ts = None, None
+        if shower is not None and shower_ts is not None:
+            moon_pct = int(round(alm(almanac_time=shower_ts).moon.phase))
+            chips.append('<div class="count"><span class="k">%s</span>'
+                         '<span class="v mono">%s</span><span class="d">%s &#183; %s</span></div>'
+                         % (_esc(shower.label), self._date(shower_ts),
+                            when_str(shower_ts),
+                            self._t('moon {pct}%', pct=moon_pct)))
+        # A configured comet's perihelion, when it lies ahead within the
+        # countdown window -- the news-cycle chip.  Halley's 2061 date
+        # stays quiet until its time comes; a past perihelion
+        # (Hale-Bopp's 1997) never shows.  A tag failure drops the chip,
+        # not the row, like the eclipse chip above.
+        for name in self.comet_names():
+            try:
+                ts = _raw(getattr(alm, name).perihelion, 'unix_epoch')
+            except Exception:
+                ts = None
+            if ts is None or not (0.0 <= ts - alm.time_ts <= COMET_PERIHELION_COUNTDOWN_S):
+                continue
+            chips.append('<div class="count"><span class="k">%s</span>'
+                         '<span class="v mono">%s</span><span class="d">%s</span></div>'
+                         % (self._t('{name} perihelion',
+                                    name=_esc(self._label(alm, name))),
+                            self._date(ts), when_str(ts)))
         return '\n'.join(chips)
 
     # ── moon disc ─────────────────────────────────────────────────────────────
@@ -962,6 +1067,78 @@ class SkyPage:
                      '<title>%s</title></circle></g>'
                      % (_esc(name), 1 if lit else 0, x, y, fill, ring, title))
             _try_label(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+        # Comets: a diamond for any configured comet above the horizon --
+        # always plotted and always labeled (the config list IS the
+        # filter; star_mag_limit is a census cutoff for the unconfigured
+        # star field, a different kind of population).  Solid brass when
+        # plausibly naked-eye (mag <= COMET_NAKED_EYE_MAG), the hollow
+        # ring otherwise -- the satellite in-shadow convention: present,
+        # but you will not see it by eye.  data-bright mirrors the
+        # data-sunlit hook for embedding skins.  A comet with no elements
+        # serves alt None and simply does not plot.  The tail rays point
+        # anti-sunward -- away from the sun's own projected chart point,
+        # which serves as the direction anchor even when the sun is below
+        # the horizon (the projection keeps working at negative
+        # altitudes).
+        sun_b = self._body(alm, 'sun')
+        sun_xy = self._dome_xy(cx, cy, R, sun_b['az'], sun_b['alt'])
+        for name in self.comet_names():
+            c = self._comet_pos(alm, name)
+            if c['alt'] is None or c['alt'] <= 0:
+                continue
+            x, y = self._dome_xy(cx, cy, R, c['az'], c['alt'])
+            label = self._label(alm, name)
+            bright = c['mag'] is not None and c['mag'] <= COMET_NAKED_EYE_MAG
+            if c['mag'] is not None:
+                title = self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
+                                name=_esc(label), alt='%.1f' % c['alt'],
+                                az='%.1f' % c['az'], mag='%.1f' % c['mag'])
+            else:
+                title = self._t('{name} — alt {alt}°, az {az}°',
+                                name=_esc(label), alt='%.1f' % c['alt'],
+                                az='%.1f' % c['az'])
+            fill, ring = (brass, pal['halo']) if bright else (pal['halo'], brass)
+            n = math.hypot(x - sun_xy[0], y - sun_xy[1])
+            tail = (_comet_tail(x, y, (x - sun_xy[0]) / n, (y - sun_xy[1]) / n, brass)
+                    if n > 1.0 else '')
+            p.append('<g class="dome-body" data-body="%s" data-bright="%d">%s'
+                     '<path d="M%.1f %.1f L%.1f %.1f L%.1f %.1f L%.1f %.1f Z"'
+                     ' fill="%s" stroke="%s" stroke-width="2">'
+                     '<title>%s</title></path></g>'
+                     % (_esc(name), 1 if bright else 0, tail,
+                        x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
+                        fill, ring, title))
+            _try_label(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+        # Meteor-shower radiants: while a shower is active, a rayed mark
+        # at the radiant when it stands above the horizon -- meteors
+        # stream outward FROM this point, so the glyph is six short rays
+        # diverging from a center dot.  The label yields when space is
+        # tight (must=False): a radiant is an area of sky, not a body.
+        try:
+            active_showers = alm.active_meteor_showers
+        except Exception:
+            active_showers = ()
+        for shower in active_showers:
+            if shower.radiant_alt is None or shower.radiant_alt <= 0:
+                continue
+            x, y = self._dome_xy(cx, cy, R, shower.radiant_az, shower.radiant_alt)
+            peak_ts = _raw(shower.peak, 'unix_epoch')
+            title = self._t('{name} radiant — ZHR {zhr}, peak {date}',
+                            name=_esc(shower.label), zhr=shower.zhr,
+                            date=self._date(peak_ts) if peak_ts else '&#8212;')
+            rays = []
+            for k in range(6):
+                a = math.radians(60.0 * k + 15.0)
+                rays.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                            'stroke="%s" stroke-width="1.2" opacity="0.8"/>'
+                            % (x + 3.5 * math.cos(a), y + 3.5 * math.sin(a),
+                               x + 9.0 * math.cos(a), y + 9.0 * math.sin(a), brass))
+            p.append('<g class="dome-body radiant" data-body="%s">%s'
+                     '<circle cx="%.1f" cy="%.1f" r="1.8" fill="%s">'
+                     '<title>%s</title></circle></g>'
+                     % (_esc(shower.key), ''.join(rays), x, y, brass, title))
+            _try_label(x, y, _esc(shower.label), 'satlab', 10, must=False,
+                       body=shower.key)
         if track is not None:
             xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
             p.append('<g class="dome-track" data-body="%s" '
@@ -1058,7 +1235,11 @@ class SkyPage:
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         eod = sod + 86400
         X0, X1, ROW, TOP = 118, 952, 30, 34
+        # Configured comets with elements ride the same rows (brass bars);
+        # one without elements is simply absent, the dome convention.
         bodies = [self._body(alm, n) for n in ['sun', 'moon'] + PLANETS]
+        bodies += [b for b in (self._body(alm, n) for n in self.comet_names())
+                   if b['dist_au'] is not None]
         H = TOP + ROW * len(bodies) + 34
         plot_h = ROW * len(bodies)
 
@@ -1087,7 +1268,7 @@ class SkyPage:
         for i, b in enumerate(bodies):
             y = TOP + i * ROW
             cy = y + ROW / 2.0
-            color = body_color[b['name']]
+            color = body_color.get(b['name'], brass)   # comets: brass bars
             # Pale bodies (palette 'ring' entries) get a 1px edge on their
             # legend dot, bars and transit tick so they hold up on the pale
             # daytime band; saturated bodies stay stroke-free as before.
@@ -1162,6 +1343,22 @@ class SkyPage:
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
         labels: List[List[Any]] = []
+
+        def queue_label(x: float, y: float, disp: str) -> None:
+            # Label away from center, flipped when its estimated width would
+            # leave the viewBox (a body near 0 degrees sits at the right rim
+            # for years at a time), then clamped vertically.
+            est_w = 8 + 7.0 * len(disp)
+            anchor = 'start' if x >= cx else 'end'
+            if anchor == 'start' and x + est_w > S - 6:
+                anchor = 'end'
+            elif anchor == 'end' and x - est_w < 6:
+                anchor = 'start'
+            lx = x + (8 if anchor == 'start' else -8)
+            ly = min(max(y + 4, 14.0), S - 8.0)
+            x0 = lx if anchor == 'start' else lx - est_w
+            labels.append([lx, ly, anchor, _esc(disp), x0, x0 + est_w])
+
         for name, a in SEMI_MAJOR_AU.items():
             h = math.radians(hlongs[name])
             r = orbit_r(a)
@@ -1177,19 +1374,41 @@ class SkyPage:
                 p.append('<circle cx="%.1f" cy="%.1f" r="5" fill="%s" stroke="%s" stroke-width="1.5">'
                          '<title>%s</title></circle>'
                          % (x, y, pal['body'][name], _ring(pal, name), title))
-            # Label away from center, flipped when its estimated width would
-            # leave the viewBox (a body near 0 degrees sits at the right rim
-            # for years at a time), then clamped vertically.
-            est_w = 8 + 7.0 * len(disp)
-            anchor = 'start' if x >= cx else 'end'
-            if anchor == 'start' and x + est_w > S - 6:
-                anchor = 'end'
-            elif anchor == 'end' and x - est_w < 6:
-                anchor = 'start'
-            lx = x + (8 if anchor == 'start' else -8)
-            ly = min(max(y + 4, 14.0), S - 8.0)
-            x0 = lx if anchor == 'start' else lx - est_w
-            labels.append([lx, ly, anchor, _esc(disp), x0, x0 + est_w])
+            queue_label(x, y, disp)
+        # Comets: a diamond at the comet's CURRENT sun distance on the
+        # same log scale as the rings, at its heliocentric longitude --
+        # marker only, no orbit ring: a circle would misdraw an eccentric
+        # orbit.  This is the panel that tells a news-cycle comet's story
+        # (inbound past Jupiter, inside Earth's orbit) as the diamond
+        # creeps sunward across report cycles.  Solid/hollow follows the
+        # dome's naked-eye rule, one convention everywhere.  The radius is
+        # clamped inside the chart (a far-aphelion comet pins near the
+        # rim; one diving inside Mercury stays clear of the sun's disc) --
+        # the tooltip carries the true distance either way.
+        for name in self.comet_names():
+            binder = getattr(alm, name)
+            hlong, r_au = binder.hlong, binder.sun_distance
+            if hlong is None or r_au is None:
+                continue
+            bright_mag = self._comet_pos(alm, name)['mag']
+            h = math.radians(hlong)
+            r = min(max(orbit_r(r_au), 16.0), 228.0)
+            x, y = cx + r * math.cos(h), cx - r * math.sin(h)
+            disp = self._label(alm, name)
+            bright = bright_mag is not None and bright_mag <= COMET_NAKED_EYE_MAG
+            fill, ring = (pal['brass'], pal['halo']) if bright else (pal['halo'], pal['brass'])
+            title = self._t('{name} — heliocentric longitude {deg}°, {dist} au',
+                            name=_esc(disp), deg='%.1f' % hlong,
+                            dist='%.1f' % r_au)
+            # The tail points anti-sunward, which on a sun-centered plan
+            # view is simply radially outward.
+            p.append(_comet_tail(x, y, (x - cx) / r, (y - cx) / r, pal['brass']))
+            p.append('<path d="M%.1f %.1f L%.1f %.1f L%.1f %.1f L%.1f %.1f Z" '
+                     'fill="%s" stroke="%s" stroke-width="1.5">'
+                     '<title>%s</title></path>'
+                     % (x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
+                        fill, ring, title))
+            queue_label(x, y, disp)
         # Neighbors sharing a rim (Saturn/Neptune near 0 degrees) collide;
         # push the later label down in 13 px steps until it clears.
         placed: List[List[Any]] = []
@@ -1219,8 +1438,17 @@ class SkyPage:
             ts = noon0 + week * 7 * 86400
             a = alm(almanac_time=ts)
             pts.append({'ts': ts, 'alt': a.sun.alt, 'az': a.sun.az})
+        # The brass marker is TODAY's standard noon, its own evaluation on
+        # the same locus -- not the nearest weekly sample, which can sit
+        # 3.5 days along the figure-eight from the real sun.
+        tm_now = time.localtime(alm.time_ts)
+        noon_today = calendar.timegm((tm_now.tm_year, tm_now.tm_mon,
+                                      tm_now.tm_mday, 12, 0, 0)) + time.timezone
+        a = alm(almanac_time=noon_today)
+        today = {'ts': noon_today, 'alt': a.sun.alt, 'az': a.sun.az}
         S = 480
-        azs, alts = [q['az'] for q in pts], [q['alt'] for q in pts]
+        azs = [q['az'] for q in pts + [today]]
+        alts = [q['alt'] for q in pts + [today]]
         az0, az1 = min(azs) - 4, max(azs) + 4
         al0 = math.floor(min(alts) / 10.0) * 10 - 4
         al1 = math.ceil(max(alts) / 10.0) * 10 + 4
@@ -1253,7 +1481,6 @@ class SkyPage:
         # curve at the lobes (Jun at the top, Dec/Jan at the bottom) and of
         # the axis labels; the today label owns its spot -- a month label
         # falling on it is skipped.
-        today = min(pts, key=lambda q: abs(q['ts'] - alm.time_ts))
         az_c = sum(q['az'] for q in pts) / len(pts)
         al_c = sum(q['alt'] for q in pts) / len(pts)
 
@@ -1288,11 +1515,97 @@ class SkyPage:
         p.append('<circle cx="%.1f" cy="%.1f" r="5.5" fill="%s" stroke="%s" stroke-width="1.5">'
                  '<title>%s</title></circle>'
                  % (X(today['az']), Y(today['alt']), pal['brass'], pal['halo'],
-                    self._t('This week — alt {alt}°, az {az}°',
+                    self._t('{date} — alt {alt}°, az {az}°', date=self._date(today['ts']),
                             alt='%.1f' % today['alt'], az='%.1f' % today['az'])))
         lx, ly, anchor = _outward(today, 17)
         p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">%s</text>'
                  % (lx, ly, anchor, self._t('today')))
+        p.append('</svg>')
+        return ''.join(p)
+
+    # ── equation of time ─────────────────────────────────────────────────────
+    @_panel_guard()
+    def eot_svg(self, alm, palette: str = 'night') -> str:
+        """The equation of time across the year: sundial minus clock (the
+        USNO sign -- positive above the zero line means the sundial runs
+        ahead), sampled at the analemma's own instants, local standard
+        noon each week, so the two charts describe the same sun.  The
+        brass point and its label are TODAY's standard-noon value, its
+        own evaluation rather than the nearest weekly sample: the curve
+        is steep enough near the solstices that snapping to the grid
+        mislabels the seconds-precision value by up to ~90 s (late
+        December).  The fixed ±18-minute frame holds the yearly extremes
+        (+16m26s early November, −14m14s mid-February) with margin, so
+        the plate looks the same every year."""
+        import calendar
+        pal = _palette(palette)
+        ink, line, brass = pal['ink'], pal['line'], pal['brass']
+        year = time.localtime(alm.time_ts).tm_year
+        # Local standard (not DST) noon, each week of the year.
+        noon0 = calendar.timegm((year, 1, 1, 12, 0, 0)) + time.timezone
+        pts = []
+        for week in range(53):
+            ts = noon0 + week * 7 * 86400
+            seconds = _raw(alm(almanac_time=ts).equation_of_time, 'second')
+            if seconds is None:
+                continue
+            pts.append({'ts': ts, 'eot': seconds / 60.0})
+        W, H = 480, 300
+        t0, t1 = float(noon0), float(noon0 + 52 * 7 * 86400)
+        M0, M1 = -18.0, 18.0
+
+        def X(ts: float) -> float:
+            return 54 + (W - 78) * (ts - t0) / (t1 - t0)
+
+        def Y(minutes: float) -> float:
+            return 16 + (H - 66) * (M1 - minutes) / (M1 - M0)
+
+        p = ['<svg viewBox="0 0 %d %d" role="img" aria-label="%s">'
+             % (W, H, self._t('Equation of time'))]
+        for m in range(-15, 16, 5):
+            strong = (m == 0)
+            p.append('<line x1="54" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
+                     'stroke-width="1" opacity="%s"/>'
+                     % (Y(m), W - 24, Y(m), ink if strong else line,
+                        '0.7' if strong else '0.5'))
+            p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%+dm</text>'
+                     % (Y(m) + 4, m) if m else
+                     '<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">0</text>'
+                     % (Y(0) + 4))
+        # Month ticks and labels, by month number (never by comparing
+        # strftime output -- the analemma's locale lesson); the label text
+        # itself is strftime output, so it follows the station's locale.
+        for mon in range(1, 13):
+            ts_m = calendar.timegm((year, mon, 1, 12, 0, 0)) + time.timezone
+            x = X(ts_m)
+            p.append('<line x1="%.1f" y1="16" x2="%.1f" y2="%d" stroke="%s" '
+                     'stroke-width="1" opacity="0.3"/>' % (x, x, H - 50, line))
+            if mon % 2:
+                p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
+                         % (x, H - 32, time.strftime('%b', time.localtime(ts_m))))
+        path = ' '.join('%s%.1f %.1f' % ('M' if i == 0 else 'L', X(q['ts']), Y(q['eot']))
+                        for i, q in enumerate(pts))
+        p.append('<path d="%s" fill="none" stroke="%s" stroke-width="1.5" opacity="0.9"/>'
+                 % (path, ink))
+        tm_now = time.localtime(alm.time_ts)
+        noon_today = calendar.timegm((tm_now.tm_year, tm_now.tm_mon,
+                                      tm_now.tm_mday, 12, 0, 0)) + time.timezone
+        now_seconds = _raw(alm(almanac_time=noon_today).equation_of_time, 'second')
+        if now_seconds is None:
+            raise ValueError('equation_of_time unavailable')  # -> panel guard
+        today = {'ts': noon_today, 'eot': now_seconds / 60.0}
+        tx, ty = X(today['ts']), Y(today['eot'])
+        p.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="%s"/>' % (tx, ty, brass))
+        # Today's value beside the point, in the almanac convention
+        # (16m 26s style), nudged to stay inside the frame.
+        total = int(round(abs(today['eot']) * 60.0))
+        value = '%s%dm %02ds' % ('-' if today['eot'] < 0 else '+',
+                                 total // 60, total % 60)
+        anchor = 'start' if tx < W - 96 else 'end'
+        lx = tx + (8 if anchor == 'start' else -8)
+        ly = min(max(ty + 4, 14.0), H - 56.0)
+        p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono nowlab">%s</text>'
+                 % (lx, ly, anchor, value))
         p.append('</svg>')
         return ''.join(p)
 
@@ -1702,6 +2015,33 @@ class SkyPage:
                 '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
                 '<div class="chipsub mono">%s</div>%s</div></div>'
                 % (dot_style(name), _esc(self._label(alm, name)), line, sub, extra))
+        # Configured comets with elements get a chip like any body: brass
+        # dot, the same up-now/rises/below states, magnitude a dash when
+        # the MPC row has no g/k.  One without elements is simply absent,
+        # the dome convention.
+        for name in self.comet_names():
+            b = self._body(alm, name)
+            if b['dist_au'] is None:
+                continue
+            if b['alt'] > 0:
+                line = self._t('up now — alt {alt}° · az {az}°',
+                               alt='%.0f' % b['alt'], az='%.0f' % b['az'])
+            elif b['rise'] is not None:
+                line = self._t('rises {time}', time=_t_hm(b['rise']))
+            else:
+                line = self._t('below the horizon')
+            mag = '%+.1f' % b['mag'] if b['mag'] is not None else '&#8212;'
+            sub = self._t('mag {mag} · {dist} au · elong {elong}°',
+                          mag=mag, dist='%.2f' % b['dist_au'],
+                          elong='%.0f' % b['elong'])
+            if b['constellation']:
+                sub = '%s &#183; %s' % (self._t('in {constellation}',
+                                                constellation=_esc(b['constellation'])), sub)
+            rows.append(
+                '<div class="chip"><span class="dot" style="background:%s"></span>'
+                '<div><div class="chipname">%s</div><div class="chipline mono">%s</div>'
+                '<div class="chipsub mono">%s</div></div></div>'
+                % (pal['brass'], _esc(self._label(alm, name)), line, sub))
         return '\n'.join(rows)
 
     def _sat_when(self, alm, rise_ts: float, set_ts: Optional[float]) -> str:
@@ -1755,6 +2095,31 @@ class SkyPage:
         return '\n'.join(rows)
 
     @_panel_guard()
+    def moon_apsides_html(self, alm) -> str:
+        """The lunation panel's apsis footer: the quiet next-perigee /
+        next-apogee line, topped by a supermoon callout when the NEXT
+        full moon is the next supermoon -- the rule itself lives in the
+        engine's $almanac.next_supermoon tag (full moon within a day of
+        perigee), read here rather than re-derived.  Anticipation only,
+        like the satellite cards: the callout appears ahead of the event
+        and leaves with it.  Colors come from the theme's CSS variables,
+        not the palette, so the same markup serves both plates."""
+        parts = []
+        full = _raw(alm.next_full_moon, 'unix_epoch')
+        supermoon = _raw(alm.next_supermoon, 'unix_epoch')
+        if (full is not None and supermoon is not None
+                and abs(supermoon - full) <= 60.0):
+            parts.append('<p class="supermoon">%s</p>'
+                         % self._t('Supermoon {date} — full moon within a day of perigee',
+                                   date=self._date(full)))
+        parts.append('<p class="apsis mono">%s &#183; %s</p>'
+                     % (self._t('perigee {date}',
+                                date=self._date_hm(_raw(alm.moon.next_perigee, 'unix_epoch'))),
+                        self._t('apogee {date}',
+                                date=self._date_hm(_raw(alm.moon.next_apogee, 'unix_epoch')))))
+        return '\n'.join(parts)
+
+    @_panel_guard()
     def table_html(self, alm, palette: str = 'night') -> str:
         pal = _palette(palette)
         body_color = pal['body']
@@ -1773,6 +2138,21 @@ class SkyPage:
                         % (body_color[name], edge, _esc(self._label(alm, name)),
                            _t_hm(b['rise']), _t_hm(b['transit']), _t_hm(b['set']),
                            self._dur(b['visible']), b['alt'], b['az'], b['mag'], dist))
+        # Configured comets with elements get a row like any body (brass
+        # dot; a dash when the MPC row has no magnitude parameters); one
+        # without elements is simply absent, the dome convention.
+        for name in self.comet_names():
+            b = self._body(alm, name)
+            if b['dist_au'] is None:
+                continue
+            dist = self._t('{dist} au', dist='%.3f' % b['dist_au'])
+            mag = '%+.1f' % b['mag'] if b['mag'] is not None else '&#8212;'
+            rows.append('<tr><td class="tname"><span class="dot" style="background:%s">'
+                        '</span>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
+                        '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%s</td><td>%s</td></tr>'
+                        % (pal['brass'], _esc(self._label(alm, name)),
+                           _t_hm(b['rise']), _t_hm(b['transit']), _t_hm(b['set']),
+                           self._dur(b['visible']), b['alt'], b['az'], mag, dist))
         return ('<table><thead><tr><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'
                 '<th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'
                 '</tr></thead><tbody>%s</tbody></table>'

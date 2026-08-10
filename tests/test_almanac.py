@@ -89,7 +89,8 @@ def raw(value_helper, unit):
 def sky():
     s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
                        load_stars=CATALOG_PRESENT,
-                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
+                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR,
+                       comets=dict(COMETS), comet_dir=SAT_DATA_DIR)
     assert s.is_valid()
     return s
 
@@ -391,10 +392,85 @@ class TestPositions:
         assert 0.0 <= almanac.sidereal_time < 360.0
         assert almanac.sidereal_angle.raw == pytest.approx(almanac.sidereal_time, abs=ANGLE_TOL)
 
+    def test_solar_time(self, almanac):
+        """Local apparent solar time as an angle, mirroring the sidereal
+        pair: 180° is solar noon.  At 12:00 PDT on the solstice the sun
+        is still 17.6° (an hour and change) east of the local meridian."""
+        assert almanac.solar_time == pytest.approx(162.376, abs=ANGLE_TOL)
+        assert 0.0 <= almanac.solar_time < 360.0
+        assert almanac.solar_angle.raw == pytest.approx(almanac.solar_time, abs=ANGLE_TOL)
+
+    def test_solar_noon_is_180_degrees(self, almanac):
+        """Time-traveled to the sun's transit, apparent solar time reads
+        180° -- solar noon, by definition."""
+        noon = almanac(almanac_time=almanac.sun.transit.raw)
+        assert noon.solar_time == pytest.approx(180.0, abs=0.02)
+
+    def test_equation_of_time(self, almanac):
+        """Apparent minus mean solar time -- the USNO sign convention --
+        as a signed group_deltatime ValueHelper.  Values agree with Meeus
+        ch. 28 within a few seconds; the yearly extremes land on the
+        published +16m26s (early November) and -14m14s (mid-February)."""
+        # Solstice 2025: the sundial runs about 1m55s behind the clock.
+        assert almanac.equation_of_time.raw == pytest.approx(-115.4, abs=3.0)
+        nov = almanac(almanac_time=1762200000)      # 2025-11-03 12:00 PST
+        assert nov.equation_of_time.raw == pytest.approx(16.43 * 60.0, abs=15.0)
+        feb = almanac(almanac_time=1739304000)      # 2025-02-11 12:00 PST
+        assert feb.equation_of_time.raw == pytest.approx(-14.19 * 60.0, abs=15.0)
+
     def test_distances(self, almanac):
         assert almanac.sun.earth_distance == pytest.approx(1.01625, abs=0.001)
         assert almanac.mars.earth_distance == pytest.approx(1.85875, abs=0.001)
         assert almanac.mars.sun_distance == pytest.approx(1.64, abs=0.05)
+
+    def test_distance_value_helpers(self, almanac):
+        """distance/distance_from_sun are ValueHelper twins of the raw
+        earth_distance/sun_distance floats: the same AU value, rendered
+        with the AU label by default in every unit system, converting on
+        ask.  distance is from Earth, mirroring the satellite surface,
+        where .distance already means distance from the observer."""
+        assert str(almanac.sun.distance) == '1.0163 AU'
+        assert str(almanac.mars.distance) == '1.8588 AU'
+        assert str(almanac.mars.distance_from_sun) == '1.6448 AU'
+        assert almanac.sun.distance.raw == pytest.approx(almanac.sun.earth_distance, abs=1e-12)
+        assert almanac.mars.distance.raw == pytest.approx(almanac.mars.earth_distance, abs=1e-12)
+        assert almanac.mars.distance_from_sun.raw == pytest.approx(almanac.mars.sun_distance, abs=1e-12)
+        # Conversions answer on ask, through WeeWX's unit machinery.
+        assert almanac.moon.distance.km.raw == pytest.approx(
+            almanac.moon.earth_distance * wxskyfield.KM_PER_AU, abs=1e-3)
+        assert almanac.mars.distance.mile.raw == pytest.approx(
+            almanac.mars.earth_distance * wxskyfield.KM_PER_AU / 1.609344, abs=1.0)
+        # The sun is zero AU from itself -- served honestly, not an error.
+        assert almanac.sun.distance_from_sun.raw == pytest.approx(0.0, abs=1e-9)
+
+    def test_illumination_value_helper(self, almanac):
+        """illumination is the ValueHelper twin of the raw phase percent
+        (and of the moon's moon_fullness alias), in group_percent.  mag
+        deliberately has no twin: a magnitude is unitless."""
+        assert almanac.moon.illumination.raw == pytest.approx(almanac.moon.phase, abs=1e-12)
+        assert almanac.moon.illumination.raw == pytest.approx(almanac.moon.moon_fullness, abs=1e-12)
+        assert almanac.venus.illumination.raw == pytest.approx(almanac.venus.phase, abs=1e-12)
+        assert almanac.sun.illumination.raw == 100.0
+        vt = almanac.moon.illumination.value_t
+        assert (vt.unit, vt.group) == ('percent', 'group_percent')
+        # A star has no illumination, like phase.
+        with pytest.raises(AttributeError):
+            almanac.rigel.illumination
+
+    def test_au_unit_registration(self):
+        """register_units runs at module import -- before any service, so
+        weewx-loopdata's field parsing can never beat it -- and wires the
+        AU group into every unit system."""
+        for group_dict in (weewx.units.USUnits, weewx.units.MetricUnits,
+                           weewx.units.MetricWXUnits):
+            assert group_dict['group_distance_astronomical'] == 'astronomical_unit'
+        assert weewx.units.default_unit_label_dict['astronomical_unit'] == ' AU'
+        assert weewx.units.default_unit_format_dict['astronomical_unit'] == '%.4f'
+        assert weewx.units.conversionDict['astronomical_unit']['km'](1.0) == pytest.approx(
+            wxskyfield.KM_PER_AU)
+        assert weewx.units.conversionDict['km']['astronomical_unit'](wxskyfield.KM_PER_AU) == pytest.approx(1.0)
+        assert weewx.units.conversionDict['astronomical_unit']['mile'](1.0) == pytest.approx(
+            wxskyfield.KM_PER_AU / 1.609344)
 
 
 class TestMoonPhase:
@@ -408,6 +484,100 @@ class TestMoonPhase:
         assert isinstance(almanac.moon_fullness, int)
         # The more precise binder value:
         assert almanac.moon.moon_fullness == pytest.approx(18.18, abs=0.1)
+
+
+class TestMoonApsides:
+    """Moon perigee/apogee times (new in 2.1) -- the supermoon machinery.
+    The extremum is searched on the GEOMETRIC center-to-center distance,
+    matching the published apsis tables; regression values verified
+    against Espenak's 2025 geometric tables (perigee 2025-06-23 04:44
+    UTC, apogee 2025-07-05 02:29 UTC, ...), all matched within a
+    minute."""
+
+    def test_apsis_times(self, almanac):
+        assert almanac.moon.next_perigee.raw == pytest.approx(1750653855, abs=60)
+        assert almanac.moon.previous_perigee.raw == pytest.approx(1748223227, abs=60)
+        assert almanac.moon.next_apogee.raw == pytest.approx(1751682527, abs=60)
+        assert almanac.moon.previous_apogee.raw == pytest.approx(1749293028, abs=60)
+
+    def test_apsis_ordering(self, almanac):
+        assert almanac.moon.previous_perigee.raw < TIME_TS < almanac.moon.next_perigee.raw
+        assert almanac.moon.previous_apogee.raw < TIME_TS < almanac.moon.next_apogee.raw
+        # Consecutive perigees are one anomalistic month (27.55 d) apart.
+        assert (almanac.moon.next_perigee.raw - almanac.moon.previous_perigee.raw
+                == pytest.approx(27.55 * 86400, abs=0.6 * 86400))
+
+    def test_next_supermoon(self, almanac):
+        """The engine's single copy of the supermoon rule: the next full
+        moon within a day of perigee.  From the June 2025 fixture the
+        June through October full moons all miss; the answer is the
+        Nov 5 full moon, 9.1 hours from perigee -- and it is the same
+        instant next_full_moon serves when time-traveled there."""
+        sm = almanac.next_supermoon.raw
+        assert sm == pytest.approx(1762348758, abs=60)
+        assert sm == pytest.approx(
+            almanac(almanac_time=sm - 86400).next_full_moon.raw, abs=60)
+        p = almanac(almanac_time=sm - 2 * 86400).moon.next_perigee.raw
+        assert abs(p - sm) <= wxskyfield.SUPERMOON_PERIGEE_GAP_S
+
+    def test_perigee_is_distance_minimum(self, almanac):
+        p = almanac.moon.next_perigee.raw
+        def distance(ts):
+            return almanac(almanac_time=ts).moon.distance.raw
+        assert distance(p) < distance(p - 3 * 86400)
+        assert distance(p) < distance(p + 3 * 86400)
+
+    def test_apsides_moon_only(self, almanac):
+        """No other served body orbits the observer: anything but the moon
+        raises a clean per-tag AttributeError (PyEphem has no apsides, so
+        the fallback cannot answer either)."""
+        with pytest.raises(AttributeError):
+            almanac.mars.next_perigee
+        with pytest.raises(AttributeError):
+            almanac.rigel.next_apogee
+
+    def test_apsis_at_ephemeris_edge(self, sky, almanac):
+        """Near the ephemeris edge the search window pokes past the span:
+        the tag serves an honest N/A, and the no-event outcome lands in
+        the event cache -- weewx-loopdata retries no-data event fields on
+        every loop packet, and each retry must hit the cache, not a fresh
+        extrema search."""
+        edge = almanac(almanac_time=sky.end_ts - 3 * 86400)
+        assert edge.moon.next_perigee.raw is None
+        assert str(edge.moon.next_perigee).strip() == 'N/A'
+        hit = wxskyfield._DAY_CACHE.get(('event', 'next_perigee'))
+        assert hit is not None and hit[2] is None
+
+
+class TestEarthApsides:
+    """Earth's own perihelion/aphelion, served as top-level tags -- the
+    same geometric-extremum machinery as the moon's apsides on the
+    earth-sun distance.  All four regression values match the published
+    USNO instants within a minute (2025 perihelion Jan 4 13:28 UT and
+    2024 aphelion Jul 5 05:06 UT to the exact minute)."""
+
+    def test_apsis_times(self, almanac):
+        assert almanac.next_perihelion.raw == pytest.approx(1767460538, abs=120)
+        assert almanac.previous_perihelion.raw == pytest.approx(1735997286, abs=120)
+        assert almanac.next_aphelion.raw == pytest.approx(1751572482, abs=120)
+        assert almanac.previous_aphelion.raw == pytest.approx(1720155962, abs=120)
+
+    def test_ordering_and_spacing(self, almanac):
+        assert almanac.previous_perihelion.raw < TIME_TS < almanac.next_perihelion.raw
+        assert almanac.previous_aphelion.raw < TIME_TS < almanac.next_aphelion.raw
+        # Consecutive perihelia average one anomalistic year apart, but
+        # individual spacings jitter by more than a day: the moon swings
+        # EARTH around the earth-moon barycenter, shifting each year's
+        # distance minimum (2025 -> 2026 is 364.16 days).
+        assert (almanac.next_perihelion.raw - almanac.previous_perihelion.raw
+                == pytest.approx(365.26 * 86400, abs=2.0 * 86400))
+
+    def test_perihelion_is_distance_minimum(self, almanac):
+        p = almanac.next_perihelion.raw
+        def distance(ts):
+            return almanac(almanac_time=ts).sun.earth_distance
+        assert distance(p) < distance(p - 10 * 86400)
+        assert distance(p) < distance(p + 10 * 86400)
 
 
 class TestVisible:
@@ -1082,6 +1252,18 @@ class TestStars:
         assert almanac.rigel.earth_distance / wxskyfield.AU_PER_LIGHT_YEAR == pytest.approx(773.0, abs=5.0)
         assert abs(almanac.rigel.sun_distance - almanac.rigel.earth_distance) <= 1.0
 
+    def test_star_distance_value_helpers(self, almanac):
+        """The distance twins serve stars with a parallax, like the raw
+        tags; a star whose catalog record has no measured parallax
+        (alula_australis, HIP 55203) has no known distance -- an empty
+        "N/A" ValueHelper, never the PyEphem fallback (whose star objects
+        have no such attribute)."""
+        assert almanac.rigel.distance.raw / wxskyfield.AU_PER_LIGHT_YEAR == pytest.approx(773.0, abs=5.0)
+        assert almanac.rigel.distance.raw == pytest.approx(almanac.rigel.earth_distance, abs=1e-6)
+        assert almanac.alula_australis.distance.raw is None
+        # The formatter's NONE string ("   N/A" in WeeWX's defaults).
+        assert str(almanac.alula_australis.distance).strip() == 'N/A'
+
     def test_proxima_centauri(self, almanac):
         """The one star beyond PyEphem's catalog: the nearest star, at 4.22
         light years (Hipparcos parallax 772.33 mas), mag 11.01."""
@@ -1556,6 +1738,358 @@ class TestSatelliteConfig:
             wxskyfield.tle_lines(read_tle(ISS_NORAD).splitlines()[1], ISS_NORAD)
 
 
+def read_comet_file() -> str:
+    """The archived CometEls.txt excerpt: 1P, 10P, 220P, C/1947 X1-B,
+    C/1995 O1 verbatim (captured 2026-08-08, epochs 20260808), plus one
+    FABRICATED always-bright comet, C/9999 Z9: the orbit of P/1999 XN120
+    (alt 72 degrees at TIME_TS from Palo Alto) with g forced to -9.0, so
+    its magnitude is naked-eye bright regardless of geometry -- the dome's
+    solid-marker state (geosat-90000 spirit)."""
+    with open(os.path.join(SAT_DATA_DIR, wxskyfield.COMET_FILE)) as f:
+        return f.read()
+
+
+class TestCometParsing:
+    """CometEls.txt row parsing, designation matching, and the [[Comets]]
+    config section."""
+
+    def test_designation_keys(self):
+        for readable, key in (
+                ('1P/Halley', '1P'),
+                ('12P/Pons-Brooks', '12P'),
+                ('220P/McNaught', '220P'),
+                ('73P-B/Schwassmann-Wachmann', '73P-B'),
+                ('C/1995 O1 (Hale-Bopp)', 'C/1995 O1'),
+                ('C/1947 X1-B (Southern comet)', 'C/1947 X1-B'),
+                ('C/2023 A3 (Tsuchinshan-ATLAS)', 'C/2023 A3')):
+            assert wxskyfield.comet_designation_key(readable) == key
+
+    def test_normalization_is_case_and_whitespace_only(self):
+        assert wxskyfield.normalize_comet_designation('  c/2023   a3 ') == 'C/2023 A3'
+        assert wxskyfield.normalize_comet_designation('12p') == '12P'
+
+    def test_parse_rows_from_archive(self):
+        rows = [wxskyfield.parse_comet_row(line)
+                for line in read_comet_file().splitlines()]
+        by_key = {row.designation_key: row for row in rows}
+        halley = by_key['1P']
+        assert halley.designation_full == '1P/Halley'
+        assert halley.e == pytest.approx(0.968018)
+        assert halley.q == pytest.approx(0.571147)
+        assert (halley.peri_year, halley.peri_month) == (2061, 8)
+        assert halley.g == pytest.approx(5.5)
+        assert halley.k == pytest.approx(3.2)
+        # The archive was captured 2026-08-08; every row carries that epoch.
+        assert halley.epoch_ts == pytest.approx(1786147200.0)  # 2026-08-08 UTC
+        assert 'C/1947 X1-B' in by_key          # the fragment survives intact
+        assert by_key['C/9999 Z9'].g == pytest.approx(-9.0)
+
+    def test_blank_magnitude_fields_parse_as_none(self):
+        line = read_comet_file().splitlines()[0]
+        blanked = line[:91] + '    ' + line[95:96] + '    ' + line[100:]
+        row = wxskyfield.parse_comet_row(blanked)
+        assert row.g is None and row.k is None
+
+    def test_malformed_row_raises(self):
+        with pytest.raises(ValueError):
+            wxskyfield.parse_comet_row('garbage')
+        line = read_comet_file().splitlines()[0]
+        with pytest.raises(ValueError):
+            wxskyfield.parse_comet_row(line[:30] + 'x.xxxxxxx' + line[39:])
+
+    def test_parse_comets(self):
+        parsed = wxskyfield.parse_comets(
+            {'Comets': {'Halley': '1p', 'hale_bopp': 'C/1995  O1'}}, {})
+        assert parsed == {'halley': '1P', 'hale_bopp': 'C/1995 O1'}
+
+    def test_parse_comets_refuses_shadowing_names(self, caplog):
+        """A name that is already an almanac tag -- including a configured
+        satellite, which dispatches first -- would silently shadow the
+        comet, so it is refused loudly."""
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            parsed = wxskyfield.parse_comets(
+                {'Comets': {'mars': '1P', 'rigel': '2P', 'hip_87937': '3P',
+                            'sat_25544': '4P', 'sun': '5P', 'earth': '6P',
+                            'iss': '7P', 'halley': '1P', 'empty': '  '}},
+                {'iss': ISS_NORAD})
+        assert parsed == {'halley': '1P'}
+        assert caplog.text.count('already an almanac tag') == 7
+        assert 'empty' in caplog.text
+
+    def test_missing_section_means_no_comets(self):
+        assert wxskyfield.parse_comets({}, {}) == {}
+        assert wxskyfield.parse_comets({'Comets': {}}, {}) == {}
+
+
+COMETS = {'halley': '1P', 'hale_bopp': 'C/1995 O1', 'bright': 'C/9999 Z9',
+          'mcnaught': '220P'}
+
+
+@pytest.fixture(scope='module')
+def comet_sky():
+    s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                       comets=dict(COMETS), comet_dir=SAT_DATA_DIR)
+    assert s.is_valid()
+    return s
+
+
+class TestCometElements:
+    """Sky's comet element loading: lazy, mtime-invalidated, the honest
+    no-elements states, and the Horizons-pinned Kepler path."""
+
+    COMETS = COMETS
+
+    def make_sky(self, comet_dir, comets=None):
+        return wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                              comets=dict(comets or self.COMETS),
+                              comet_dir=str(comet_dir))
+
+    def test_elements_for_halley(self, comet_sky):
+        elements = comet_sky.comet_elements('halley')
+        assert elements is not None
+        vector, row, mtime = elements
+        assert row.designation_full == '1P/Halley'
+        assert mtime == os.stat(comet_sky.comet_path()).st_mtime
+        # The vector is memoized per designation until the file changes.
+        again = comet_sky.comet_elements('halley')
+        assert again is not None and again[0] is vector
+
+    def test_horizons_pin(self, comet_sky):
+        """Topocentric place of 1P and Hale-Bopp at TIME_TS from Palo Alto
+        against JPL Horizons (queried 2026-08-08; elements epoch 20260808,
+        so TIME_TS is 14 months of two-body propagation).  This is the
+        regression pin for skyfield's PRIVATE _KeplerOrbit._from_periapsis:
+        if a Skyfield upgrade moves or changes it, this fails loudly."""
+        t = comet_sky.ts.utc(2025, 6, 21, 19)     # TIME_TS
+        observer = comet_sky.earth + skyfield.api.wgs84.latlon(
+            LATITUDE, LONGITUDE, elevation_m=ALTITUDE_M)
+        pins = {
+            # name: (astro RA deg, astro dec deg, az deg, alt deg, delta AU, r AU)
+            'halley':    (123.15625, 3.52749, 113.785, 32.803, 35.9078, 35.1064),
+            'hale_bopp': (346.47053, -84.88071, 186.567, -36.882, 49.2601, 49.6911),
+        }
+        for name, (p_ra, p_dec, p_az, p_alt, p_delta, p_r) in pins.items():
+            elements = comet_sky.comet_elements(name)
+            assert elements is not None
+            vector = elements[0]
+            ra, dec, _ = comet_sky.earth.at(t).observe(vector).radec()
+            assert ra._degrees == pytest.approx(p_ra, abs=0.05)
+            assert dec.degrees == pytest.approx(p_dec, abs=0.05)
+            alt, az, delta = observer.at(t).observe(vector).apparent().altaz()
+            assert az.degrees == pytest.approx(p_az, abs=0.05)
+            assert alt.degrees == pytest.approx(p_alt, abs=0.05)
+            assert delta.au == pytest.approx(p_delta, abs=0.01)
+            _, _, r = comet_sky.sun.at(t).observe(vector).radec()
+            assert r.au == pytest.approx(p_r, abs=0.01)
+
+    def test_mtime_change_reparses(self, tmp_path):
+        shutil.copy(os.path.join(SAT_DATA_DIR, wxskyfield.COMET_FILE),
+                    str(tmp_path / wxskyfield.COMET_FILE))
+        s = self.make_sky(tmp_path)
+        elements = s.comet_elements('halley')
+        assert elements is not None
+        old_q = elements[1].q
+        lines = read_comet_file().splitlines(keepends=True)
+        lines[0] = lines[0][:30] + ' 1.571147' + lines[0][39:]
+        with open(str(tmp_path / wxskyfield.COMET_FILE), 'w') as f:
+            f.writelines(lines)
+        os.utime(str(tmp_path / wxskyfield.COMET_FILE),
+                 (time.time() + 10, time.time() + 10))
+        refreshed = s.comet_elements('halley')
+        assert refreshed is not None
+        assert refreshed[1].q == pytest.approx(1.571147)
+        assert refreshed[1].q != pytest.approx(old_q)
+
+    def test_vanishing_row_serves_none(self, tmp_path):
+        lines = [line for line in read_comet_file().splitlines(keepends=True)
+                 if not line[102:158].startswith('1P/')]
+        with open(str(tmp_path / wxskyfield.COMET_FILE), 'w') as f:
+            f.writelines(lines)
+        s = self.make_sky(tmp_path)
+        assert s.comet_elements('halley') is None
+        assert s.comet_elements('hale_bopp') is not None
+
+    def test_malformed_row_disables_only_itself(self, tmp_path, caplog):
+        lines = read_comet_file().splitlines(keepends=True)
+        lines[0] = lines[0][:30] + 'x.xxxxxxx' + lines[0][39:]
+        with open(str(tmp_path / wxskyfield.COMET_FILE), 'w') as f:
+            f.writelines(lines)
+        s = self.make_sky(tmp_path)
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            assert s.comet_elements('halley') is None
+            assert s.comet_elements('hale_bopp') is not None
+        assert '1P' in caplog.text
+
+    def test_missing_file_serves_none(self, tmp_path):
+        s = self.make_sky(tmp_path)
+        assert s.comet_elements('halley') is None
+        assert s.comet_elements('unconfigured') is None
+
+    def test_note_comet_usable_once_per_crossing(self, tmp_path, caplog):
+        s = self.make_sky(tmp_path)
+        with caplog.at_level(logging.INFO, logger=wxskyfield.log.name):
+            s.note_comet_usable('halley', False)
+            s.note_comet_usable('halley', False)
+            s.note_comet_usable('halley', True)
+        assert caplog.text.count('will report N/A') == 1
+        assert 'halley (1P)' in caplog.text
+        assert caplog.text.count('has elements again') == 1
+
+
+# Every attribute of the comet tag surface, with the value shape the
+# no-elements state must serve for it: 'time'/'vh' -> empty ValueHelper
+# (raw None), 'none' -> plain None, 'zero' -> 0.0.
+COMET_SURFACE_SHAPES = [
+    ('rise', 'time'), ('set', 'time'), ('transit', 'time'),
+    ('next_rising', 'time'), ('next_setting', 'time'),
+    ('previous_rising', 'time'), ('previous_setting', 'time'),
+    ('next_transit', 'time'), ('previous_transit', 'time'),
+    ('next_antitransit', 'time'), ('previous_antitransit', 'time'),
+    ('perihelion', 'time'),
+    ('azimuth', 'vh'), ('altitude', 'vh'), ('topo_ra', 'vh'), ('topo_dec', 'vh'),
+    ('astro_ra', 'vh'), ('astro_dec', 'vh'), ('geo_ra', 'vh'), ('geo_dec', 'vh'),
+    ('hour_angle', 'vh'), ('hlongitude', 'vh'), ('hlatitude', 'vh'),
+    ('elongation', 'vh'), ('illumination', 'vh'),
+    ('distance', 'vh'), ('distance_from_sun', 'vh'), ('visible', 'vh'),
+    ('elements_epoch', 'vh'), ('elements_age', 'vh'),
+    ('az', 'none'), ('alt', 'none'), ('ra', 'none'), ('dec', 'none'),
+    ('a_ra', 'none'), ('a_dec', 'none'), ('g_ra', 'none'), ('g_dec', 'none'),
+    ('ha', 'none'), ('hlong', 'none'), ('hlat', 'none'), ('hlon', 'none'),
+    ('elong', 'none'), ('mag', 'none'), ('phase', 'none'), ('moon_phase', 'none'),
+    ('earth_distance', 'none'), ('sun_distance', 'none'),
+    ('circumpolar', 'none'), ('neverup', 'none'),
+    ('constellation', 'none'), ('constellation_abbr', 'none'),
+    ('size', 'zero'), ('radius', 'zero'),
+]
+
+
+class TestCometBinder:
+    """The comet tag surface: the normal orb path on a sun+Kepler-orbit
+    vector, pinned at TIME_TS; the honest no-elements state; the cache
+    pin; and the no-PyEphem fence."""
+
+    def test_halley_at_time_ts(self, almanac):
+        """Pinned against the live evaluation verified against JPL
+        Horizons (see TestCometElements.test_horizons_pin): Halley near
+        aphelion, 35.9 AU out in Hydra, telescope-faint."""
+        h = almanac.halley
+        assert h.alt == pytest.approx(32.829, abs=0.05)
+        assert h.az == pytest.approx(113.786, abs=0.05)
+        assert h.a_ra == pytest.approx(123.155, abs=0.05)
+        assert h.a_dec == pytest.approx(3.528, abs=0.05)
+        assert h.mag == pytest.approx(25.64, abs=0.05)
+        assert h.earth_distance == pytest.approx(35.9066, abs=0.01)
+        assert h.sun_distance == pytest.approx(35.1052, abs=0.01)
+        assert h.distance.raw == pytest.approx(h.earth_distance, abs=1e-9)
+        assert h.distance_from_sun.raw == pytest.approx(h.sun_distance, abs=1e-9)
+        assert h.elong == pytest.approx(37.44, abs=0.05)
+        assert h.phase == pytest.approx(99.99, abs=0.05)
+        assert str(h.constellation) == 'Hydra'
+        assert not h.circumpolar and not h.neverup
+        assert h.rise.raw == pytest.approx(1750522117, abs=60)
+        assert h.visible.raw == pytest.approx(44695, abs=60)
+        assert h.size == 0.0 and h.radius_size.raw == 0.0
+        assert h.label == 'Halley'
+        # elements_epoch is the archive's capture date (2026-08-08), in the
+        # almanac's FUTURE at TIME_TS: the age diagnostic is honestly
+        # negative, not clamped.
+        assert almanac.halley.elements_epoch.raw == pytest.approx(1786147200, abs=86400)
+        assert almanac.halley.elements_age.raw < 0
+
+    def test_fabricated_bright_comet(self, almanac):
+        assert almanac.bright.alt == pytest.approx(72.4, abs=0.1)
+        assert almanac.bright.mag == pytest.approx(-3.21, abs=0.05)
+
+    def test_perihelion(self, almanac):
+        """The time of perihelion passage straight from the MPC row -- a
+        TT date; future for Halley (2061), past for Hale-Bopp (1997),
+        under a year ahead for 220P (2026-06-14): the countdown chip's
+        three cases."""
+        assert almanac.halley.perihelion.raw == pytest.approx(2890316269, abs=60)
+        assert almanac.hale_bopp.perihelion.raw == pytest.approx(859596458, abs=60)
+        assert almanac.mcnaught.perihelion.raw == pytest.approx(1781405334, abs=60)
+
+    def test_separation_with_comet(self, almanac):
+        sep = almanac.separation(almanac.halley, almanac.mars)
+        assert float(sep) == pytest.approx(0.5612, abs=0.001)
+
+    @pytest.mark.parametrize('attr,shape', COMET_SURFACE_SHAPES)
+    def test_no_elements_serves_na(self, tmp_path, attr, shape):
+        """A configured comet with no elements (missing file here; a
+        vanished designation is the same state) serves the honest N/A
+        shape for the ENTIRE surface -- never a wrong number, never a
+        per-tag error."""
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            value = getattr(alm.halley, attr)
+            if shape in ('time', 'vh'):
+                assert value.raw is None
+                assert str(value).strip() in ('N/A', '')
+            elif shape == 'none':
+                assert value is None
+            else:
+                assert value == 0.0
+
+    def test_no_elements_visible_change(self, tmp_path):
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.halley.visible_change().raw is None
+
+    def test_element_refresh_invalidates_caches(self, tmp_path):
+        """_DAY_CACHE survives across report cycles, and its keys once
+        carried only the body NAME: a CometEls refresh would keep serving
+        the old elements' rise time until the day rolled.  cache_name
+        folds the file mtime in, so a refresh moves the answer at once."""
+        shutil.copy(os.path.join(SAT_DATA_DIR, wxskyfield.COMET_FILE),
+                    str(tmp_path / wxskyfield.COMET_FILE))
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            first = alm.halley.rise.raw
+            assert first is not None
+            # Swing the ascending node 90 degrees: a different place in
+            # the sky, a different rise time.
+            lines = read_comet_file().splitlines(keepends=True)
+            assert lines[0][102:158].startswith('1P/')
+            lines[0] = lines[0][:61] + '149.3098' + lines[0][69:]
+            with open(str(tmp_path / wxskyfield.COMET_FILE), 'w') as f:
+                f.writelines(lines)
+            os.utime(str(tmp_path / wxskyfield.COMET_FILE),
+                     (time.time() + 10, time.time() + 10))
+            second = alm.halley.rise.raw
+            assert second is not None
+            assert abs(second - first) > 60
+
+    def test_pyephem_never_serves_a_comet(self, almanac):
+        """The fence: attributes outside the comet surface raise a clean
+        per-tag AttributeError even with PyEphem installed -- PyEphem has
+        no comets, and a silent fall-through would answer with garbage
+        (or another body entirely)."""
+        for attr in ('next_pass', 'next_visible_pass', 'sunlit',
+                     'moon_fullness', 'a_epoch', 'libration_lat'):
+            with pytest.raises(AttributeError):
+                getattr(almanac.halley, attr)
+
+    def test_comet_surface_whole_without_pyephem(self, skyfield_only_almanac):
+        assert skyfield_only_almanac.halley.mag == pytest.approx(25.64, abs=0.05)
+        with pytest.raises(AttributeError):
+            skyfield_only_almanac.halley.next_pass
+
+
 class FakeResponse:
     def __init__(self, payload: bytes):
         self._payload = payload
@@ -1638,6 +2172,58 @@ class TestSatelliteFetcher:
                                 lambda request, timeout=None, p=payload: FakeResponse(p))
             with pytest.raises(ValueError):
                 wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
+            with open(path) as f:
+                assert f.read() == old
+            assert not os.path.exists(path + '.tmp')
+
+    def test_comet_fetch_writes_validated_payload(self, tmp_path, monkeypatch):
+        payload = read_comet_file()
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen['url'] = request.full_url
+            seen['ua'] = request.get_header('User-agent')
+            return FakeResponse(payload.encode('ascii'))
+
+        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        path = str(tmp_path / wxskyfield.COMET_FILE)
+        wxskyfield.fetch_comet_elements(path)
+        with open(path) as f:
+            assert f.read() == payload
+        assert not os.path.exists(path + '.tmp')
+        assert seen['url'] == wxskyfield.COMET_URL
+        assert seen['ua'] == wxskyfield.SAT_USER_AGENT
+
+    def test_comet_fetch_failure_keeps_old_file(self, tmp_path, monkeypatch):
+        old = read_comet_file()
+        path = str(tmp_path / wxskyfield.COMET_FILE)
+        with open(path, 'w') as f:
+            f.write(old)
+
+        def fake_urlopen(request, timeout=None):
+            raise OSError('network unreachable')
+
+        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        with pytest.raises(OSError):
+            wxskyfield.fetch_comet_elements(path)
+        with open(path) as f:
+            assert f.read() == old
+        assert not os.path.exists(path + '.tmp')
+
+    def test_comet_fetch_corrupt_payload_keeps_old_file(self, tmp_path, monkeypatch):
+        """Validated BEFORE the write: an HTML error page or empty answer
+        must never replace a working CometEls file.  The validation asks
+        only for one parseable row anywhere -- never the configured
+        designations: a vanishing row is a tag-time concern."""
+        old = read_comet_file()
+        path = str(tmp_path / wxskyfield.COMET_FILE)
+        with open(path, 'w') as f:
+            f.write(old)
+        for payload in (b'<html><body>503</body></html>', b''):
+            monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen',
+                                lambda request, timeout=None, p=payload: FakeResponse(p))
+            with pytest.raises(ValueError):
+                wxskyfield.fetch_comet_elements(path)
             with open(path) as f:
                 assert f.read() == old
             assert not os.path.exists(path + '.tmp')
@@ -1756,6 +2342,167 @@ class TestSatelliteFetcher:
                             lambda norad, p: pytest.fail('fetched fresh elements'))
         service.refresh_satellite_elements(None)
         assert service._sat_thread is None
+
+
+class TestMeteorShowers:
+    """The IMO major-shower table, the solar-longitude peak solver, and
+    the two tags.  Peaks are COMPUTED from the sun's apparent ecliptic
+    longitude of date, so the pins are ephemeris facts, not calendar
+    lookups."""
+
+    def test_solar_longitude_anchor(self, almanac):
+        """lambda = 180 must land on skyfield's own September equinox to
+        the second: the solver speaks equinox-of-date solar longitude,
+        the convention meteor astronomy states peaks in."""
+        atype = weewx.almanac.almanacs[0]
+        eq = almanac.next_equinox.raw
+        lam = atype.find_sun_longitude(180.0, eq - 5 * 86400, eq + 5 * 86400)
+        assert lam == pytest.approx(eq, abs=1.0)
+
+    def test_next_at_fixture(self, almanac):
+        s = almanac.next_meteor_shower
+        assert s.name == 'Southern Delta Aquariids'
+        assert s.key == 'delta_aquariids'
+        # lambda 126.9 in 2025: July 29, 18:44 UT.
+        assert s.peak.raw == pytest.approx(1753814687, abs=120)
+        assert s.zhr == 25 and s.parent == '96P/Machholz'
+        assert isinstance(s.radiant_alt, float) and isinstance(s.radiant_az, float)
+        # No [[MeteorShowers]] table on this almanac: label falls back
+        # to the stable English name.
+        assert s.label == 'Southern Delta Aquariids'
+
+    def test_perseids_peak(self, almanac):
+        """lambda 140.0 in 2025 lands August 12, 11:01 UT -- the
+        ephemeris truth of the IMO anchor."""
+        aug = almanac(almanac_time=1754980000)      # 2025-08-11 22:06 PDT
+        s = aug.next_meteor_shower
+        assert s.name == 'Perseids'
+        assert s.key == 'perseids'
+        assert s.peak.raw == pytest.approx(1754996504, abs=120)
+        assert s.zhr == 100 and s.parent == '109P/Swift-Tuttle'
+
+    def test_active_showers(self, almanac):
+        # June 21 (lambda ~90): quiet -- no major shower is active.
+        assert almanac.active_meteor_showers == ()
+        # Perseids week: the Perseids and the Southern Delta Aquariids
+        # are both active, each carrying its own apparition's peak (the
+        # Aquariids' already two weeks past -- still active, honestly).
+        aug = almanac(almanac_time=1754980000)
+        showers = {s.name: s for s in aug.active_meteor_showers}
+        assert 'Perseids' in showers and 'Southern Delta Aquariids' in showers
+        assert showers['Southern Delta Aquariids'].peak.raw < 1754980000
+        for s in showers.values():
+            assert s.peak.raw is not None
+
+    def test_table_is_sane(self):
+        """Twelve majors; every activity window holds its peak, nothing
+        spans the March-equinox wrap, keys are unique and tag-safe."""
+        assert len(wxskyfield.METEOR_SHOWERS) == 12
+        keys = [s.key for s in wxskyfield.METEOR_SHOWERS]
+        assert len(set(keys)) == 12
+        for s in wxskyfield.METEOR_SHOWERS:
+            assert s.start_lambda < s.peak_lambda < s.end_lambda
+            assert 0.0 <= s.start_lambda and s.end_lambda <= 360.0
+            assert 0 < s.zhr <= 200 and s.parent
+
+
+class TestCometFetcher:
+    """The comet element fetch scheduling: one file, scalar backoff, the
+    same STARTUP + NEW_ARCHIVE_RECORD shape as the satellite refresher.
+    Never touches the network."""
+
+    def make_service(self, tmp_path, **skyfield_options):
+        options = dict(Satellites={}, Comets={'halley': '1P'})
+        options.update(skyfield_options)
+        config = make_config(**options)
+        config['DatabaseTypes'] = {'SQLite': {'SQLITE_ROOT': str(tmp_path)}}
+        with saved_almanacs():
+            engine = StubEngine()
+            service = wxskyfield.WxSkyfield(engine, config)
+        return engine, service
+
+    def test_service_binds_startup_and_archive_events(self, tmp_path):
+        engine, service = self.make_service(tmp_path)
+        assert engine.bound == [weewx.STARTUP, weewx.NEW_ARCHIVE_RECORD]
+        assert service.sky.comets == {'halley': '1P'}
+
+    def test_downloads_off_binds_nothing(self, tmp_path):
+        """comet_downloads = false is user-maintained-file mode: the tags
+        still serve whatever CometEls file sits in the cache directory;
+        the service just never fetches."""
+        engine, service = self.make_service(tmp_path, comet_downloads='false')
+        assert engine.bound == []
+        assert service.sky.comets == {'halley': '1P'}
+
+    def test_no_comets_binds_nothing(self, tmp_path):
+        engine, _service = self.make_service(tmp_path, Comets={})
+        assert engine.bound == []
+
+    def test_comets_and_satellites_bind_independently(self, tmp_path):
+        engine, _service = self.make_service(
+            tmp_path, Satellites={'iss': str(ISS_NORAD)})
+        assert engine.bound == [weewx.STARTUP, weewx.NEW_ARCHIVE_RECORD] * 2
+
+    def test_comet_stale_age_driven(self, tmp_path):
+        _engine, service = self.make_service(tmp_path)
+        now = time.time()
+        assert service.comet_stale(now)          # no file: maximally stale
+        assert service.sky.comet_dir is not None
+        os.makedirs(service.sky.comet_dir, exist_ok=True)
+        path = service.sky.comet_path()
+        with open(path, 'w') as f:
+            f.write(read_comet_file())
+        os.utime(path, (now, now))
+        assert not service.comet_stale(now)
+        os.utime(path, (now - wxskyfield.COMET_REFRESH_SECS - 1,
+                        now - wxskyfield.COMET_REFRESH_SECS - 1))
+        assert service.comet_stale(now)
+        # Inside the failure backoff window: never due.
+        service._comet_retry_ts = now + 60
+        assert not service.comet_stale(now)
+
+    def test_comet_backoff_doubles_and_caps(self, tmp_path, monkeypatch):
+        _engine, service = self.make_service(tmp_path)
+
+        def failing(path):
+            raise OSError('offline')
+
+        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', failing)
+        delays = []
+        for _ in range(12):
+            before = time.time()
+            service._comet_fetch_worker()
+            delays.append(service._comet_retry_ts - before)
+        assert delays[0] == pytest.approx(wxskyfield.COMET_RETRY_BASE_SECS, abs=5)
+        assert delays[1] == pytest.approx(2 * wxskyfield.COMET_RETRY_BASE_SECS, abs=5)
+        assert max(delays) <= wxskyfield.COMET_REFRESH_SECS + 5
+        assert delays[-1] == pytest.approx(wxskyfield.COMET_REFRESH_SECS, abs=5)
+
+        def succeeding(path):
+            with open(path, 'w') as f:
+                f.write(read_comet_file())
+
+        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', succeeding)
+        service._comet_fetch_worker()
+        assert service._comet_retry_ts == 0.0
+        assert os.path.exists(service.sky.comet_path())
+
+    def test_refresh_fetches_on_worker_thread(self, tmp_path, monkeypatch):
+        _engine, service = self.make_service(tmp_path)
+        fetched = []
+        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements',
+                            lambda path: fetched.append(path))
+        service.refresh_comet_elements(None)
+        assert service._comet_thread is not None
+        service._comet_thread.join(10)
+        assert fetched == [service.sky.comet_path()]
+        # A fresh file is not refetched.
+        with open(service.sky.comet_path(), 'w') as f:
+            f.write(read_comet_file())
+        service.refresh_comet_elements(None)
+        if service._comet_thread is not None:
+            service._comet_thread.join(10)
+        assert fetched == [service.sky.comet_path()]
 
 
 class TestSatellitePositions:
@@ -2137,6 +2884,19 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac(pressure=0, horizon=-34.0/60.0).sun.previous_rising",
     "almanac.moon.next_setting", "almanac.sun.next_antitransit",
     "almanac.mars.sun_distance", "almanac.mars.earth_distance",
+    "almanac.mars.distance", "almanac.mars.distance_from_sun",
+    "almanac.moon.distance.km",
+    "almanac.moon.next_perigee", "almanac.moon.previous_perigee",
+    "almanac.moon.next_apogee", "almanac.moon.previous_apogee",
+    "almanac.next_supermoon",
+    "almanac.next_perihelion", "almanac.previous_perihelion",
+    "almanac.next_aphelion", "almanac.previous_aphelion",
+    "almanac.solar_time", "almanac.solar_angle", "almanac.equation_of_time",
+    "almanac.next_meteor_shower.name", "almanac.next_meteor_shower.label",
+    "almanac.next_meteor_shower.peak", "almanac.next_meteor_shower.zhr",
+    "almanac.next_meteor_shower.parent", "almanac.next_meteor_shower.radiant_ra",
+    "almanac.next_meteor_shower.radiant_alt", "almanac.next_meteor_shower.radiant_az",
+    "almanac.active_meteor_showers",
     "almanac.moon.libration_lat", "almanac.moon.libration_long", "almanac.moon.colong",
     "almanac.jupiter.cmlI", "almanac.jupiter.cmlII",
     "almanac.saturn.earth_tilt", "almanac.saturn.sun_tilt",
@@ -2146,6 +2906,7 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.jupiter.mag", "almanac.saturn.mag", "almanac.uranus.mag",
     "almanac.neptune.mag", "almanac.sun.mag", "almanac.moon.mag", "almanac.pluto.mag",
     "almanac.venus.phase", "almanac.mars.phase",
+    "almanac.moon.illumination", "almanac.venus.illumination", "almanac.sun.illumination",
     "almanac.sun.size", "almanac.moon.size", "almanac.moon.radius", "almanac.moon.radius_size",
     "almanac.sun.circumpolar", "almanac.sun.neverup",
     "almanac.venus.parallactic_angle()", "almanac.venus.parallactic_angle",
@@ -2189,6 +2950,23 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.sat_25544.alt", "almanac.iss.name", "almanac.iss.label",
     "almanac.tiangong.next_pass.rise",
     "almanac.separation(almanac.iss, almanac.mars)",
+    # Comets are Skyfield-native too: the built-in almanac never served
+    # them, so the whole surface must be whole without PyEphem.
+    "almanac.halley.rise", "almanac.halley.set", "almanac.halley.transit",
+    "almanac.halley.az", "almanac.halley.alt", "almanac.halley.ra", "almanac.halley.dec",
+    "almanac.halley.azimuth", "almanac.halley.altitude",
+    "almanac.halley.next_rising", "almanac.halley.previous_setting",
+    "almanac.halley.mag", "almanac.halley.earth_distance", "almanac.halley.sun_distance",
+    "almanac.halley.distance", "almanac.halley.distance_from_sun",
+    "almanac.halley.elong", "almanac.halley.elongation",
+    "almanac.halley.visible", "almanac.halley.phase", "almanac.halley.illumination",
+    "almanac.halley.circumpolar", "almanac.halley.neverup",
+    "almanac.halley.constellation", "almanac.halley.constellation.label",
+    "almanac.halley.elements_epoch", "almanac.halley.elements_age",
+    "almanac.halley.perihelion",
+    "almanac.halley.name", "almanac.halley.label",
+    "almanac.hale_bopp.a_ra", "almanac.bright.mag",
+    "almanac.separation(almanac.halley, almanac.mars)",
 ]
 
 SKYFIELD_ONLY_STAR_EXPRESSIONS = [
@@ -2198,6 +2976,7 @@ SKYFIELD_ONLY_STAR_EXPRESSIONS = [
     "almanac.polaris.circumpolar", "almanac.sirius.azimuth",
     "almanac.vega.next_rising", "almanac.rigel.visible",
     "almanac.rigel.earth_distance", "almanac.rigel.sun_distance",
+    "almanac.rigel.distance", "almanac.rigel.distance_from_sun",
     "almanac.proxima_centauri.earth_distance", "almanac.barnards_star.mag",
     "almanac.hip_32349.mag",
     "almanac.rigel.constellation", "almanac.rigel.constellation_abbr",

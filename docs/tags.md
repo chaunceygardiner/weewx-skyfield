@@ -23,17 +23,61 @@ The Skyfield almanac natively computes, for the sun, the moon and all planets (p
   `$almanac(horizon=-6).sun(use_center=1).rise`);
 - azimuth/altitude, right ascension/declination (topocentric, astrometric and geocentric) and
   the hour angle;
-- heliocentric longitude/latitude, elongation, earth and sun distance;
+- heliocentric longitude/latitude, elongation, earth and sun distance (with unit-aware
+  `distance`/`distance_from_sun` twins, new in 2.1 — below);
 - visible time and its day-over-day change;
-- magnitude (`$almanac.venus.mag`), percent illuminated (`$almanac.venus.phase`, plus the
-  moon's PyEphem-style 0–1 fraction, `$almanac.moon.moon_phase`), and apparent
+- magnitude (`$almanac.venus.mag`), percent illuminated (`$almanac.venus.phase`, with its
+  unit-aware twin `illumination` new in 2.1, plus the moon's PyEphem-style 0–1 fraction,
+  `$almanac.moon.moon_phase`), and apparent
   angular size (`$almanac.sun.size`, `$almanac.moon.radius_size`);
-- `circumpolar`/`neverup`, parallactic angle and sidereal time;
+- `circumpolar`/`neverup`, parallactic angle, sidereal time and (new in 2.1) solar time and
+  the equation of time;
 - the moon's libration, selenographic colongitude and subsolar latitude, Jupiter's central
   meridian longitudes and Saturn's ring tilt;
-- equinoxes, solstices, moon phases and the moon index.
+- equinoxes, solstices, moon phases and the moon index;
+- the moon's perigee and apogee times (`$almanac.moon.next_perigee`, `previous_perigee`,
+  `next_apogee`, `previous_apogee` — new in 2.1, see below).
 
 PyEphem is *not* required for any of these, nor for any tag used by WeeWX's standard skins.
+
+New in 2.1, the distances have unit-aware twins: `$almanac.mars.distance` (from Earth —
+mirroring the satellites, whose `.distance` is likewise the distance from the observer) and
+`$almanac.mars.distance_from_sun` serve the same values as the raw AU floats
+`earth_distance`/`sun_distance`, as ValueHelpers — "1.8588 AU" by default in every unit
+system, converting on ask (`$almanac.moon.distance.km`, `$almanac.mars.distance.mile`).
+The unit registers with WeeWX as `astronomical_unit` in its own group,
+`group_distance_astronomical`, so a skin can restyle the whole family: a `[Units]`
+`[[Groups]]` entry `group_distance_astronomical = km` reports kilometers everywhere, and
+`[[StringFormats]]`/`[[Labels]]` entries for `astronomical_unit` adjust the precision
+(default `%.4f`) and label (default ` AU`).
+
+Also new in 2.1, the moon serves its apsides: `$almanac.moon.next_perigee`,
+`previous_perigee`, `next_apogee` and `previous_apogee` are the times of the moon's closest
+and farthest approach — the supermoon machinery.  The extremum is searched on the geometric
+center-to-center distance, the definition the published apsis tables (Meeus; Espenak) use,
+reproducing them to the minute; the results are cached like the almanac's other event tags,
+and near the edges of the ephemeris span the tags report an honest "N/A".  A supermoon's
+headline number is then one time-travel away —
+`$almanac(almanac_time=$almanac.moon.next_perigee.raw).moon.distance.km` is the perigee
+distance.  Moon only: no other served body orbits the observer, so any other body reports a
+clean per-tag error — though Earth itself gets the same treatment around the sun:
+`$almanac.next_perihelion` and `$almanac.next_aphelion` (with `previous_` twins) are
+top-level tags for Earth's closest and farthest approach — early January and early July,
+matching the published instants within a minute.  (No namespace clash with a comet's
+per-body `.perihelion`.)  As loopdata fields they event-tier by their `next_` names.  And
+the supermoon rule itself is a tag: `$almanac.next_supermoon` is
+the instant of the next full moon falling within a day of perigee — the engine's single
+copy of the definition (searched forward full moon by full moon, one or two qualify per
+year), so the Sky page's callout and any live page read it instead of re-deriving it.  As
+a loopdata field it event-tiers by its `next_` name.
+
+And 2.1 rounds out the clock tags: `$almanac.solar_time` is the local apparent solar time —
+what a sundial reads — as an angle in decimal degrees like `sidereal_time` (180° is solar
+noon), `$almanac.solar_angle` its unit-aware twin, and `$almanac.equation_of_time` the
+equation of time as a signed duration ValueHelper: apparent minus mean solar time, positive
+when the sundial runs ahead of the clock — about +16 minutes in early November, −14 in
+mid-February (see [Differences from PyEphem](#differences-from-pyephem) for the sign
+convention).
 
 There is no `$almanac.earth`: Earth is the observer, not a served body (PyEphem, which this
 almanac replaces, has no Earth body either).  Earth's heliocentric coordinates are available
@@ -120,7 +164,9 @@ parallaxes and magnitudes of all 118,218 stars are available with nothing to dow
 
 Unlike PyEphem, `earth_distance` and `sun_distance` work for stars (in astronomical units,
 like the planets — e.g., `$almanac.proxima_centauri.earth_distance`), computed from the star's
-Hipparcos parallax.
+Hipparcos parallax.  The unit-aware twins serve stars too — `$almanac.rigel.distance` — and a
+star whose catalog record has no measured parallax has no known distance: its twins report
+"N/A" rather than a fictitious number.
 
 ## Satellites
 
@@ -169,6 +215,70 @@ almanac fields like any others — `almanac.iss.next_pass.rise` included.  Use l
 later: earlier versions could cache a temporarily-unavailable satellite field's "N/A" until
 the day rolled over, instead of recovering the moment fresh elements arrive.
 
+## Comets
+
+New in 2.1, the almanac serves comets.  The `[Skyfield]` `[[Comets]]` section of
+`weewx.conf` maps tag names to Minor Planet Center designations — the installer writes
+`halley = 1P` and `hale_bopp = C/1995 O1` — and each entry serves the almanac's full
+planet-style surface: rise, set
+and transit (with the whole `next_`/`previous_` family), altitude/azimuth, right
+ascension/declination in every flavor, `distance` and `distance_from_sun` (the raw AU
+floats `earth_distance`/`sun_distance` included), elongation, `visible`, `illumination`,
+the constellation it stands in, and `mag` — plus one tag of the comet's own:
+`$almanac.halley.perihelion`, the time of perihelion passage straight from the MPC
+elements.  It can lie in the past (Hale-Bopp's says 1997) — the current orbit solution's
+perihelion is simply a fact — so consumers judge upcoming-ness themselves; the Sky page's
+countdown chip shows it only when it lies ahead within a year.  How the one CometEls.txt
+element file is fetched and kept fresh, the `comet_downloads` switch, and the air-gapped
+alternative are on the [installation page](installation.md#comets).
+
+The friendly name is yours to choose — the tag, the dome label and `.label` ride it, and
+`[Almanac]` entries rename it per language, exactly like a satellite's.  The value is the
+comet's designation as the MPC's file prints it — `12P`, `220P`, `C/2023 A3`, a fragment
+named explicitly as `C/1947 X1-B` — matched after case and whitespace normalization only,
+never by fuzzy name.  There is deliberately no pass machinery: a comet rises and sets
+daily like a planet, so `next_pass` reports a per-tag error exactly as it does for Mars.
+Comet tags never fall through to PyEphem (which has no comets): anything outside the comet
+surface is a clean per-tag error, the satellite convention.
+
+Skyfield propagates the elements as unperturbed two-body orbits — where-do-I-look
+accuracy, not ephemeris-grade positions far from the elements' epoch; the routine refresh
+keeps the epoch current.  The MPC drops comets that have faded from observability, so a
+configured comet can vanish from a fresh download: its tags then read "N/A" (a log warning
+names it, once at the crossing), never an error and never a stale number, with
+`$almanac.halley.elements_epoch` and `.elements_age` always live as diagnostics.  Unlike
+satellite elements there is no age cutoff — two-body comet elements degrade gracefully
+over months, not days.
+
+`$almanac.halley.mag` is the MPC total magnitude, m = g + 5·log10(Δ) + 2.5·k·log10(r),
+from the file's g/k parameters — the standard formula, and comets are notorious for
+deviating from it: outbursts brighten them by magnitudes overnight, and famous ones have
+fizzled.  Treat it as expectation, not measurement.  (This is a deliberate policy
+difference from satellites, which serve no magnitude at all: comets have a standard
+formula; satellites do not.)
+
+Comet tags work as loopdata almanac fields like any others, and the engine invalidates its
+per-tag caches when the element file refreshes, so live pages never serve old-element
+times.
+
+## Meteor showers
+
+New in 2.1, the almanac knows the dozen major annual meteor showers of the IMO working
+list.  Each peak is anchored to the sun's ecliptic longitude — the Perseids peak when the
+sun reaches λ 140.0° — so every year's peak instant is computed from the ephemeris, never
+looked up.
+
+`$almanac.next_meteor_shower` always serves the shower whose peak lies next ahead, as
+plain attributes: `.name` (stable English data, like `constellation`), `.label` (the
+report's `[Almanac]` `[[MeteorShowers]]` translation, falling back to the name), `.peak`
+(a time ValueHelper), `.zhr`, `.radiant_ra`/`.radiant_dec` (J2000 degrees) with the live
+refracted `.radiant_alt`/`.radiant_az`, and `.parent` — the body whose debris the shower
+is.  `$almanac.active_meteor_showers` is the tuple of showers whose activity window
+contains the almanac's time, each carrying its own apparition's peak (which may honestly
+lie in the past: an active shower past maximum is still active).  As loopdata fields the
+`next_meteor_shower` chains tier as event fields by their `next_` prefix, like the moon
+phases.
+
 ## Fallback behavior
 
 Anything this extension does not compute falls through to the next almanac in WeeWX's list —
@@ -183,6 +293,11 @@ satellites, so an unrecognized satellite attribute reports a per-tag error direc
 
 Where PyEphem and standard astronomical conventions differ, weewx-skyfield follows the
 standard definitions rather than PyEphem:
+
+- `$almanac.equation_of_time` (new in 2.1; PyEphem never served it) follows the USNO sign
+  convention, apparent minus mean solar time: positive when the sundial runs ahead of the
+  clock.  Sources differ on the sign — some publish mean minus apparent — so a template
+  porting a formula from elsewhere should check which convention it assumed.
 
 - A custom horizon (e.g., `$almanac(horizon=-6)`) is treated as a geometric altitude: no
   atmospheric refraction is applied.  This matches the USNO definitions of civil, nautical and

@@ -45,6 +45,14 @@ SHADOW_TS  = 1750503830      # ISS 29° up pre-dawn 2025-06-21, in Earth's shado
 SAT_DATA_DIR = os.path.join(TEST_DIR, 'data')
 SATELLITES = {'iss': 25544, 'tiangong': 48274}
 
+# Comet fixtures, shared with test_almanac.py: real archived rows plus the
+# fabricated always-bright C/9999 Z9 (above the horizon at TIME_TS with
+# g forced to -9.0), so the dome pins both marker states -- halley is up
+# but telescope-faint (hollow), bright is up and naked-eye (solid), and
+# hale_bopp is below the horizon (absent).
+COMETS = {'halley': '1P', 'hale_bopp': 'C/1995 O1', 'bright': 'C/9999 Z9',
+          'mcnaught': '220P'}
+
 # The footer links the extension's name to the manual, in every language.
 LINKED_NAME = ('<a href="%s">weewx-skyfield</a>'
                % wxskyfield_sky.REPO_URL)
@@ -53,7 +61,8 @@ LINKED_NAME = ('<a href="%s">weewx-skyfield</a>'
 @pytest.fixture(scope='module')
 def sky():
     s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=True,
-                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
+                       satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR,
+                       comets=dict(COMETS), comet_dir=SAT_DATA_DIR)
     assert s.is_valid()
     return s
 
@@ -102,6 +111,85 @@ class TestPanels:
         # Stars render (dimmed by daylight, but present).
         assert 'starlab' in svg
 
+    def test_dome_comet_markers(self, almanac, page):
+        """Configured comets always plot when risen, always labeled --
+        the config list is the filter.  The solid/hollow diamond states:
+        the fabricated bright comet (mag -3) is the solid brass mark, the
+        genuinely faint Halley (mag ~26) the hollow present-but-not-
+        naked-eye ring (data-bright mirrors the satellites' data-sunlit
+        hook), and below-the-horizon Hale-Bopp is absent."""
+        svg = page.dome_svg(almanac)
+        assert_balanced(svg)
+        assert 'data-body="bright" data-bright="1"' in svg
+        assert 'data-body="halley" data-bright="0"' in svg
+        assert 'data-body="hale_bopp"' not in svg
+        # Each risen comet carries its three anti-sunward tail rays.
+        assert svg.count('comet-tail') == 6
+        # The tooltip carries the magnitude; the label is the display name.
+        assert 'mag 25.6' in svg
+        assert '>Halley</text>' in svg
+
+    def test_dome_comet_without_elements_absent(self, page, tmp_path):
+        """A configured comet with no elements serves alt None: no marker,
+        no label, no error -- the dome simply omits it."""
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = page.dome_svg(alm)
+        assert_balanced(svg)
+        assert 'data-body="halley"' not in svg
+
+    def test_comet_names_contract(self, almanac, page):
+        """PUBLIC CONTRACT, like satellite_names: embedding skins
+        enumerate the comets through this, in config order."""
+        assert page.comet_names() == ['halley', 'hale_bopp', 'bright', 'mcnaught']
+
+    def test_comets_in_table_chips_ribbons(self, almanac, page):
+        """A configured comet with elements rides every roster panel: a
+        table row, a rail chip and a ribbon bar, brass-marked, with the
+        same up-now/rises/below states as the planets.  The elementless
+        case is simply absent (tested per-panel below and via the dome)."""
+        table = page.table_html(almanac)
+        assert_balanced(table)
+        assert 'Halley' in table and 'Mcnaught' in table
+        assert '35.907 au' in table          # Halley's distance column
+        chips = page.chips_html(almanac)
+        assert_balanced(chips)
+        assert 'Halley' in chips
+        # Halley is up at TIME_TS; 220P is below the horizon.
+        halley_chip = chips[chips.index('Halley'):chips.index('Hale Bopp')]
+        assert 'up now' in halley_chip
+        assert 'in Hydra' in halley_chip
+        ribbons = page.ribbons_svg(almanac)
+        assert_balanced(ribbons)
+        assert '>Halley</text>' in ribbons and '>Mcnaught</text>' in ribbons
+
+    def test_comet_perihelion_countdown(self, almanac, page):
+        """The countdown row shows a comet's perihelion only when it lies
+        ahead within a year: 220P (2026-06-14, ~358 days out) shows;
+        Halley's 2061 date and Hale-Bopp's 1997 date stay quiet."""
+        html = page.countdown_html(almanac)
+        assert_balanced(html)
+        assert 'Mcnaught perihelion' in html
+        assert 'Halley' not in html and 'Hale Bopp' not in html
+
+    def test_meteor_radiant_on_dome(self, almanac, page):
+        """Perseids week, late evening: the Perseids and Delta Aquariids
+        radiants stand above the horizon, each a rayed mark carrying ZHR
+        and peak date in its tooltip.  At the June fixture instant no
+        major shower is active and the dome carries no radiant."""
+        assert 'radiant' not in page.dome_svg(almanac)
+        aug = almanac(almanac_time=1754980000)      # 2025-08-11 22:06 PDT
+        svg = wxskyfield_sky.SkyPage().dome_svg(aug)
+        assert_balanced(svg)
+        assert 'data-body="perseids"' in svg
+        assert 'data-body="delta_aquariids"' in svg
+        assert 'ZHR 100' in svg
+        assert '>Perseids</text>' in svg
+
     def test_dome_without_stars(self, page):
         """With the star catalog disabled the dome must still render."""
         starless = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
@@ -127,10 +215,59 @@ class TestPanels:
         assert '<title>Earth' in svg
         assert svg.count('<circle') >= 17    # 8 orbits + sun + 9 bodies
 
+    def test_orrery_comets(self, almanac, page):
+        """Every configured comet with elements is a diamond at its
+        CURRENT sun distance and heliocentric longitude -- marker only,
+        no orbit ring (eccentric orbits do not draw as circles) -- with
+        the true distance in the tooltip and the dome's solid/hollow
+        naked-eye rule.  Unlike the dome, below-the-horizon comets plot
+        too: the orrery is a plan view, not the observer's sky."""
+        svg = page.orrery_svg(almanac)
+        # Halley at 35.1 AU: hollow, pinned just outside Neptune's ring.
+        assert ', 35.1 au' in svg
+        assert '>Halley</text>' in svg
+        # All four fixture comets have elements, so all four plot --
+        # hale_bopp and 220P included (below the dome's horizon, on the
+        # orrery regardless), as the four diamond paths.
+        assert svg.count('<path d="M') == 4
+        assert '>Hale Bopp</text>' in svg and '>Bright</text>' in svg
+        assert '>Mcnaught</text>' in svg
+        # Each diamond carries its three tail rays, pointing radially
+        # outward -- anti-sunward on a sun-centered plan view.
+        assert svg.count('comet-tail') == 12
+        # Ring count is unchanged: comets add no orbit circles.
+        assert svg.count('fill="none"') == 8
+
+    def test_orrery_comet_without_elements_absent(self, page, tmp_path):
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            svg = page.orrery_svg(alm)
+        assert_balanced(svg)
+        assert '<path d="M' not in svg and 'Halley' not in svg
+
+    def test_eot_chart(self, almanac, page):
+        """53 weekly samples of the equation of time at the analemma's own
+        instants (local standard noon); the fixed ±18-minute frame; the
+        USNO sign.  The brass point is TODAY's own standard-noon value,
+        not the nearest weekly sample: at the June-solstice test time the
+        sundial runs '-1m 56s' behind -- negative, below the zero line --
+        where the Jun 18 grid sample would have mislabeled it '-1m 16s',
+        40 seconds off."""
+        svg = page.eot_svg(almanac)
+        assert_balanced(svg)
+        assert svg.count(' L') == 52          # the weekly curve
+        assert '-1m 56s' in svg               # today's value, signed
+        assert '-1m 16s' not in svg           # ...not the weekly sample's
+        assert '+15m' in svg and '-15m' in svg
+
     def test_analemma(self, almanac, page):
         svg = page.analemma_svg(almanac)
         assert_balanced(svg)
-        assert svg.count('<circle') >= 54    # 53 weekly points + today
+        assert svg.count('<circle') >= 54    # 53 weekly points + today's own noon
         assert 'today' in svg
         assert '>Mar</text>' in svg and '>Nov</text>' in svg
 
@@ -220,6 +357,30 @@ class TestPanels:
         assert svg.count('>new</text>') == 2      # both ends of the lunation
         assert 'today' in svg
 
+    def test_moon_apsides(self, almanac, page):
+        html = page.moon_apsides_html(almanac)
+        assert_balanced(html)
+        # Jun 22 perigee, Jul 4 apogee (local time; both pinned in
+        # test_almanac.py against Espenak's tables) -- and no supermoon:
+        # June 2025's full moon (Jun 11) is nowhere near perigee.
+        assert 'perigee' in html and 'apogee' in html
+        assert 'Jun 22 21:44' in html and 'Jul 4 19:28' in html
+        assert 'supermoon' not in html
+
+    def test_supermoon_callout(self, almanac, page):
+        """2025-11-05 is the year's closest supermoon: full moon 05:19
+        PST, perigee 14:27 PST, nine hours apart.  Seen from Oct 25 the
+        callout is up, dated to the full moon."""
+        alm = weewx.almanac.Almanac(1761418800,     # 2025-10-25 12:00 PDT
+                                    LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                    formatter=weewx.units.get_default_formatter())
+        html = page.moon_apsides_html(alm)
+        assert_balanced(html)
+        assert 'class="supermoon"' in html
+        assert 'Supermoon Nov 5' in html
+        # The quiet apsis line still rides below the callout.
+        assert 'class="apsis mono"' in html
+
     def test_chips_and_table(self, almanac, page):
         chips = page.chips_html(almanac)
         assert_balanced(chips)
@@ -227,7 +388,7 @@ class TestPanels:
         assert 'in Leo' in chips                  # Mars's constellation, June 2025
         table = page.table_html(almanac)
         assert_balanced(table)
-        assert table.count('<tr>') == 10     # header + 9 bodies
+        assert table.count('<tr>') == 14     # header + 9 bodies + 4 comets
 
     def test_unit_group_overrides(self, sky):
         """A report's [Units] [[Groups]] preferences (e.g. a station-wide
@@ -248,7 +409,8 @@ class TestPanels:
                                                altitude=ALTITUDE_M, formatter=formatter,
                                                converter=weewx.units.Converter(groups))
             for method in ('header_sub', 'countdown_html', 'moon_svg', 'dome_svg',
-                           'ribbons_svg', 'orrery_svg', 'analemma_svg', 'sunpath_svg',
+                           'ribbons_svg', 'orrery_svg', 'analemma_svg', 'eot_svg',
+                           'sunpath_svg',
                            'daylength_svg', 'lunation_svg', 'chips_html', 'table_html',
                            'satellites_html'):
                 # A fresh SkyPage per render: the per-page memo is keyed on
@@ -257,13 +419,23 @@ class TestPanels:
                 got = getattr(wxskyfield_sky.SkyPage(), method)(overridden)
                 assert got == want, method
             table = wxskyfield_sky.SkyPage().table_html(overridden)
-            assert '0h 00m' not in table
+            # Exactly one zero duration: Hale-Bopp's honest neverup (dec
+            # -85 from 37N).  The units-override bug this pins against
+            # zeroed EVERY row.
+            assert table.count('0h 00m') == 1
             assert re.search(r'14h \d\dm', table)   # the solstice sun, up ~14h46m
 
     def test_header_bits(self, almanac, page):
         assert 'N' in page.header_sub(almanac)
         countdown = page.countdown_html(almanac)
-        assert countdown.count('class="count"') == 5
+        # 5 event chips, the always-on next-meteor-shower chip, plus two
+        # comet perihelia inside the one-year window (220P, and the
+        # fabricated bright comet's donor orbit).
+        assert countdown.count('class="count"') == 8
+        # The shower chip: next from June 21 is the Southern Delta
+        # Aquariids, with the moon's peak-night interference judgment.
+        assert 'Southern Delta Aquariids' in countdown
+        assert 'moon ' in countdown
         # The eclipse chip: the nearer of the next visible lunar/solar
         # eclipse (from Palo Alto in June 2025, the 2026-03-03 total
         # lunar), its date carrying the year since it can be years out.
@@ -562,7 +734,10 @@ class TestSatellitePanel:
             assert stale_page.pass_chart_html(alm) == ''
         assert_balanced(html)
         assert html.count('no usable orbital elements — see the weewxd log') == 2
-        assert 'satlab' not in svg
+        # No SATELLITE marker or label; the comet marks (which share the
+        # satlab class) legitimately remain.
+        assert 'data-body="iss"' not in svg
+        assert 'data-body="tiangong"' not in svg
 
     def test_geostationary_only_no_track(self):
         """A configuration whose only satellite never rises: an honest
@@ -625,7 +800,19 @@ class TestFooter:
         assert 'IAU-CSN star names' in html
         assert 'Hipparcos star data Credit: ESA' in html
         assert 'Constellation figures: Stellarium' in html
+        # Comets are configured in the fixture, so the MPC is credited.
+        assert 'Comet elements: Minor Planet Center' in html
         assert 'Regenerated every report cycle' in html
+
+    def test_no_mpc_credit_without_comets(self, page):
+        """No configured comets, no MPC line -- the footer stays true for
+        what actually computed the page."""
+        cometless = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                                   load_stars=False)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(cometless)
+            html = page.footer_html()
+        assert 'Minor Planet Center' not in html
 
     def test_no_stellarium_credit_when_lines_off(self, almanac):
         """constellation_lines = false draws no figures, so the footer
@@ -698,7 +885,7 @@ class TestPalettes:
     'classic-night'/'classic-light' preserve the pre-1.5 values."""
 
     RENDERERS = ('moon_svg', 'dome_svg', 'ribbons_svg', 'orrery_svg',
-                 'analemma_svg', 'sunpath_svg', 'daylength_svg',
+                 'analemma_svg', 'eot_svg', 'sunpath_svg', 'daylength_svg',
                  'lunation_svg', 'chips_html', 'table_html',
                  'countdown_html', 'header_sub')
 
@@ -892,7 +1079,7 @@ class TestPanelGuard:
         self._break_bodies(monkeypatch)
         assert_balanced(page.moon_svg(almanac))
         assert_balanced(page.lunation_svg(almanac))
-        assert page.countdown_html(almanac).count('class="count"') == 5
+        assert page.countdown_html(almanac).count('class="count"') == 8
 
     def test_usage_errors_still_raise(self, almanac, page, monkeypatch):
         """The guard is for runtime surprises only: a template-author error
@@ -1042,10 +1229,18 @@ class TestI18n:
         # display names, so ISS never renders as "Iss".
         for sat, label in (('iss', 'ISS'), ('tiangong', 'Tiangong'), ('hst', 'HST')):
             assert conf['Almanac'][sat] == label
+        # The default comets carry display names too -- Hale-Bopp keeps
+        # its hyphen instead of the fallback's "Hale Bopp".
+        for comet, label in (('halley', 'Halley'), ('hale_bopp', 'Hale-Bopp')):
+            assert conf['Almanac'][comet] == label
         # English constellation names are the Latin ones -- the
         # [[Constellations]] section is the key reference for translators
         # and must mirror the engine's table exactly.
         assert dict(conf['Almanac']['Constellations']) == wxskyfield.CONSTELLATION_NAMES
+        # The meteor-shower table mirrors the engine's, key for key --
+        # the reference for translators, like the constellations.
+        assert dict(conf['Almanac']['MeteorShowers']) == {
+            s.key: s.name for s in wxskyfield.METEOR_SHOWERS}
 
     GERMAN_SKIN = {
         'Texts': {

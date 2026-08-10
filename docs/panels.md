@@ -91,7 +91,16 @@ substantially-risen figure labeled with the constellation's (translated) name, s
 figures clipped at the horizon rim — and, with satellites configured, a position dot for any
 satellite above the horizon at generation time.  A sunlit satellite is a solid dot; one
 inside Earth's shadow is drawn as a hollow ring — present but not shining — with its
-tooltip saying "in shadow".  The dome is strictly the *current* sky, one
+tooltip saying "in shadow".  A configured [comet](tags.md#comets) above the horizon plots
+as a labeled diamond with a small anti-sunward tail (comet tails point away from the sun;
+the rays carry `class="comet-tail"`), always (the config list is the filter): solid brass
+when its magnitude says plausibly naked-eye (6.0 or brighter), the hollow ring when
+fainter — there, but not visible to the eye — with the magnitude in the tooltip.  And
+while a [meteor shower](tags.md#meteor-showers) is active, its radiant gets a small rayed
+mark when above the horizon — meteors stream outward from that point — labeled (yielding
+when space is tight: a radiant is an area of sky, not a body), with ZHR and peak date in
+the tooltip.  The dome is
+strictly the *current* sky, one
 chart, one instant: an upcoming [visible pass](tags.md#satellites) is charted by
 [`pass_chart_html`](#the-next-visible-pass-chart--pass_chart_html) below, at the pass's own epoch.
 The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
@@ -105,10 +114,11 @@ translated): the sun's, moon's and each planet's marks are wrapped in
 `<g class="dome-body" data-body="mars">`, their name labels carry the same `data-body`
 attribute, and a satellite's position dot gets its tag name the same way plus
 `data-sunlit="1"` or `"0"`, so a live layer can flip the dot between solid and hollow as
-the satellite crosses the shadow line.  These hooks are a
-stable contract, and so is `$sky_page.satellite_names()`, through which an embedding skin
-enumerates the configured satellites — the tag names in config order, empty when none
-are configured or the almanac is not registered.
+the satellite crosses the shadow line.  A comet's diamond carries `data-bright="1"` or
+`"0"` the same way.  These hooks are a
+stable contract, and so are `$sky_page.satellite_names()` and `$sky_page.comet_names()`,
+through which an embedding skin enumerates the configured satellites and comets — the tag
+names in config order, empty when none are configured or the almanac is not registered.
 
 ## The next visible pass chart — `pass_chart_html`
 
@@ -157,7 +167,8 @@ $sky_page.ribbons_svg($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_ribbons.png" width="700" alt="Rise and set ribbons panel">
 
-Today's above-horizon span for the sun, moon and planets, over background bands of tonight's
+Today's above-horizon span for the sun, moon and planets — and, new in 2.1, every configured
+[comet](tags.md#comets) with elements, as a brass bar — over background bands of tonight's
 civil, nautical and astronomical twilight (the USNO geometric definitions).  The ivory tick on
 each bar is the transit; the vertical brass line is now, and the rise → set times are listed
 at the right.
@@ -193,7 +204,30 @@ $sky_page.orrery_svg($almanac)
 
 Today's heliocentric longitudes, viewed from above the north ecliptic pole; orbit spacing is
 logarithmic so Mercury through Neptune fit one plate.  The dashed ray marks 0° — the direction
-of the vernal equinox.
+of the vernal equinox.  A configured [comet](tags.md#comets) joins the plate as a diamond at
+its *current* sun distance on the same log scale — marker only, no orbit ring, since an
+eccentric orbit does not draw as a circle — its tail streaming radially outward (a comet's
+tail points away from the sun, and on a sun-centered plan view that is simply outward),
+with the true distance in the tooltip and the dome's solid/hollow naked-eye rule; a comet
+beyond the outermost ring pins near the rim.
+Unlike the dome, the orrery plots a comet whether or not it is above the observer's
+horizon: it is a plan view of the solar system, not the observer's sky.
+
+## The equation of time — `eot_svg`
+
+```
+$sky_page.eot_svg($almanac)
+```
+
+<img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_eot.png" width="440" alt="Equation of time panel">
+
+New in 2.1: the equation of time across the year — sundial minus clock, per the USNO sign —
+sampled at the analemma's own instants, local standard noon each week.  The double-humped
+curve is the sum of Earth's tilt and its elliptical orbit, the same pair that draws the
+analemma's figure-eight; the brass point is today, labeled with today's standard-noon
+value — its own evaluation, not the nearest weekly sample.  The frame is
+fixed at ±18 minutes, so the plate looks the same every year.  The bundled page places it in
+the left column beside the Solar Year chart, its year-scale sibling.
 
 ## The analemma — `analemma_svg`
 
@@ -204,8 +238,9 @@ $sky_page.analemma_svg($almanac)
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_analemma.png" width="340" alt="Analemma panel">
 
 The sun's altitude and azimuth at local standard noon for every week of the year — the
-figure-eight sum of Earth's tilt and its elliptical orbit — with this week's point marked in
-brass.  It evaluates the almanac 53 times (all cheap instantaneous positions).
+figure-eight sum of Earth's tilt and its elliptical orbit — with today's point marked in
+brass at its own standard-noon spot on the locus.  It evaluates the almanac 54 times (all
+cheap instantaneous positions).
 
 ## The solar year — `daylength_svg`
 
@@ -249,6 +284,13 @@ principal phases ticked and dated, today's disc ringed in brass, and every disc 
 date and illumination on hover.  Waxing and waning fall on the correct limb for your
 hemisphere, matching the moon disc above.
 
+New in 2.1, the bundled page follows the strip with `$sky_page.moon_apsides_html($almanac)`:
+the quiet next-perigee/next-apogee line, topped by a brass **supermoon** callout whenever the
+next full moon falls within a day of perigee.  Like the satellite pass cards, the callout is
+anticipation — it appears ahead of the event and leaves with it.  The styling rides the
+`.supermoon` and `.apsis` classes in `sky.css`, and the strings are translated in all nine
+bundled languages.
+
 ## Planet chips — `chips_html`
 
 ```
@@ -262,7 +304,10 @@ hemisphere, matching the moon disc above.
 A summary card per body: daylight (length, sun rise → set, civil dusk and astronomical dark),
 then each planet with its rise time or current position, the constellation it stands in,
 magnitude, distance and elongation — plus Jupiter's central meridian longitudes and Saturn's
-ring tilt.  The `chips` wrapper provides the single-column layout.
+ring tilt.  New in 2.1, every configured [comet](tags.md#comets) with elements gets a
+brass-dotted chip of the same shape (its magnitude a dash when the MPC row has no
+parameters), and the bundled page's eyebrow reads "Sun, Planets & Comets" when any comet is
+configured.  The `chips` wrapper provides the single-column layout.
 
 ## The satellites panel — `satellites_html`
 
@@ -298,7 +343,12 @@ can skip the whole section when there are none — the bundled page does exactly
 Date and days-to-go chips for the next new moon, full moon, equinox and solstice, plus the
 next eclipse visible from the station (lunar or solar, whichever comes first, labeled with its
 locally seen type; its date carries the year, since the next visible eclipse can be years
-out).  The `countdown` wrapper lays the chips out as a wrapping row.
+out).  New in 2.1, a configured [comet](tags.md#comets)'s perihelion joins the row when it
+lies ahead within a year — the news-cycle countdown; Halley's 2061 date stays quiet until
+its time comes — and the next major [meteor shower](tags.md#meteor-showers) is always
+there, its detail line carrying the moon's peak-night illumination as the interference
+judgment: a bright moon washes out the faint meteors, and the chip says so.  The
+`countdown` wrapper lays the chips out as a wrapping row.
 
 ## The almanac table — `table_html`
 
@@ -311,8 +361,9 @@ out).  The `countdown` wrapper lays the chips out as a wrapping row.
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_table.png" width="700" alt="Almanac table panel">
 
 Rise, transit, set, time up, current altitude and azimuth, magnitude and distance for the sun,
-moon and planets.  The `tablewrap` wrapper lets the table scroll sideways on narrow screens
-instead of breaking the page.
+moon and planets — and, new in 2.1, every configured [comet](tags.md#comets) with elements,
+brass-dotted, its magnitude a dash when the MPC row carries no parameters.  The `tablewrap`
+wrapper lets the table scroll sideways on narrow screens instead of breaking the page.
 
 ## Helpers — `header_sub` and `sun_is_up`
 

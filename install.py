@@ -30,7 +30,21 @@ DEFAULT_SATELLITES = {
     'tiangong': '48274',
 }
 
+# The default comets: the two names everybody knows.  Halley tells the
+# it-returns story (telescope-faint until the 2061 apparition -- the
+# dome marks it with the honest hollow ring); Hale-Bopp the
+# it-left-forever story (the 1997 great comet, now ~49 AU out and
+# receding, dec -85 so it never rises from northern stations -- a
+# table-and-orrery resident whose distance creeps outward year over
+# year).  Both entries are the pattern users copy when the next
+# naked-eye comet makes the news.
+DEFAULT_COMETS = {
+    'halley': '1P',
+    'hale_bopp': 'C/1995 O1',
+}
+
 CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%s&FORMAT=TLE'
+COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
 
 def loader():
     if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
@@ -54,7 +68,7 @@ def loader():
 class WxSkyfieldInstaller(ExtensionInstaller):
     def __init__(self):
         super(WxSkyfieldInstaller, self).__init__(
-            version = "2.0",
+            version = "2.1",
             name = 'wxskyfield',
             description = "Replaces WeeWX's built-in almanac with a Skyfield based almanac for report generation.",
             author = "John A Kline",
@@ -70,6 +84,12 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                     # README).
                     'satellite_downloads': 'true',
                     'Satellites': dict(DEFAULT_SATELLITES),
+                    # Fetch comet orbital elements (one MPC CometEls.txt
+                    # for all configured comets), at install and then
+                    # every couple of days from weewxd.  Same isolated-
+                    # network story as the satellites.
+                    'comet_downloads': 'true',
+                    'Comets': dict(DEFAULT_COMETS),
                 },
                 'StdReport': {
                     'SkyfieldReport': {
@@ -107,19 +127,42 @@ class WxSkyfieldInstaller(ExtensionInstaller):
             ])
 
     def configure(self, engine):
-        """Fetch the first copy of each satellite's orbital elements, so the
-        satellite tags work from weewxd's first report cycle.  Runs before
-        this installer's config is merged, so an upgrade honors the
-        station's existing [Skyfield] settings and a fresh install uses the
-        defaults above.  Every failure degrades gracefully -- weewxd fetches
-        on its own schedule -- and the install itself never fails here.
-        Never modifies the configuration (always returns False)."""
+        """Fetch the first copy of the satellite and comet orbital
+        elements, so their tags work from weewxd's first report cycle.
+        Runs before this installer's config is merged, so an upgrade
+        honors the station's existing [Skyfield] settings and a fresh
+        install uses the defaults above.  Every failure degrades
+        gracefully -- weewxd fetches on its own schedule -- and the
+        install itself never fails here.  Never modifies the
+        configuration (always returns False)."""
         try:
             self._fetch_satellite_elements(engine)
         except Exception as e:
             engine.printer.out('Could not fetch satellite elements now (%s); '
                                'weewxd will fetch them itself.' % e)
+        try:
+            self._fetch_comet_elements(engine)
+        except Exception as e:
+            engine.printer.out('Could not fetch comet elements now (%s); '
+                               'weewxd will fetch them itself.' % e)
+        try:
+            self._fix_cache_ownership(engine)
+        except Exception:
+            pass
         return False
+
+    def _cache_dir(self, engine):
+        """(base_dir, cache_dir) for the element caches.  The cache lives
+        beside the sqlite archive: the conventional home for an
+        extension's runtime-writable data (an absolute SQLITE_ROOT wins
+        the join, exactly as weewx's own manager resolves it).
+        MySQL-only stations have no SQLITE_ROOT and fall back to
+        WEEWX_ROOT."""
+        weewx_root = engine.config_dict.get('WEEWX_ROOT', '')
+        sqlite_root = (engine.config_dict.get('DatabaseTypes', {})
+                       .get('SQLite', {}).get('SQLITE_ROOT', ''))
+        base_dir = os.path.join(weewx_root, sqlite_root or '.')
+        return base_dir, os.path.join(base_dir, 'wxskyfield')
 
     def _fetch_satellite_elements(self, engine):
         skyfield_dict = engine.config_dict.get('Skyfield', {})
@@ -127,16 +170,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
         if downloads in ('false', 'no', '0'):
             return
         satellites = skyfield_dict.get('Satellites') or DEFAULT_SATELLITES
-        # The element cache lives beside the sqlite archive: the
-        # conventional home for an extension's runtime-writable data (an
-        # absolute SQLITE_ROOT wins the join, exactly as weewx's own
-        # manager resolves it).  MySQL-only stations have no SQLITE_ROOT
-        # and fall back to WEEWX_ROOT.
-        weewx_root = engine.config_dict.get('WEEWX_ROOT', '')
-        sqlite_root = (engine.config_dict.get('DatabaseTypes', {})
-                       .get('SQLite', {}).get('SQLITE_ROOT', ''))
-        base_dir = os.path.join(weewx_root, sqlite_root or '.')
-        sat_dir = os.path.join(base_dir, 'wxskyfield')
+        _, sat_dir = self._cache_dir(engine)
         if engine.dry_run:
             engine.printer.out('Would fetch satellite elements into %s.' % sat_dir)
             return
@@ -162,18 +196,61 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                 f.write(payload)
             os.replace(tmp_path, path)
             fetched.append(str(name))
-        # weectl install often runs as root while weewxd runs unprivileged;
-        # root-owned cache files would silently break every later refresh.
-        # Mirror the ownership of the archive directory itself -- whoever
-        # owns the database owns the elements -- and stay quiet if chown is
-        # not ours to do (pip installs run unprivileged already).
-        try:
-            stat = os.stat(base_dir)
-            os.chown(sat_dir, stat.st_uid, stat.st_gid)
-            for entry in os.listdir(sat_dir):
-                os.chown(os.path.join(sat_dir, entry), stat.st_uid, stat.st_gid)
-        except OSError:
-            pass
         if fetched:
             engine.printer.out('Fetched satellite elements for %s into %s.'
                                % (', '.join(fetched), sat_dir))
+
+    def _fetch_comet_elements(self, engine):
+        skyfield_dict = engine.config_dict.get('Skyfield', {})
+        downloads = str(skyfield_dict.get('comet_downloads', 'true')).lower()
+        if downloads in ('false', 'no', '0'):
+            return
+        if not (skyfield_dict.get('Comets') or DEFAULT_COMETS):
+            return
+        _, cache_dir = self._cache_dir(engine)
+        path = os.path.join(cache_dir, 'wxskyfield_comets.txt')
+        if engine.dry_run:
+            engine.printer.out('Would fetch comet elements into %s.' % path)
+            return
+        os.makedirs(cache_dir, exist_ok=True)
+        request = urllib.request.Request(
+            COMET_URL,
+            headers={'User-Agent': 'weewx-skyfield/%s (+https://github.com/'
+                                   'chaunceygardiner/weewx-skyfield)' % self['version']})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read().decode('ascii', 'replace')
+        # Light validation (the installer cannot import wxskyfield): at
+        # least one fixed-width row whose perihelion-distance column is a
+        # number.  Never require specific designations.
+        def plausible(line):
+            try:
+                float(line[30:39])
+                return len(line) > 102
+            except (ValueError, IndexError):
+                return False
+        if not any(plausible(line) for line in payload.splitlines()):
+            raise ValueError('no comet rows in the MPC answer')
+        tmp_path = '%s.tmp' % path
+        with open(tmp_path, 'w') as f:
+            f.write(payload)
+        os.replace(tmp_path, path)
+        engine.printer.out('Fetched comet elements into %s.' % path)
+
+    def _fix_cache_ownership(self, engine):
+        """weectl install often runs as root while weewxd runs
+        unprivileged; root-owned cache files would silently break every
+        later refresh.  Mirror the ownership of the archive directory
+        itself -- whoever owns the database owns the elements -- and stay
+        quiet if chown is not ours to do (pip installs run unprivileged
+        already).  Runs after BOTH fetches, whichever of them were
+        enabled."""
+        base_dir, cache_dir = self._cache_dir(engine)
+        if engine.dry_run or not os.path.isdir(cache_dir):
+            return
+        try:
+            stat = os.stat(base_dir)
+            os.chown(cache_dir, stat.st_uid, stat.st_gid)
+            for entry in os.listdir(cache_dir):
+                os.chown(os.path.join(cache_dir, entry), stat.st_uid, stat.st_gid)
+        except OSError:
+            pass

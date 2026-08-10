@@ -1,6 +1,165 @@
 weewx-skyfield change history
 -----------------------------
 
+2.1 (2026/08/10)
+-----------------
+- ACTION REQUIRED (isolated networks only): 2.1 adds this extension's
+  second runtime download.  With comets configured -- the installer
+  configures Halley and Hale-Bopp -- weewxd fetches the Minor Planet
+  Center's comet elements (one ~160 KB CometEls.txt covering every
+  comet with a current orbit) from minorplanetcenter.net at install
+  time, at any startup that finds the file missing or stale, and then
+  about every two days, on a worker thread that never blocks reports.
+  Set comet_downloads = false in the [Skyfield] section of weewx.conf
+  to fetch nothing, ever; [[Comets]] still works in that mode if you
+  maintain the element file yourself -- the README's Comets section
+  has the air-gapped story.  Stations that do nothing get working
+  comet tags out of the box.
+- The almanac serves comets.  [Skyfield] [[Comets]] maps tag names to
+  Minor Planet Center designations -- the installer writes the two
+  comets everybody knows, halley = 1P and hale_bopp = C/1995 O1 (the
+  1997 great comet, now ~49 AU out and receding; dec -85, so it never
+  rises from northern stations and costs a northern dome nothing) --
+  and each entry serves the full planet-style surface: rise/set/
+  transit and the whole next_/previous_ family, alt/az and every ra/dec
+  flavor, distance/distance_from_sun (and the raw AU floats),
+  elongation, visible, illumination, constellation, and mag.  The value
+  is the designation as the MPC file prints it (12P, C/2023 A3,
+  fragments named explicitly as C/1947 X1-B), matched after case and
+  whitespace normalization only.  There is deliberately no pass
+  machinery -- a comet rises and sets daily, like a planet -- and comet
+  tags never fall through to PyEphem, which has no comets.  Elements
+  are the MPC's CometEls.txt, ONE ~160 KB file for every comet with a
+  current orbit, cached as wxskyfield_comets.txt beside the satellite
+  TLEs: fetched at install, at any startup that finds it missing or
+  stale, then about every two days on a worker thread -- written
+  atomically, the old file kept on any failure, backoff on retry --
+  and comet_downloads = false fetches nothing, ever (the satellites'
+  air-gapped story, one file to maintain by hand).  A comet the MPC
+  drops from the file serves honest N/A tags with a once-per-crossing
+  warning, never an error; elements_epoch and elements_age stay live
+  as diagnostics, and there is no age cutoff -- two-body elements
+  degrade gracefully over months, so positions are documented as
+  where-do-I-look accuracy, with the engine's per-tag caches
+  invalidated the moment the element file refreshes.  mag is the MPC
+  g/k total magnitude with a documented caveat: comets are notorious
+  for deviating from it.  On the Sky page's dome a risen configured
+  comet is a labeled diamond with a small tail pointing anti-sunward
+  (as comet tails do; radially outward on the sun-centered orrery) --
+  solid brass when plausibly naked-eye (magnitude 6.0 or brighter), a
+  hollow ring when fainter, the satellite-in-shadow convention -- with
+  the magnitude in the tooltip,
+  comet_names() joining satellite_names() as a public contract,
+  data-bright joining data-sunlit as an embedding hook, and the footer
+  crediting the Minor Planet Center.  The orrery plots configured
+  comets too -- a diamond at the comet's CURRENT sun distance on the
+  panel's log scale, at its heliocentric longitude, marker only (an
+  eccentric orbit does not draw as a circle), true distance in the
+  tooltip -- the panel that shows a news-cycle comet falling sunward
+  across report cycles, horizon or no horizon.  Comets ride the rest
+  of the page's roster panels as well: a row in the almanac table, a
+  brass-dotted chip in the rail (whose eyebrow then reads "Sun,
+  Planets & Comets"), and a brass bar on the rise & set ribbons --
+  each honestly absent when the comet has no elements, and magnitude
+  shown as a dash when the MPC row carries no g/k parameters.  And
+  one tag of the comet's own: $almanac.halley.perihelion, the time of
+  perihelion passage straight from the MPC elements (it can honestly
+  lie in the past -- Hale-Bopp's says 1997); the header's countdown
+  row shows it only when it lies ahead within a year, the news-cycle
+  chip, while Halley's 2061 date stays quiet until its time comes.
+  Strings translated in all nine bundled languages.
+- The almanac knows the dozen major annual meteor showers (the IMO
+  working list, Quadrantids through Ursids).  Each peak is anchored to
+  the SUN'S ECLIPTIC LONGITUDE, the way meteor astronomy states it --
+  the Perseids peak when the sun reaches 140.0 degrees, whatever the
+  calendar says -- so every year's peak instant is computed from the
+  ephemeris, never looked up, the table needs no annual maintenance,
+  and the solver reproduces skyfield's own equinox instant to the
+  second.  $almanac.next_meteor_shower always serves the shower next
+  ahead, as plain attributes: .name (stable English data), .label
+  (translated via [Almanac] [[MeteorShowers]] -- a closed named set
+  like the constellations, tables in all nine languages), .peak,
+  .zhr, .radiant_ra/_dec with the live refracted .radiant_alt/_az,
+  and .parent, the body whose debris it is (the Perseids are comet
+  109P/Swift-Tuttle's trail; the Eta Aquariids and Orionids are both
+  Halley's).  $almanac.active_meteor_showers lists every shower whose
+  activity window contains the almanac's time, each with its own
+  apparition's peak, honestly kept even when already past.  The Sky
+  page's countdown row always carries the next shower with the moon's
+  peak-night illumination as the interference judgment ("Perseids --
+  Aug 12 -- in 4 days -- moon 0%": the 2026 peak lands on a new moon,
+  a dark-sky year), and while a shower is active the dome marks its
+  radiant with a rayed glyph -- meteors stream outward from that
+  point -- ZHR and peak date in the tooltip.
+- New unit-aware distance tags for every body, stars included:
+  $almanac.<body>.distance (from Earth -- mirroring the satellites,
+  whose .distance is likewise the distance from the observer) and
+  .distance_from_sun are ValueHelper twins of the raw AU floats
+  earth_distance/sun_distance -- "1.8588 AU" by default in every unit
+  system, converting on ask ($almanac.moon.distance.km,
+  $almanac.mars.distance.mile).  The astronomical_unit unit registers
+  with WeeWX in its own group, group_distance_astronomical, so [Units]
+  [[Groups]]/[[StringFormats]]/[[Labels]] entries can restyle the whole
+  family (default format %.4f, default label " AU").  A star whose
+  catalog record has no measured parallax has no known distance: its
+  twins report N/A rather than a fictitious number.
+- $almanac.<body>.illumination is the ValueHelper twin of the raw
+  percent-illuminated float phase (and of the moon's moon_fullness
+  alias): the same value in group_percent, honoring the report's
+  percent formatting.  mag keeps no twin, deliberately: a magnitude
+  is a unitless number, there is nothing to convert or label.
+- The moon serves its apsides: $almanac.moon.next_perigee,
+  .previous_perigee, .next_apogee and .previous_apogee are the times
+  of the moon's closest and farthest approach -- the supermoon
+  machinery.  The extremum is searched on the geometric
+  center-to-center distance, the definition the published apsis
+  tables (Meeus; Espenak) use, reproducing them to the minute; the
+  results are cached like the almanac's other event tags, and near
+  the edges of the ephemeris span the tags report an honest N/A.
+  Moon only: no other served body orbits the observer, so any other
+  body raises a clean per-tag error.
+- Solar time and the equation of time: $almanac.solar_time is the
+  local apparent solar time -- what a sundial reads -- as an angle in
+  decimal degrees like sidereal_time (180 is solar noon),
+  $almanac.solar_angle its unit-aware twin, and
+  $almanac.equation_of_time a signed duration ValueHelper: apparent
+  minus mean solar time, positive when the sundial runs ahead of the
+  clock -- the USNO sign convention, noted in "Differences from
+  PyEphem" since published sources disagree on the sign.  Values agree
+  with Meeus within a few seconds across the year.
+- The Sky page charts the equation of time: a new Equation of Time
+  panel beside the Solar Year chart -- sundial minus clock for every
+  week of the year, sampled at the analemma's own instants (local
+  standard noon), the classic double-humped curve on a fixed
+  +/-18-minute frame, the brass point labeled with today's value --
+  its own standard-noon evaluation, since snapping to the weekly grid
+  would mislabel the seconds-precision value by up to ~90 seconds near
+  the December solstice.  The analemma's brass marker gets the same
+  fix: today's own noon sun on the figure-eight, where it sat up to
+  3.5 days along the locus at the nearest weekly sample before.
+  Served by the new $sky_page.eot_svg for embedding skins;
+  translated in all nine bundled languages.
+- Earth's own apsides are tags: $almanac.next_perihelion and
+  $almanac.next_aphelion (with previous_ twins), top-level like
+  next_solstice -- the closest and farthest approach to the sun, early
+  January and early July, the same geometric-extremum machinery as the
+  moon's apsides and matching the published instants within a minute.
+  Built on celestial's ask, for its countdown row's fifth windowed
+  guest.
+- The supermoon rule is a tag: $almanac.next_supermoon is the instant
+  of the next full moon falling within a day of perigee, searched
+  forward full moon by full moon -- the engine's single copy of the
+  definition, which the Sky page's callout reads instead of
+  re-deriving, and the one field a live page's supermoon countdown
+  needs.
+- The Sky page's lunation panel gains an apsis footer: the quiet
+  next-perigee/next-apogee line, topped by a brass Supermoon callout
+  whenever the next full moon falls within a day of perigee.  Like
+  the satellite pass cards, the callout is anticipation -- it appears
+  ahead of the event and leaves with it.  Served by the new
+  $sky_page.moon_apsides_html for embedding skins; translated in all
+  nine bundled languages.
+
 2.0 (2026/08/08)
 -----------------
 - ACTION REQUIRED (isolated networks only): 2.0 is this extension's

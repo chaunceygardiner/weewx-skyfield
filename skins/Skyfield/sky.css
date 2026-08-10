@@ -47,6 +47,10 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
 .eyebrow{font-variant-caps:small-caps; letter-spacing:.22em; color:var(--brass); font-weight:400;
          font-size:.85rem; margin:0 0 4px}
 .caption{color:var(--muted); font-size:.85rem; margin:10px 0 0; max-width:68ch}
+/* The lunation panel's apsis footer: a brass supermoon callout (rendered
+   only when one is upcoming) over the quiet perigee/apogee line. */
+.supermoon{color:var(--brass); font-weight:700; font-size:.95rem; margin:10px 0 0}
+.apsis{color:var(--muted); font-size:.85rem; margin:8px 0 0}
 .caption code{font-family: ui-monospace, Menlo, Consolas, monospace; font-size:.92em;
               color:var(--ink); background:none}
 /* Two tracks on wide screens: primary (dome, ribbons, table) beside a

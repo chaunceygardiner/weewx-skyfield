@@ -32,9 +32,19 @@ number, with the ISS and Tiangong configured out of the box; `$almanac.iss.next_
 says when to step outside and watch the ISS cross your sky — and the *complete* 118,218-star
 Hipparcos catalog ships with the extension, so the Sky page's dome is a full sky map and
 every `$almanac.hip_<number>` tag works out of the box, nothing to download.  Satellite
-orbital elements are the one thing the extension fetches at runtime — orbits go stale in
-days, so elements cannot ship in a release — and the fetch is on by default with one switch
-to turn it off: see [Satellites](#satellites).
+orbital elements are fetched at runtime — orbits go stale in days, so elements cannot ship
+in a release — and the fetch is on by default with one switch to turn it off: see
+[Satellites](#satellites).
+
+As of 2.1 the almanac serves comets — any comet the Minor Planet Center tracks, added by
+designation, with Halley and Hale-Bopp configured out of the box — each with the full
+planet-style tag surface, a tailed diamond on the sky dome, and a marker in the orrery;
+comet elements refresh from the MPC the way satellite elements do, one small file with one
+switch to turn the fetch off: see [Comets](#comets).  It also knows the dozen major annual
+meteor showers — `$almanac.next_meteor_shower` counts down to a peak computed from the
+sun's ecliptic longitude, and an active shower's radiant is marked on the dome — and the
+sky's calendar of distance: moon perigee and apogee, `$almanac.next_supermoon`, and Earth's
+perihelion and aphelion, with solar time and the equation of time charted on a new panel.
 
 And as of 1.12 it speaks your language: the Sky page and the almanac's body names are fully
 translatable through WeeWX's own lang-file mechanisms, and complete German, French, Danish,
@@ -63,9 +73,10 @@ it is computed for *your* station's location and elevation, taken automatically 
   twilight bands, with today marked;
 - the **lunar month** — the current lunation as thirty phase discs, the principal phases
   dated, today's disc ringed;
-- an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic;
+- an **orrery** of today's heliocentric longitudes, viewed from above the ecliptic —
+  configured comets included, each a diamond at its current sun distance;
 - an **analemma** — the sun's altitude and azimuth at local standard noon for every week of
-  the year, with this week's point marked;
+  the year, with today's point marked;
 - the **next visible pass** of each configured satellite — the ISS and Tiangong out of the
   box — when it appears, how high it peaks, when it disappears, with the soonest pass
   charted on its own dated sky: the whole sky as it will stand at the pass's peak, the
@@ -81,7 +92,7 @@ extension already requires and renders fine on a Raspberry Pi (the satellite row
 orbital elements weewxd keeps fresh separately — see [Satellites](#satellites); everything
 else works entirely offline).  It regenerates with live values
 every report cycle; it is the most computation-hungry page in a typical install (the solar-year
-chart runs several hundred rise/set searches, the analemma evaluates the almanac 53 times).
+chart runs several hundred rise/set searches, the analemma evaluates the almanac 54 times).
 The result cache absorbs most of that — the year-scale samples are anchored to fixed instants
 and reused across cycles, so the full price is paid once at startup, not every cycle.  If the
 page is still too heavy for your hardware you can generate it less often by setting
@@ -105,12 +116,48 @@ rise/set/transit (including `next_`/`previous_` rising, setting, transit and ant
 horizons and `use_center` (for twilight tags), azimuth/altitude, right ascension/declination
 (topocentric, astrometric and geocentric), hour angle, heliocentric longitude/latitude, elongation, earth and
 sun distance, visible time and its day-over-day change, magnitude (`$almanac.venus.mag`), percent
-illuminated (`$almanac.venus.phase`, plus the moon's PyEphem-style 0–1 fraction,
+illuminated (`$almanac.venus.phase`, with its unit-aware twin `illumination` new in 2.1, plus
+the moon's PyEphem-style 0–1 fraction,
 `$almanac.moon.moon_phase`), apparent angular size (`$almanac.sun.size`,
-`$almanac.moon.radius_size`), `circumpolar`/`neverup`, parallactic angle and sidereal time; the
+`$almanac.moon.radius_size`), `circumpolar`/`neverup`, parallactic angle, sidereal time and
+(new in 2.1) solar time and the equation of time; the
 moon's libration, selenographic colongitude and subsolar latitude, Jupiter's central meridian longitudes and Saturn's
 ring tilt; as well as equinoxes, solstices, moon phases and the moon index.  PyEphem is *not*
 required for any of these, nor for any tag used by WeeWX's standard skins.
+
+New in 2.1, the distances have unit-aware twins: `$almanac.mars.distance` (from Earth —
+mirroring the satellites, whose `.distance` is likewise the distance from the observer) and
+`$almanac.mars.distance_from_sun` serve the same values as the raw AU floats
+`earth_distance`/`sun_distance`, as ValueHelpers — "1.8588 AU" by default in every unit
+system, converting on ask (`$almanac.moon.distance.km`, `$almanac.mars.distance.mile`).
+The unit registers with WeeWX as `astronomical_unit` in its own group,
+`group_distance_astronomical`, so a skin can restyle the whole family: a `[Units]`
+`[[Groups]]` entry `group_distance_astronomical = km` reports kilometers everywhere, and
+`[[StringFormats]]`/`[[Labels]]` entries for `astronomical_unit` adjust the precision
+(default `%.4f`) and label (default ` AU`).
+
+Also new in 2.1, the moon serves its apsides: `$almanac.moon.next_perigee`,
+`previous_perigee`, `next_apogee` and `previous_apogee` are the times of the moon's closest
+and farthest approach — the supermoon machinery.  The extremum is searched on the geometric
+center-to-center distance, the definition the published apsis tables use, reproducing them
+to the minute; a supermoon's headline number is then one time-travel away —
+`$almanac(almanac_time=$almanac.moon.next_perigee.raw).moon.distance.km` is the perigee
+distance.  Moon only: no other served body orbits the observer — though Earth itself gets
+the same treatment around the sun: `$almanac.next_perihelion` and `$almanac.next_aphelion`
+(with `previous_` twins) are top-level tags for Earth's closest and farthest approach,
+matching the published instants within a minute — closest to the sun in the depth of
+northern winter, the great seasonal misconception-buster.  And the supermoon rule
+itself is a tag: `$almanac.next_supermoon` is the instant of the next full moon falling
+within a day of perigee — the engine's single copy of the definition, so the Sky page's
+callout and any live page read it instead of re-deriving it.
+
+And 2.1 rounds out the clock tags: `$almanac.solar_time` is the local apparent solar time —
+what a sundial reads — as an angle in decimal degrees like `sidereal_time` (180° is solar
+noon), `$almanac.solar_angle` its unit-aware twin, and `$almanac.equation_of_time` the
+equation of time as a signed duration ValueHelper: apparent minus mean solar time, positive
+when the sundial runs ahead of the clock — about +16 minutes in early November, −14 in
+mid-February (see [Differences from PyEphem](#differences-from-pyephem) for the sign
+convention).
 
 There is no `$almanac.earth`: Earth is the observer, not a served body (PyEphem, which this
 almanac replaces, has no Earth body either).  Earth's heliocentric coordinates are available
@@ -158,6 +205,9 @@ I/239): the star positions, proper motions, parallaxes and magnitudes of all 118
 Hipparcos stars, nothing to download.  Unlike PyEphem, `earth_distance` and `sun_distance`
 work for stars (in astronomical units, like the planets — e.g.,
 `$almanac.proxima_centauri.earth_distance`), computed from the star's Hipparcos parallax.
+The unit-aware twins serve stars too — `$almanac.rigel.distance` — and a star whose catalog
+record has no measured parallax has no known distance: its twins report "N/A" rather than a
+fictitious number.
 
 Anything this extension does not compute falls through to the next almanac in WeeWX's list —
 the built-in PyEphem almanac when PyEphem is installed (e.g., direct PyEphem data attributes
@@ -262,6 +312,121 @@ render with — and it survives extension upgrades:
         [[[Almanac]]]
             zenit23088 = Zenit-2 23088
 ```
+
+### Comets
+
+New in 2.1, the almanac serves comets.  The `[Skyfield]` `[[Comets]]` section of
+`weewx.conf` maps tag names to Minor Planet Center designations — the installer writes the
+two comets everybody knows, `halley = 1P` and `hale_bopp = C/1995 O1` — and each entry
+serves the almanac's full planet-style surface: rise, set and
+transit (with the whole `next_`/`previous_` family), altitude/azimuth, right
+ascension/declination in every flavor, `distance` and `distance_from_sun` (the raw AU floats
+`earth_distance`/`sun_distance` included), elongation, `visible`, `illumination`, the
+constellation it stands in, `mag`, and `perihelion` — the time of perihelion passage,
+straight from the MPC elements:
+
+```
+[Skyfield]
+    [[Comets]]
+        halley = 1P
+        hale_bopp = C/1995 O1
+        tsuchinshan_atlas = C/2023 A3
+```
+
+The defaults tell the two comet stories: Halley returns (2061; the hollow diamond until
+then), and Hale-Bopp — the great comet of 1997 — left for millennia: now ~49 AU out and
+receding, a number the almanac table watches creep outward year over year.  (At
+declination −85° it never rises from northern latitudes, so it costs a northern dome
+nothing.)  Other famous comets currently in the MPC file, ready to paste:
+
+```
+[Skyfield]
+    [[Comets]]
+        encke = 2P                        # shortest period known (3.3 yr); Taurids parent
+        tsuchinshan_atlas = C/2023 A3     # 2024's naked-eye comet
+        pons_brooks = 12P                 # the 2024 "devil comet"
+        churyumov_gerasimenko = 67P       # the Rosetta comet
+        tempel1 = 9P                      # Deep Impact's target
+        wild = 81P                        # Stardust's target
+        hartley = 103P                    # EPOXI's target
+        machholz = 96P                    # Southern Delta Aquariids parent
+        giacobini_zinner = 21P            # Draconids parent
+```
+
+(Some famous names are honestly absent from the current-elements file — 109P/Swift-Tuttle
+and 55P/Tempel-Tuttle among them, their long-period orbits retired by the MPC — and
+configuring them would serve "N/A", per the vanishing-row policy.)
+
+The friendly name is yours to choose — the tag, the dome label and `.label` ride it, and
+`[Almanac]` entries rename it per language, exactly like a satellite's.  The value is the
+comet's designation as the MPC's file prints it — `12P`, `220P`, `C/2023 A3`, a fragment
+named explicitly as `C/1947 X1-B` — matched after case and whitespace normalization only,
+never by fuzzy name.  There is deliberately no pass machinery: a comet rises and sets daily
+like a planet, so `next_pass` reports a per-tag error exactly as it does for Mars.  And
+comet tags never fall through to PyEphem, which has no comets.
+
+**Orbital elements** are the MPC's published
+[CometEls.txt](https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt) — one ~160 KB
+file carrying every comet with a current orbit (953 of them in August 2026), cached as
+`wxskyfield_comets.txt` beside the satellite TLEs.  It follows the satellites' fetch shape
+at a gentler cadence: fetched at install, at any weewxd startup that finds it missing or
+stale, then about every two days, on a worker thread that never blocks reports — written
+atomically, the old file kept on any failure, backoff on retry.  `comet_downloads = false`
+fetches nothing, ever: the same air-gapped story as the satellites, with a single file to
+maintain by hand.  Skyfield propagates the elements as unperturbed two-body orbits —
+where-do-I-look accuracy, not ephemeris-grade positions far from the elements' epoch; the
+routine refresh keeps the epoch current.  The MPC drops comets that have faded from
+observability, so a configured comet can vanish from a fresh download: its tags then read
+"N/A" (a log warning names it, once at the crossing), never an error and never a stale
+number, with `$almanac.halley.elements_epoch` and `.elements_age` always live as
+diagnostics.  Unlike satellite elements there is no age cutoff — two-body comet elements
+degrade gracefully over months, not days.
+
+**Magnitude comes with a caveat.**  `$almanac.halley.mag` is the MPC total magnitude,
+m = g + 5·log10(Δ) + 2.5·k·log10(r), from the file's g/k parameters — the standard formula,
+and comets are notorious for deviating from it: outbursts brighten them by magnitudes
+overnight, and famous ones have fizzled.  Treat it as expectation, not measurement.
+
+**On the Sky page**, a configured comet rides every roster panel.  The dome plots it when
+risen as a labeled diamond with a small tail — pointing anti-sunward, as comet tails do —
+solid brass when its magnitude says plausibly naked-eye (6.0 or brighter), a hollow ring
+when fainter: there, but not visible to the eye, the same visual language as a satellite in
+Earth's shadow — and the orrery plots it at its current sun distance, horizon or no
+horizon, its tail streaming radially away from the sun.  It gets a row in the almanac table, a chip in the rail
+(whose eyebrow then reads "Sun, Planets & Comets"), and a brass bar on the rise & set
+ribbons; and when its perihelion lies ahead within a year, a countdown chip joins the
+header row — the news-cycle countdown, while Halley's 2061 date stays quiet until its time
+comes.  `comet_names()` joins `satellite_names()` as a public contract for embedding skins
+(with `data-bright` beside `data-sunlit` on the dome markers), and the footer credits the
+Minor Planet Center.  Halley, the shipped default, is the hollow ring until the 2060s — and
+the config entry users copy when the next naked-eye comet makes the news.
+
+### Meteor showers
+
+New in 2.1, the almanac knows the dozen major annual meteor showers of the IMO working
+list — Quadrantids through Ursids, Perseids and Geminids included.  Each shower's peak is
+anchored to the sun's ecliptic longitude, the way meteor astronomy states it — the Perseids
+peak when the sun reaches λ 140.0°, whatever the calendar says — so every year's peak
+instant is *computed* from the ephemeris: nothing to look up, nothing to maintain, and the
+solver reproduces Skyfield's own equinox instant to the second.
+
+`$almanac.next_meteor_shower` always serves the shower whose peak lies next ahead: `.name`
+(stable English data), `.label` (the report's translation), `.peak` (a time ValueHelper),
+`.zhr` (the nominal zenithal hourly rate), `.radiant_ra`/`.radiant_dec` with the live
+`.radiant_alt`/`.radiant_az`, and `.parent` — the body whose debris it is (the Perseids are
+comet 109P/Swift-Tuttle's trail; the Eta Aquariids and Orionids are both Halley's).
+`$almanac.active_meteor_showers` lists every shower whose activity window contains today,
+each with its own apparition's peak — honestly kept even when that peak has already passed:
+an active shower past maximum is still active.
+
+On the Sky page, the countdown row always carries the next shower — "Perseids · Aug 12 ·
+in 4 days · moon 0%" — with the moon's peak-night illumination as the interference
+judgment: a bright moon washes out the faint meteors, and the chip says so.  (The 2026
+Perseids peak lands on a new moon — a dark-sky year.)  While a shower is active, the dome
+marks its radiant with a small rayed glyph — meteors stream outward from that point —
+labeled, with ZHR and peak date in the tooltip.  Shower names are a closed, named set like
+the constellations, translated in all nine bundled languages through `[Almanac]`
+`[[MeteorShowers]]`.
 
 ### Using the Sky panels in your own skin
 
@@ -377,7 +542,9 @@ at generation time gets a position dot on the dome like any other body — solid
 satellite is sunlit, a hollow ring when it is inside Earth's shadow (present but not
 shining), with the tooltip saying "in shadow" — but the dome is
 strictly the *current* sky, one chart, one instant.  An upcoming pass is charted by the
-next visible pass chart, below, at the pass's own epoch.
+next visible pass chart, below, at the pass's own epoch.  A configured
+[comet](#comets) above the horizon plots as a labeled diamond the same way — solid brass
+when plausibly naked-eye, the hollow ring when fainter, magnitude in the tooltip.
 
 An embedding skin that repositions dome marks between report cycles — weewx-celestial's live
 dome is the consumer — locates them by machine name, never by tooltip text (which is
@@ -386,10 +553,12 @@ translated): the sun's, moon's and each planet's marks are wrapped in
 attribute, and a satellite's position dot gets its tag name the same way plus
 `data-sunlit="1"` or `"0"` (so a live layer can flip the dot between solid and hollow as
 the satellite crosses the shadow line); the pass arc's
-group, `<g class="dome-track" data-body="iss">`, lives on the next visible pass chart.  These hooks
-are a stable contract, and so is `$sky_page.satellite_names()`, through which an embedding
-skin enumerates the configured satellites — the tag names in config order, empty when none
-are configured or the almanac is not registered.
+group, `<g class="dome-track" data-body="iss">`, lives on the next visible pass chart, and
+a comet's diamond carries `data-bright="1"` or `"0"` the same way.  These hooks
+are a stable contract, and so are `$sky_page.satellite_names()` and
+`$sky_page.comet_names()`, through which an embedding skin enumerates the configured
+satellites and comets — the tag names in config order, empty when none are configured or
+the almanac is not registered.
 
 #### The next visible pass chart — `pass_chart_html`
 
@@ -459,7 +628,28 @@ $sky_page.orrery_svg($almanac)
 
 Today's heliocentric longitudes, viewed from above the north ecliptic pole; orbit spacing is
 logarithmic so Mercury through Neptune fit one plate.  The dashed ray marks 0° — the
-direction of the vernal equinox.
+direction of the vernal equinox.  A configured [comet](#comets) joins the plate as a diamond
+at its *current* sun distance on the same log scale — marker only, no orbit ring, since an
+eccentric orbit does not draw as a circle — with the true distance in the tooltip and the
+dome's solid/hollow naked-eye rule.  This is the panel that tells a news-cycle comet's
+story: the diamond creeps sunward, inside Jupiter's ring, inside Earth's, as the report
+cycles pass.
+
+#### The equation of time — `eot_svg`
+
+```
+$sky_page.eot_svg($almanac)
+```
+
+<img src="screenshots/panel_eot.png" width="440" alt="Equation of time panel">
+
+New in 2.1: the equation of time across the year — sundial minus clock, per the USNO sign —
+sampled at the analemma's own instants, local standard noon each week.  The double-humped
+curve is the sum of Earth's tilt and its elliptical orbit, the same pair that draws the
+analemma's figure-eight; the brass point is today, labeled with today's standard-noon
+value — its own evaluation, not the nearest weekly sample.  The frame is
+fixed at ±18 minutes, holding the yearly extremes (+16m26s in early November, −14m14s in
+mid-February) with margin, so the plate looks the same every year.
 
 #### The analemma — `analemma_svg`
 
@@ -470,8 +660,9 @@ $sky_page.analemma_svg($almanac)
 <img src="screenshots/panel_analemma.png" width="340" alt="Analemma panel">
 
 The sun's altitude and azimuth at local standard noon for every week of the year — the
-figure-eight sum of Earth's tilt and its elliptical orbit — with this week's point marked in
-brass.  It evaluates the almanac 53 times (all cheap instantaneous positions).
+figure-eight sum of Earth's tilt and its elliptical orbit — with today's point marked in
+brass at its own standard-noon spot on the locus.  It evaluates the almanac 54 times (all
+cheap instantaneous positions).
 
 #### The solar year — `daylength_svg`
 
@@ -514,6 +705,12 @@ The current lunation, previous new moon to next, as a strip of thirty phase disc
 principal phases ticked and dated, today's disc ringed in brass, and every disc carrying its
 date and illumination on hover.  Waxing and waning fall on the correct limb for your
 hemisphere, matching the moon disc above.
+
+New in 2.1, the bundled page follows the strip with `$sky_page.moon_apsides_html($almanac)`:
+the quiet next-perigee/next-apogee line, topped by a brass **supermoon** callout whenever the
+next full moon falls within a day of perigee.  Like the satellite pass cards, the callout is
+anticipation — it appears ahead of the event and leaves with it.  Translated in all nine
+bundled languages.
 
 #### Planet chips — `chips_html`
 
@@ -663,6 +860,11 @@ the complete dictionary as a reference table.
 Where PyEphem and standard astronomical conventions differ, weewx-skyfield follows the standard
 definitions rather than PyEphem:
 
+- `$almanac.equation_of_time` (new in 2.1; PyEphem never served it) follows the USNO sign
+  convention, apparent minus mean solar time: positive when the sundial runs ahead of the
+  clock.  Sources differ on the sign — some publish mean minus apparent — so a template
+  porting a formula from elsewhere should check which convention it assumed.
+
 - A custom horizon (e.g., `$almanac(horizon=-6)`) is treated as a geometric altitude: no
   atmospheric refraction is applied.  This matches the USNO definitions of civil, nautical and
   astronomical twilight.  (PyEphem applies refraction to a custom horizon unless the `pressure=0`
@@ -768,7 +970,7 @@ later): its *almanac fields* — report almanac tags with the `$` removed — ar
 against the registered almanac (this extension's, once installed) on every loop packet and
 published in `loop-data.txt` for the page's JavaScript to pick up.  One computation engine
 serves the report tags and the live values, so they always agree.
-[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.0 or
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.1 or
 later) is a complete worked example — a live Geocentric panel built entirely from loopdata almanac
 fields — and the paloaltoweather.com pages shown above update the same way.
 
@@ -788,7 +990,7 @@ July 15.*
 
 ### Relationship to other extensions
 
-- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.0 or
+- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.1 or
   later) ships a live celestial page driven by weewx-loopdata almanac fields (see
   [Live-updating pages](#live-updating-pages) above).  Since celestial 6.0 it runs no service
   and computes nothing itself, so the two extensions coexist with no configuration —
@@ -859,9 +1061,13 @@ install with pip as described in the installation instructions instead.
 [Skyfield]
     enable = true
     satellite_downloads = true
+    comet_downloads = true
     [[Satellites]]
         iss = 25544
         tiangong = 48274
+    [[Comets]]
+        halley = 1P
+        hale_bopp = C/1995 O1
 ```
 
 (This is weewx-skyfield's own top-level `[Skyfield]` section.  It is unrelated to the
@@ -874,8 +1080,13 @@ extension.)
    from CelesTrak — at install, at any weewxd startup that finds them missing or stale,
    then about every three hours.  Set it false on an isolated network; see
    [Satellites](#satellites) for what that changes.
+ * `comet_downloads`: When true (the default), the MPC's CometEls.txt is fetched — at
+   install, at any weewxd startup that finds it missing or stale, then about every two
+   days.  Same isolated-network story; see [Comets](#comets).
  * `[[Satellites]]`: tag name = NORAD catalog number, one line per satellite.  This one
    list drives both the satellite tags and the fetch list.
+ * `[[Comets]]`: tag name = MPC designation, one line per comet — `halley = 1P`,
+   `tsuchinshan_atlas = C/2023 A3`.
 
 These are the section's only entries — anything else there draws a log warning and is
 ignored.  (The `stars` option was removed in 2.0: the complete star catalog now ships with

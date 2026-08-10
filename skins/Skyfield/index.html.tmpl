@@ -78,9 +78,16 @@
       <p class="caption">$gettext("Sunrise, sunset and solar noon (dashed) for every week of the year, over the same twilight bands as the timeline above — in local clock time, so the daylight-saving steps in spring and fall are real.  The brass line is today.")</p>
     </section>
 
+    <section class="sec-eot">
+      <h2 class="eyebrow">$gettext("The Equation of Time · sundial vs clock")</h2>
+      $sky_page.eot_svg($almanac, palette=$palette)
+      <p class="caption">$gettext("Sundial time minus clock time at local standard noon, week by week — above the zero line the sundial runs ahead.  The curve's two bulges are Earth's tilt and its elliptical orbit, the same pair that draws the analemma's figure-eight; the brass point is today.")</p>
+    </section>
+
     <section class="sec-lunation">
       <h2 class="eyebrow">$gettext("The Lunar Month · this lunation")</h2>
       $sky_page.lunation_svg($almanac, palette=$palette)
+      $sky_page.moon_apsides_html($almanac)
       <p class="caption">$gettext("New moon to new moon in thirty steps, the principal phases dated; the brass ring is today.  Hover or tap any disc for its date and illumination.")</p>
     </section>
 
@@ -95,7 +102,11 @@
 
   <aside class="rail">
     <section class="sec-chips">
+#if $sky_page.comet_names()
+      <h2 class="eyebrow">$gettext("Sun, Planets & Comets · today")</h2>
+#else
       <h2 class="eyebrow">$gettext("Sun & Planets · today")</h2>
+#end if
       <div class="chips">
         $sky_page.chips_html($almanac, palette=$palette)
       </div>
@@ -142,7 +153,7 @@
     <section class="sec-analemma">
       <h2 class="eyebrow">$gettext("Analemma · the sun at noon")</h2>
       $sky_page.analemma_svg($almanac, palette=$palette)
-      <p class="caption">$gettext("The sun's altitude and azimuth at local standard noon for every week of the year.  The figure-eight is the sum of Earth's tilt and its elliptical orbit; the brass point is this week.")</p>
+      <p class="caption">$gettext("The sun's altitude and azimuth at local standard noon for every week of the year.  The figure-eight is the sum of Earth's tilt and its elliptical orbit; the brass point is today.")</p>
     </section>
   </aside>
 </div>
