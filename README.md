@@ -108,8 +108,9 @@ panel on it can be dropped into a skin of your own.
 
 2. Download `weewx-skyfield.zip` from the
    [releases page](https://github.com/chaunceygardiner/weewx-skyfield/releases/latest).  It is
-   a large download — the bundled DE421 ephemeris (17 MB), the complete Hipparcos catalog
-   (15 MB gzipped) and the documentation's screenshots (16 MB) account for nearly all of it.
+   a large download: the bundled DE421 ephemeris (17 MB) and the complete Hipparcos star
+   catalog (15 MB gzipped) are most of it, with the documentation's screenshots accounting
+   for nearly all the rest.
 
 3. Install it:
 

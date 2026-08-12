@@ -838,6 +838,81 @@ class TestQuotedConstants:
             '\n  ' + '\n  '.join(unstated))
 
 
+# The download's size, as the README and the Installation page state it.
+# Only the two BUNDLED files get a number: they are byte-frozen, so these
+# can only go wrong if someone swaps the file -- which is exactly when a
+# reader would be misled.  The zip total and the screenshots' share are
+# deliberately unnumbered in the prose; both move every release with
+# visual changes, and the total was wrong three times in a month (32 ->
+# 43 -> 46 MB) before anyone noticed.  Sizes are decimal MB, the unit the
+# releases page and a browser's download list report.
+SIZED_FILES = [
+    (os.path.join('bin', 'user', 'wxskyfield_de421.bsp'),
+     17, 'DE421 ephemeris (17 MB)'),
+    (os.path.join('bin', 'user', 'wxskyfield_stars.dat.gz'),
+     15, 'Hipparcos star catalog (15 MB gzipped)'),
+]
+
+SIZED_FILE_PAGES = [os.path.join(REPO_ROOT, 'README.md'),
+                    os.path.join(DOCS_DIR, 'installation.md')]
+
+
+def _flowed(path: str) -> str:
+    """A page's text with runs of whitespace collapsed, so a phrase still
+    matches where the source wrapped it across two lines."""
+    with open(path, 'r') as f:
+        return ' '.join(f.read().split())
+
+
+class TestBundledFileSizes:
+    """The documented sizes of the bundled data files must be the real
+    ones.  Nothing else in the suite reads these numbers, and a reader has
+    no way to tell that a sentence has gone stale."""
+
+    def test_documented_sizes_match_the_files(self):
+        wrong = []
+        for relpath, documented, phrase in SIZED_FILES:
+            actual = os.path.getsize(os.path.join(REPO_ROOT, relpath))
+            rounded = round(actual / 1000000)
+            if rounded != documented:
+                wrong.append(
+                    '%s is %d bytes (%d MB), but the docs say %r'
+                    % (relpath, actual, rounded, phrase))
+        assert not wrong, (
+            'A bundled file changed size and the docs did not:\n  '
+            + '\n  '.join(wrong))
+
+    def test_both_pages_actually_state_them(self):
+        """Guard the guard: if the prose is reworded, the check above would
+        pass while silently protecting nothing."""
+        missing = []
+        for path in SIZED_FILE_PAGES:
+            text = _flowed(path)
+            for _relpath, _documented, phrase in SIZED_FILES:
+                if phrase not in text:
+                    missing.append('%s no longer says %r'
+                                   % (os.path.basename(path), phrase))
+        assert not missing, (
+            'The size check above is guarding nothing -- update SIZED_FILES '
+            'to the new wording:\n  ' + '\n  '.join(missing))
+
+    def test_no_page_states_a_total_download_size(self):
+        """The zip total moves every release that changes a screenshot, so
+        the prose must not carry one.  It was wrong three times in a month
+        before this test existed."""
+        stale = []
+        for path in SIZED_FILE_PAGES:
+            for sentence in _flowed(path).split('.'):
+                if 'weewx-skyfield.zip' not in sentence and 'download' not in sentence:
+                    continue
+                for match in re.findall(r'(?:about|roughly|~)\s*\d+\s*MB', sentence):
+                    stale.append('%s: %r' % (os.path.basename(path), match))
+        assert not stale, (
+            'A total download size is back in the prose -- it goes stale '
+            'every release; name the bundled files instead:\n  '
+            + '\n  '.join(stale))
+
+
 I18N_PAGE = os.path.join(DOCS_DIR, 'i18n.md')
 LANG_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'lang')
 

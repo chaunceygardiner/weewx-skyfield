@@ -1,6 +1,22 @@
 weewx-skyfield change history
 -----------------------------
 
+2.2 (in progress)
+-----------------
+- The download's size is no longer stated as a total.  The README and
+  the Installation page each named a figure for the whole zip, and it
+  went stale every release that changed a screenshot -- it was wrong
+  three times in a month.  Both pages now name only the two bundled
+  files that make the download large, the DE421 ephemeris and the
+  complete Hipparcos star catalog, whose sizes are fixed, and leave
+  the total and the screenshots' share unnumbered.  The two pages had
+  also drifted apart from each other on the ephemeris, one counting in
+  binary megabytes and the other in decimal; they now agree, in the
+  decimal megabytes the releases page reports.  A test reads the
+  bundled files' real sizes and fails if a documented number stops
+  matching, if the sentence carrying it is reworded away, or if a
+  total download size creeps back into the prose.
+
 2.1.1 (2026/08/12)
 ------------------
 - Fixed: on a narrow screen the Sky page opened with the Equation of
