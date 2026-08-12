@@ -1,8 +1,18 @@
 weewx-skyfield change history
 -----------------------------
 
-2.2 (in progress)
------------------
+2.1.1 (2026/08/12)
+------------------
+- Fixed: on a narrow screen the Sky page opened with the Equation of
+  Time panel instead of the dome.  Below the 1159px breakpoint the
+  page's two columns dissolve into one and the panels are resequenced
+  by CSS `order`; the Equation of Time panel, new in 2.1, was never
+  given a number, so it took the default of 0 and sorted ahead of
+  everything else.  It now sits where the wide layout puts it, after
+  Day Length and before the lunation panel, and a test asserts every
+  panel carries an order -- the next new panel cannot repeat this.
+  Reported by Paul R Anderson, with the diagnosis and the fix
+  (issue #5).
 - The user manual is rebuilt.  It goes from seven pages to seventeen,
   on a real sidebar with full-text search, and gains the pages it was
   missing: Configuration (every option in one place, gathered from the

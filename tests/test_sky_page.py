@@ -1141,6 +1141,27 @@ class TestSkinFiles:
         assert '#if $sky_page.has_satellites()' in source
         assert 'satellites_html' in source
 
+    def test_every_section_is_ordered_on_narrow_screens(self):
+        """Below the breakpoint the two tracks dissolve and the sections
+        reorder into one column by `order`.  A section missing from that
+        list keeps the default order:0 and jumps to the TOP of the page,
+        ahead of the dome -- which is how .sec-eot shipped in 2.1
+        (issue #5).  So: every sec-* class the template uses must appear
+        in the media query, and the numbers must be a gapless 1..N."""
+        with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
+            used = set(re.findall(r'<section class="(sec-[a-z]+)"', f.read()))
+        with open(os.path.join(self.SKIN_DIR, 'sky.css')) as f:
+            css = f.read()
+        query = css[css.index('@media (max-width: 1159px){'):]
+        query = query[:query.index('\n}')]
+        ordered = dict((m, int(n)) for m, n
+                       in re.findall(r'\.(sec-[a-z]+)\{order:(\d+)\}', query))
+        assert used, 'no sections found in the template'
+        assert used == set(ordered), (
+            'sections missing an order (they would sort to the top): %s'
+            % sorted(used - set(ordered)))
+        assert sorted(ordered.values()) == list(range(1, len(used) + 1))
+
     def test_tap_tooltip_script_wired(self):
         """sky.js turns the SVG <title> hover tooltips into tap-to-show
         chips -- without it every tooltip is dead on a touch screen (no

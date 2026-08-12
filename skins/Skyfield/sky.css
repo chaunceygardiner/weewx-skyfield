@@ -64,10 +64,12 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
    * flex-column items to fit their content; stretch restores full width */
   .main{display:flex; flex-direction:column; align-items:stretch}
   .primary, .rail{display:contents}
+  /* EVERY section needs a number here: order defaults to 0, so a
+   * section left out of this list sorts ahead of the dome. */
   .sec-dome{order:1} .sec-chips{order:2} .sec-satellites{order:3}
   .sec-passchart{order:4} .sec-sunpath{order:5} .sec-ribbons{order:6}
-  .sec-daylength{order:7} .sec-lunation{order:8} .sec-orrery{order:9}
-  .sec-analemma{order:10} .sec-table{order:11}
+  .sec-daylength{order:7} .sec-eot{order:8} .sec-lunation{order:9}
+  .sec-orrery{order:10} .sec-analemma{order:11} .sec-table{order:12}
   .sec-sunpath svg, .sec-orrery svg, .sec-analemma svg,
   .sec-passchart svg{max-width:560px; margin:0 auto}
 }
