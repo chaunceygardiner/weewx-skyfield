@@ -11,6 +11,7 @@ $almanac binder tags any template could use.  The page is self-contained -- inli
 JavaScript libraries and nothing fetched at run time.
 """
 
+import datetime
 import functools
 import logging
 import math
@@ -206,6 +207,28 @@ def _raw(value_helper, unit: str) -> Optional[float]:
 
 def _t_hm(ts: Optional[float]) -> str:
     return time.strftime('%H:%M', time.localtime(ts)) if ts else '&#8212;'
+
+
+def _days_until(now_ts: float, ts: float) -> int:
+    """Whole LOCAL CALENDAR DAYS from now_ts to ts, never negative.
+
+    The count labels a chip whose value line is a calendar date, so it
+    has to be reckoned the way a person reading that date reckons it --
+    by which day of the month the event falls on, not by how many
+    24-hour periods away it is.  Elapsed-seconds arithmetic disagrees
+    with the date beside it twice a day: rounding up calls an event
+    later this evening "in 1 day" (Jacques Terrettaz's report, the
+    2026-08-12 partial solar eclipse, issue #6), and rounding down calls
+    one just after midnight "today".  Differencing the two local dates
+    cannot disagree with a date it is computed from, and it costs
+    nothing to be DST-correct as well: the day a clock shifts is still
+    one day.
+
+    The clamp is belt-and-braces -- every caller passes a next_* event,
+    which cannot fall on an earlier date than now -- but it keeps a
+    stray past timestamp reading "today" rather than "in -1 days"."""
+    return max(0, (datetime.datetime.fromtimestamp(ts).date()
+                   - datetime.datetime.fromtimestamp(now_ts).date()).days)
 
 
 def _comet_tail(x: float, y: float, ux: float, uy: float, color: str) -> str:
@@ -752,7 +775,7 @@ class SkyPage:
         _palette(palette)
 
         def when_str(ts: float) -> str:
-            n = max(0, int(math.ceil((ts - alm.time_ts) / 86400.0)))
+            n = _days_until(alm.time_ts, ts)
             if n == 0:
                 return self._t('today')
             if n == 1:
@@ -2055,7 +2078,15 @@ class SkyPage:
         """The pass countdown, at the resolution a minutes-long event
         needs: 'overhead now' while the pass is in progress, minutes
         under an hour, hours under a day, then the countdown chips'
-        day count."""
+        day count.
+
+        The sub-day branches are a resolution choice on elapsed time --
+        'in 2 h' is what a go-watch reader wants, whichever side of
+        midnight the pass falls on -- but the day count labels a row
+        that also carries the pass DATE, so it is reckoned in calendar
+        days like the countdown chips.  The floor of 1 covers the one
+        hour a year when a fall-back DST day makes 24 elapsed hours land
+        back on today's date."""
         now = alm.time_ts
         if set_ts is not None and rise_ts <= now < set_ts:
             return self._t('overhead now')
@@ -2064,7 +2095,7 @@ class SkyPage:
             return self._t('in {m} min', m=max(1, int(delta // 60)))
         if delta < 86400:
             return self._t('in {h} h', h=int(round(delta / 3600.0)))
-        n = int(math.ceil(delta / 86400.0))
+        n = max(1, _days_until(now, rise_ts))
         if n == 1:
             return self._t('in {n} day', n=1)
         return self._t('in {n} days', n=n)

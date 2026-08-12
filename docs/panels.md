@@ -352,7 +352,9 @@ out).  A configured [comet](tags.md#comets)'s perihelion joins the row (2.1) whe
 lies ahead within a year — the news-cycle countdown; Halley's 2061 date stays quiet until
 its time comes — and the next major [meteor shower](tags.md#meteor-showers) is always
 there, its detail line carrying the moon's peak-night illumination as the interference
-judgment: a bright moon washes out the faint meteors, and the chip says so.  The
+judgment: a bright moon washes out the faint meteors, and the chip says so.  The days-to-go
+line counts local calendar days, so it always agrees with the date above it: an event later
+today reads "today", and one just after midnight reads "in 1 day".  The
 `countdown` wrapper lays the chips out as a wrapping row.
 
 ## The almanac table — `table_html`

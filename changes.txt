@@ -1,8 +1,23 @@
 weewx-skyfield change history
 -----------------------------
 
-2.2 (in progress)
------------------
+2.1.2 (2026/08/12)
+------------------
+- Fixed: a countdown chip disagreed with its own date.  An event later
+  today read "in 1 day" beside today's date -- Jacques Terrettaz saw it
+  on the morning of the 2026-08-12 partial solar eclipse, and on that
+  day's new moon (issue #6).  The day count was computed by rounding
+  elapsed seconds up, which calls anything still ahead of the clock a
+  whole day; rounding down instead would only move the disagreement to
+  the other side of midnight, calling an event at 00:30 tomorrow
+  "today".  The count is now the difference between the two local
+  calendar dates, which is how a reader counts days off the date the
+  chip is already showing, and cannot contradict it.  It is also right
+  across a daylight-saving change, where 23 and 25 elapsed hours are
+  both still one day.  Jacques diagnosed this and proposed the fix.
+  The satellite panel's pass rows, which carry a date too, get the same
+  count: a pass 30 hours out is tomorrow, not in two days.  Below a day
+  those rows keep their finer "in 2 h" / "in 20 min" resolution.
 - The download's size is no longer stated as a total.  The README and
   the Installation page each named a figure for the whole zip, and it
   went stale every release that changed a screenshot -- it was wrong

@@ -473,6 +473,78 @@ class TestPanels:
         assert len(page._memo) == n
 
 
+class TestCountdownDayCount:
+    """A countdown chip's detail line must agree with the calendar date
+    on the line above it.  Jacques Terrettaz reported the 2026-08-12
+    partial solar eclipse reading "in 1 day" beside that morning's own
+    date (issue #6): the count was ceil() over elapsed seconds, which
+    rounds any event later today up to one day.  Rounding down instead
+    just moves the disagreement to the other side of midnight, so the
+    count is differenced between the two LOCAL DATES -- the boundaries
+    below are exactly the two cases ceil() and floor() each get wrong."""
+
+    def _chip(self, html: str, key: str) -> str:
+        m = re.search(r'<div class="count"><span class="k">%s</span>(.*?)</div>'
+                      % re.escape(key), html)
+        assert m, 'no %s chip in %s' % (key, html)
+        return m.group(1)
+
+    def test_days_until_boundaries(self):
+        # Aug 12 2026 08:00 local, the morning Jacques rendered the page.
+        # No DST transition in this window, so the offsets are exact.
+        now = time.mktime((2026, 8, 12, 8, 0, 0, 0, 0, -1))
+        assert wxskyfield_sky._days_until(now, now + 13 * 3600) == 0   # 21:00 today
+        assert wxskyfield_sky._days_until(now, now + 17 * 3600) == 1   # 01:00 tomorrow
+        assert wxskyfield_sky._days_until(now, now + 40 * 3600) == 2   # 00:00 in two days
+        assert wxskyfield_sky._days_until(now, now - 3600) == 0        # clamped, never negative
+
+    def test_dst_day_is_still_one_day(self):
+        """A clock shift does not add or remove a calendar day: 23 elapsed
+        hours across the spring-forward Sunday are still one day, and 25
+        across the fall-back Sunday are still one day."""
+        spring = time.mktime((2026, 3, 7, 12, 0, 0, 0, 0, -1))     # day before
+        assert wxskyfield_sky._days_until(spring, spring + 23 * 3600) == 1
+        fall = time.mktime((2026, 10, 31, 12, 0, 0, 0, 0, -1))
+        assert wxskyfield_sky._days_until(fall, fall + 25 * 3600) == 1
+
+    def test_event_later_today_reads_today(self, almanac):
+        """Jacques's case, end to end: bound to 00:30 on the full moon's
+        own morning, the chip's date is today's and its detail line must
+        say so."""
+        ts = wxskyfield_sky._raw(almanac.next_full_moon, 'unix_epoch')
+        lt = time.localtime(ts)
+        morning = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 30, 0, 0, 0, -1))
+        assert morning < ts, 'fixture full moon must fall later on its own day'
+        chip = self._chip(
+            wxskyfield_sky.SkyPage().countdown_html(almanac(almanac_time=morning)),
+            'full moon')
+        assert time.strftime('%b %-d', lt) in chip
+        assert '>today<' in chip
+
+    def test_event_after_midnight_reads_one_day(self, almanac):
+        """The mirror case, which rounding down gets wrong: bound to 23:30
+        the evening before, the same full moon is hours away but lands on
+        tomorrow's date, and the chip must say tomorrow."""
+        ts = wxskyfield_sky._raw(almanac.next_full_moon, 'unix_epoch')
+        lt = time.localtime(ts)
+        eve = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 30, 0, 0, 0, -1)) - 3600
+        chip = self._chip(
+            wxskyfield_sky.SkyPage().countdown_html(almanac(almanac_time=eve)),
+            'full moon')
+        assert time.strftime('%b %-d', lt) in chip
+        assert '>in 1 day<' in chip
+
+    def test_satellite_pass_day_count(self, almanac, page):
+        """The pass row carries a date too, so its day count is calendar
+        days as well: a pass 30 hours out falls tomorrow, not in two days.
+        Below a day the row keeps its finer elapsed-time resolution."""
+        assert page._sat_when(almanac, TIME_TS + 30 * 3600, None) == 'in 1 day'
+        assert page._sat_when(almanac, TIME_TS + 50 * 3600, None) == 'in 2 days'
+        assert page._sat_when(almanac, TIME_TS + 3 * 3600, None) == 'in 3 h'
+        assert page._sat_when(almanac, TIME_TS + 600, None) == 'in 10 min'
+        assert page._sat_when(almanac, TIME_TS - 60, TIME_TS + 60) == 'overhead now'
+
+
 class TestCatalogDome:
     """The dome plots every catalog star to star_mag_limit -- named or
     not -- while labels stay on named stars.  Since 2.0 the complete
