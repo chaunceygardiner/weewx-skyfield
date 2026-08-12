@@ -1,16 +1,16 @@
 ---
 title: The Sky page
+layout: default
+nav_order: 6
+has_children: true
 description: The planetarium-style showcase page installed with weewx-skyfield — sky dome, rise & set ribbons, sun path, solar year, lunar month, orrery and analemma.
 ---
 
 # The Sky page
 
-[Home](index.md) ·
-[Installation](installation.md) ·
-[Almanac tags](tags.md) ·
-[Sky panels in your skin](panels.md) ·
-[Translating (i18n)](i18n.md) ·
-[GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
+[weewx-skyfield manual](https://chaunceygardiner.github.io/weewx-skyfield/) ·
+[weewx-skyfield on GitHub](https://github.com/chaunceygardiner/weewx-skyfield) ·
+[Report an issue](https://github.com/chaunceygardiner/weewx-skyfield/issues)
 
 ---
 
@@ -46,9 +46,12 @@ it is computed for *your* station's location and elevation, taken automatically 
   box — when it appears, how high it peaks, when it disappears, with the soonest pass
   charted on its own dated sky: the whole sky as it will stand at the pass's peak, the
   pass arced across it;
-- moon phase and illumination, countdowns to the next equinox, solstice, new and full moon —
-  and to the next eclipse visible from your station — Jupiter's central meridian longitudes,
-  Saturn's ring tilt, the constellation each planet stands in, and a full almanac table.
+- a **countdown row** — the next equinox, solstice, new and full moon, the next eclipse
+  visible from your station, and the next major **meteor shower**, whose chip carries the
+  moon's illumination on the peak night as the honest interference judgment; a configured
+  comet's perihelion joins the row when it lies ahead within a year;
+- moon phase and illumination, Jupiter's central meridian longitudes, Saturn's ring tilt,
+  the constellation each planet stands in, and a full almanac table.
 
 ![The Sky page](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/SkyfieldSampleReport.png)
 
@@ -63,73 +66,40 @@ regenerates with live values every report cycle.
 Every panel on the page can also be embedded individually in your own skin — see
 [Using the Sky panels in your own skin](panels.md).
 
-## Configuring the page
+## What appears when you configure more
 
-The page is generated via the `[[SkyfieldReport]]` entry that the installer adds under
-`[StdReport]` in `weewx.conf`.
-
-The `theme` option selects the page's plate: `dark` (the default — the night plate), `light`
-(a paper-atlas plate), or `auto` — light while the sun is up at the moment the page is
-generated, dark otherwise.  The page regenerates each report cycle, so the auto flip follows
-sunrise and sunset within one archive interval; the colors are baked in at generation time,
-not switched in the browser.
-
-```
-[StdReport]
-    [[SkyfieldReport]]
-        theme = auto
-```
-
-The `star_mag_limit` and `star_label_mag` options set the dome's magnitude cutoffs
-(magnitudes run backwards: 6.5 is the naked-eye limit, Sirius is −1.4).  Stars at least
-`star_mag_limit` bright are plotted (default 5.0, roughly 800 stars); named stars at least
-`star_label_mag` bright are labeled (default 2.5).  The dome plots *every* star of the
-bundled Hipparcos catalog down to the limit — a true sky map — with labels on named stars
-and an unnamed star's hover tooltip giving its Hipparcos number.  The whole field is
-computed in one vectorized Skyfield observe, so it costs only a few milliseconds per
-render.  Before 2.0 the dome drew only the named stars unless a full catalog was installed
-alongside; the old defaults restore that sparser look:
-
-```
-[StdReport]
-    [[SkyfieldReport]]
-        star_mag_limit = 2.6     # plot stars at least this bright (default 5.0)
-        star_label_mag = 1.1     # label named stars at least this bright (default 2.5)
-```
-
-The `constellation_lines` option (default `true`) draws the 88 IAU constellations' stick
-figures under the stars, each substantially-risen figure labeled with the constellation's
-name at the centroid of its visible stars — translated through the same
-`[Almanac] [[Constellations]]` table the `.constellation` tag reads.  A setting figure is
-clipped at the horizon rim, planetarium-style.  The figures are distilled from the
-[Stellarium](https://stellarium.org) project's "modern" sky culture (data licensed
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/));
-set `constellation_lines = false` for the plain dome.
-
-With satellites configured (see [Satellites](installation.md#satellites)), the page adds
-two panels.  A Satellites panel gives one card per satellite with its
-[next visible pass](tags.md#satellites): the date and countdown, then "appears WSW ·
-peaks 45° SSW · disappears NE · 6 min"; a satellite with no visible pass in the coming
-week says so honestly.  And a Next Visible Pass chart draws the soonest of those passes on its own
-sky: the whole sky as it will stand at the pass's culmination — one chart, one moment, so
+With [satellites](configuration.md#the-skyfield-section) configured, the page adds two
+panels.  A **Satellites** panel gives one card per satellite with its
+[next visible pass](tag-index.md#satellite-tags): the date and countdown, then "appears WSW ·
+peaks 45° SSW · disappears NE · 6 min"; a satellite with no visible pass in the coming week
+says so honestly.  And a **Next Visible Pass** chart draws the soonest of those passes on its
+own sky: the whole sky as it will stand at the pass's culmination — one chart, one moment, so
 the dashed, time-labeled arc crosses the stars it will actually cross — under a head line
 carrying the satellite's name, the pass's date, its times and its peak altitude.  Its star
-field is cut off at magnitude 3.5, the stars a twilight sky actually shows, since a
-visible pass happens while the sky is only half dark.  The main dome stays strictly the
-current sky, drawing a satellite only as a position dot when one is genuinely overhead at
-generation time — solid when sunlit, a hollow ring when it is inside Earth's shadow; the pass chart disappears when no satellite has a visible pass in the
-coming week.  A station with no `[[Satellites]]` configured renders the page with no
-satellite section at all.  A configured [comet](tags.md#comets) above the horizon plots on
-the dome as a labeled diamond — solid brass when plausibly naked-eye, the hollow ring when
-fainter, its magnitude in the tooltip — and an active
-[meteor shower](tags.md#meteor-showers)'s radiant gets a rayed mark, while the header's
-countdown row always carries the next shower with the moon's peak-night illumination as
-the honest interference judgment.
+field is cut off at magnitude 3.5, the stars a twilight sky actually shows, since a visible
+pass happens while the sky is only half dark.
 
-It is the most computation-hungry page in a typical install (the solar-year chart runs several
-hundred rise/set searches, the analemma evaluates the almanac 54 times).  The
-[result cache](tags.md#the-result-cache) absorbs most of that — the year-scale samples are
-anchored to fixed instants and reused across cycles, so the full price is paid once at
-startup, not every cycle.  If the page is still too heavy for your hardware you can generate
-it less often by setting `report_timing` in the `[[SkyfieldReport]]` section of `weewx.conf`.
-To skip generating it entirely, set `enable = false` there.
+The main dome stays strictly the *current* sky, drawing a satellite only as a position dot
+when one is genuinely overhead at generation time — solid when sunlit, a hollow ring when it
+is inside Earth's shadow.  The pass chart disappears when no satellite has a visible pass in
+the coming week, and a station with no satellites configured renders the page with no
+satellite section at all.
+
+A configured [comet](tag-index.md#comets-only) above the horizon plots on the dome as a
+labeled diamond — solid brass when plausibly naked-eye, a hollow ring when fainter, its
+magnitude in the tooltip.  An active
+[meteor shower](tag-index.md#meteor-shower-attributes)'s radiant gets a rayed mark, and the
+header's countdown row always carries the next shower with the moon's peak-night illumination
+as the honest interference judgment: a bright moon washes out the faint meteors, and the chip
+says so.
+
+## Configuring it
+
+The page's options — `theme`, `star_mag_limit`, `star_label_mag`, `constellation_lines`,
+`lang`, `report_timing` and `enable` — all live in the `[[SkyfieldReport]]` stanza and are
+documented on the [Configuration](configuration.md#the-sky-pages-report-stanza) page.
+
+It is the busiest single page this extension generates, and
+[Performance](performance.md#what-the-sky-page-costs) explains where the time goes, why the
+[result cache](performance.md#the-result-cache) absorbs most of it, and which options move
+the needle on hardware that is struggling.

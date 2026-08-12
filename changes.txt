@@ -1,6 +1,70 @@
 weewx-skyfield change history
 -----------------------------
 
+2.2 (in progress)
+-----------------
+- The user manual is rebuilt.  It goes from seven pages to seventeen,
+  on a real sidebar with full-text search, and gains the pages it was
+  missing: Configuration (every option in one place, gathered from the
+  three pages that each held part of it), Tag index (all 125 tags this
+  extension serves, A to Z, with each one's type, units and the release
+  it arrived in), Values, units and types (degrees vs radians, the
+  ValueHelper twins, and the .raw trap that silently rescales a
+  duration), Recipes (paste-able template snippets), Accuracy and
+  conventions, Upgrading, Live-updating pages, Performance, Glossary
+  and Troubleshooting.  Nothing was dropped along the way: the result
+  cache, the differences from PyEphem and the DE421 rationale moved to
+  pages of their own, and Known Skyfield Issues is now a section of
+  Troubleshooting, with its old URL redirecting there.
+  Every page carries a link to the project on GitHub, and the theme's
+  own advertisement is gone from the footer.
+- The Sky page's credit line now names the sources of the data it
+  draws: CelesTrak for satellite orbital elements (when satellites are
+  configured), the Minor Planet Center for comet elements (when comets
+  are), and the International Meteor Organization for the shower list.
+  Both new strings are translated in all nine bundled languages.
+- The README is a front door rather than a second copy of the manual.
+  It keeps the description, the highlights, installation, credits and
+  licensing, and links to the manual for the detail it used to
+  duplicate -- one place for each fact instead of two that drift apart.
+  The description now introduces the Sky page -- what it is, where it
+  is published and that it redraws every report cycle -- instead of
+  dropping the screenshot in unexplained, as does the manual's home
+  page, and a row of buttons at the top goes to the manual, the
+  current release's zip and the issue tracker.  The ready-to-paste
+  block of famous comets moved to the manual's Configuration page.
+- Skins that embed the Sky panels: the panels page now documents
+  $sky_page.footer_html(), which it had never covered.  That is the
+  credit line -- and it carries the ESA acknowledgment that showing
+  Hipparcos data requires -- so an embedding page should include it.
+- The Translations page now says who translated what.  A per-language
+  table gives each of the eight bundled translations its file and its
+  status, crediting Gert Andersen for the Danish, Christian (peters77)
+  for the German review and Jacques Terrettaz for the French -- named
+  until now only in the README -- and saying plainly which files are
+  still awaiting a native speaker.  Each review is dated to the release
+  it covered (1.14, 1.15, 1.17), because the strings added since --
+  satellites in 2.0, comets and meteor showers in 2.1 -- are complete
+  and tested but not yet read by a native speaker; the page says so
+  rather than implying the whole file was reviewed.  The page also
+  stops calling the count nine: eight translations ship, beside
+  lang/en.conf, which is the reference dictionary rather than a
+  translation.
+- The test suite keeps the manual and the code in lockstep.
+  Twenty-four audits now fail when the two disagree: a served tag
+  missing from the tag index, a broken internal link or anchor between
+  manual pages, a [Skyfield] option or a Sky page default that does not
+  match what the code actually reads, a documented option nothing reads,
+  an undocumented $sky_page panel, a translation dictionary that has
+  drifted from lang/en.conf, an installer default the docs quote
+  wrongly, a documented constant -- the refresh intervals, the element
+  age limit, the visible-pass altitude -- that no longer matches the
+  code, a manual URL written in a form GitHub Pages does not serve, a
+  page missing its title or its link line, a broken README button, a
+  language table that has drifted from the shipped lang files, and
+  a recipe whose tag chain no longer evaluates.  Documentation drift is
+  a test failure now, rather than something a user finds.
+
 2.1 (2026/08/10)
 -----------------
 - ACTION REQUIRED (isolated networks only): 2.1 adds this extension's

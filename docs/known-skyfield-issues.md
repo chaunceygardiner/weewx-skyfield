@@ -1,56 +1,12 @@
 ---
-title: Known Skyfield issues — weewx-skyfield
-description: Upstream Skyfield library issues you might notice while running weewx-skyfield — what they look like, why they are harmless here, and their status.
+title: Known Skyfield issues
+layout: default
+nav_exclude: true
+redirect_to: /troubleshooting.html
+description: Moved — upstream Skyfield issues are now a section of the Troubleshooting page.
 ---
 
 # Known Skyfield issues
 
-[Home](index.md) ·
-[Installation](installation.md) ·
-[Almanac tags](tags.md) ·
-[The Sky page](sky-page.md) ·
-[Sky panels in your skin](panels.md) ·
-[Translating (i18n)](i18n.md) ·
-[GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
-
----
-
-This page collects issues in the underlying [Skyfield](https://rhodesmill.org/skyfield/)
-library that you might notice while running weewx-skyfield.  None require action; entries
-are removed as upstream releases fix them.
-
-## A rare `RuntimeWarning` from `almanac.py` line 339
-
-Very occasionally, report generation prints this warning — in the console when running
-reports by hand (`weectl report run`), or in the log of a running WeeWX (at most once per
-WeeWX start, since Python deduplicates warnings):
-
-```
-skyfield/almanac.py:339: RuntimeWarning: invalid value encountered in divide
-  return - 2*c / (b + sign * sqrt(discriminant))
-```
-
-**This is an upstream Skyfield bug, tracked as
-[skyfield issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114)**, and
-it affects Skyfield releases through 1.54.  The final refinement step of
-Skyfield's rise/set solver (`find_risings`/`find_settings`) fits a parabola through its
-last two altitude samples; when the solver's iteration happens to land, to the last
-floating-point bit, exactly on the horizon, that fit degenerates to a 0/0 division.  It is
-a pure floating-point coincidence: it can strike any body, any latitude and any date, and
-the affected dates even differ between operating systems, NumPy versions and CPU math
-libraries.  Inside Skyfield, the affected event's time becomes NaN.
-
-**weewx-skyfield already contains the failure**: it discards any event time that is not a
-finite time within the day being searched, so the worst possible outcome is a single rise
-or set tag coming up empty for a while — and in practice pages render complete: on the
-one production occurrence that prompted this page, every rise, set, transit and twilight
-value was present.  No configuration change, downgrade or workaround is needed.
-
-weewx-skyfield's author diagnosed the root cause — with a deterministic
-reproduction — in
-[issue #1114](https://github.com/skyfielders/python-skyfield/issues/1114) and submitted
-[pull request #1140](https://github.com/skyfielders/python-skyfield/pull/1140) with the
-fix and a regression test.  **Skyfield merged the fix on August 4, 2026, closing the
-issue, and shipped it in Skyfield 1.55 on August 7, 2026** — upgrading to Skyfield 1.55
-or later makes the warning disappear.  Upgrading is routine — see
-[Upgrading Skyfield](installation.md#upgrading-skyfield).
+This page has moved into [Troubleshooting](troubleshooting.md#known-skyfield-issues), which
+also covers registration problems, `N/A` tags, and what each log message means.

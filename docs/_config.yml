@@ -1,6 +1,50 @@
 # GitHub Pages configuration for https://chaunceygardiner.github.io/weewx-skyfield/
-theme: jekyll-theme-primer
 title: weewx-skyfield
-description: "The drop-in upgrade for WeeWX's almanac -- Skyfield-powered $almanac tags, stars, eclipses, and a planetarium-style Sky page"
+description: >-
+  The drop-in upgrade for WeeWX's almanac -- Skyfield-powered $almanac tags,
+  the complete Hipparcos star catalog, satellites, comets, meteor showers,
+  eclipses, and a planetarium-style Sky page.
+url: "https://chaunceygardiner.github.io"
+baseurl: "/weewx-skyfield"
+
+# Pinned so weewx-skyfield, weewx-celestial and weewx-loopdata cannot drift
+# apart when upstream changes.
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+# GitHub Pages enables jekyll-relative-links by default; naming it here (and
+# every other default this site relies on) is what makes a local build match
+# the live site -- without it, the .md links between pages stay unconverted.
 plugins:
+  - jekyll-remote-theme
   - jekyll-sitemap
+  - jekyll-relative-links
+  - jekyll-redirect-from
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "weewx-skyfield on GitHub":
+    - "https://github.com/chaunceygardiner/weewx-skyfield"
+aux_links_new_tab: true
+
+# External links shown at the bottom of the left sidebar nav, on every page.
+nav_external_links:
+  - title: weewx-skyfield on GitHub
+    url: https://github.com/chaunceygardiner/weewx-skyfield
+  - title: Download weewx-skyfield.zip
+    url: https://github.com/chaunceygardiner/weewx-skyfield/releases/latest/download/weewx-skyfield.zip
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  important:
+    title: Important
+    color: red
+  tip:
+    title: Tip
+    color: green
+
+footer_content: >-
+  weewx-skyfield is Copyright &copy; 2022&ndash;2026 John A Kline and is
+  licensed under the GNU Public License v3.

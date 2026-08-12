@@ -1,16 +1,16 @@
 ---
-title: Using the Sky panels in your own skin
+title: Panels in your own skin
+layout: default
+parent: The Sky page
+nav_order: 1
 description: Embedding weewx-skyfield's $sky_page panels — sky dome, ribbons, sun path, orrery, analemma, solar year, lunation and more — in any WeeWX skin.
 ---
 
 # Using the Sky panels in your own skin
 
-[Home](index.md) ·
-[Installation](installation.md) ·
-[Almanac tags](tags.md) ·
-[The Sky page](sky-page.md) ·
-[Translating (i18n)](i18n.md) ·
-[GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
+[weewx-skyfield manual](https://chaunceygardiner.github.io/weewx-skyfield/) ·
+[weewx-skyfield on GitHub](https://github.com/chaunceygardiner/weewx-skyfield) ·
+[Report an issue](https://github.com/chaunceygardiner/weewx-skyfield/issues)
 
 ---
 
@@ -75,6 +75,11 @@ $sky_page.dome_svg($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_dome.png" width="600" alt="The sky dome panel">
 
+<img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_dome_comet.png" width="600" alt="The sky dome with a comet plotted as a tailed diamond">
+
+*The same panel with a comet risen: a labeled diamond with its tail streaming anti-sunward,
+hollow because this one is fainter than naked-eye.*
+
 Everything above the horizon right now, in sky-chart orientation — north at the top, east at
 the left, as if lying on your back looking up: the sun, the moon drawn at its true phase, the
 planets, and the stars sized by magnitude, with hover coordinates on every
@@ -105,7 +110,7 @@ chart, one instant: an upcoming [visible pass](tags.md#satellites) is charted by
 [`pass_chart_html`](#the-next-visible-pass-chart--pass_chart_html) below, at the pass's own epoch.
 The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
 `constellation_lines = false` turns the figures off — see
-[Configuring the page](sky-page.md#configuring-the-page); when embedding the panels in your
+[Configuration](configuration.md#the-sky-pages-report-stanza); when embedding the panels in your
 own skin, set them in that skin's report section the same way.
 
 An embedding skin that repositions dome marks between report cycles — weewx-celestial's live
@@ -167,8 +172,8 @@ $sky_page.ribbons_svg($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_ribbons.png" width="700" alt="Rise and set ribbons panel">
 
-Today's above-horizon span for the sun, moon and planets — and, new in 2.1, every configured
-[comet](tags.md#comets) with elements, as a brass bar — over background bands of tonight's
+Today's above-horizon span for the sun, moon and planets — and every configured
+[comet](tags.md#comets) with elements (2.1), as a brass bar — over background bands of tonight's
 civil, nautical and astronomical twilight (the USNO geometric definitions).  The ivory tick on
 each bar is the transit; the vertical brass line is now, and the rise → set times are listed
 at the right.
@@ -221,7 +226,7 @@ $sky_page.eot_svg($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_eot.png" width="440" alt="Equation of time panel">
 
-New in 2.1: the equation of time across the year — sundial minus clock, per the USNO sign —
+The equation of time across the year (2.1) — sundial minus clock, per the USNO sign —
 sampled at the analemma's own instants, local standard noon each week.  The double-humped
 curve is the sum of Earth's tilt and its elliptical orbit, the same pair that draws the
 analemma's figure-eight; the brass point is today, labeled with today's standard-noon
@@ -256,7 +261,7 @@ are local *clock* time, so the daylight-saving steps in spring and fall are real
 deliberate; the dashed solar-noon curve carries the equation of time (and the same DST steps).
 Polar day and polar night render correctly as all-day and no-day columns.  This is the page's
 most expensive panel — several hundred rise/set searches — but they are anchored to fixed
-weekly instants, so the [result cache](tags.md#the-result-cache) reuses them across report
+weekly instants, so the [result cache](performance.md#the-result-cache) reuses them across report
 cycles and the full cost is paid only on the first render after startup.
 
 ## The moon disc — `moon_svg`
@@ -284,7 +289,7 @@ principal phases ticked and dated, today's disc ringed in brass, and every disc 
 date and illumination on hover.  Waxing and waning fall on the correct limb for your
 hemisphere, matching the moon disc above.
 
-New in 2.1, the bundled page follows the strip with `$sky_page.moon_apsides_html($almanac)`:
+The bundled page follows the strip with `$sky_page.moon_apsides_html($almanac)` (2.1):
 the quiet next-perigee/next-apogee line, topped by a brass **supermoon** callout whenever the
 next full moon falls within a day of perigee.  Like the satellite pass cards, the callout is
 anticipation — it appears ahead of the event and leaves with it.  The styling rides the
@@ -304,8 +309,8 @@ bundled languages.
 A summary card per body: daylight (length, sun rise → set, civil dusk and astronomical dark),
 then each planet with its rise time or current position, the constellation it stands in,
 magnitude, distance and elongation — plus Jupiter's central meridian longitudes and Saturn's
-ring tilt.  New in 2.1, every configured [comet](tags.md#comets) with elements gets a
-brass-dotted chip of the same shape (its magnitude a dash when the MPC row has no
+ring tilt.  Every configured [comet](tags.md#comets) with elements gets a
+brass-dotted chip (2.1) of the same shape (its magnitude a dash when the MPC row has no
 parameters), and the bundled page's eyebrow reads "Sun, Planets & Comets" when any comet is
 configured.  The `chips` wrapper provides the single-column layout.
 
@@ -343,7 +348,7 @@ can skip the whole section when there are none — the bundled page does exactly
 Date and days-to-go chips for the next new moon, full moon, equinox and solstice, plus the
 next eclipse visible from the station (lunar or solar, whichever comes first, labeled with its
 locally seen type; its date carries the year, since the next visible eclipse can be years
-out).  New in 2.1, a configured [comet](tags.md#comets)'s perihelion joins the row when it
+out).  A configured [comet](tags.md#comets)'s perihelion joins the row (2.1) when it
 lies ahead within a year — the news-cycle countdown; Halley's 2061 date stays quiet until
 its time comes — and the next major [meteor shower](tags.md#meteor-showers) is always
 there, its detail line carrying the moon's peak-night illumination as the interference
@@ -361,9 +366,34 @@ judgment: a bright moon washes out the faint meteors, and the chip says so.  The
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_table.png" width="700" alt="Almanac table panel">
 
 Rise, transit, set, time up, current altitude and azimuth, magnitude and distance for the sun,
-moon and planets — and, new in 2.1, every configured [comet](tags.md#comets) with elements,
+moon and planets — and every configured [comet](tags.md#comets) with elements (2.1),
 brass-dotted, its magnitude a dash when the MPC row carries no parameters.  The `tablewrap`
 wrapper lets the table scroll sideways on narrow screens instead of breaking the page.
+
+## The footer credit — `footer_html`
+
+```
+$sky_page.footer_html()
+```
+
+The credit line the bundled page carries, and the one panel you should copy if you embed any
+of the others: it names the libraries and data sources that actually produced the page —
+Skyfield, JPL's DE421, the IAU-CSN star names, the Hipparcos catalog, the Stellarium sky
+culture, CelesTrak for satellite elements, the Minor Planet Center for comet elements, and
+the IMO for the meteor shower data — and the ESA acknowledgment is
+[required](index.md#licensing) exactly when Hipparcos data is shown, which this line handles
+for you.
+
+Most of those are conditional on what the page actually drew: the star credits appear only
+with a live catalog, Stellarium only when the figures are on *and* the lines file loaded,
+CelesTrak only with satellites configured, the Minor Planet Center only with comets.  The
+IMO credit is unconditional, because the shower list is built in and the countdown row always
+carries the next shower.  Nothing is credited for data the page did not use.
+
+It is also a diagnostic.  The full credit appears only when the registered Skyfield almanac
+and its star catalog are live; if the almanac is not registered, or the star catalog failed to
+load, the footer says *that* instead and points at the weewxd log.  A page rendering off the
+built-in almanac's fall-through therefore admits it in print rather than looking correct.
 
 ## Helpers — `header_sub` and `sun_is_up`
 

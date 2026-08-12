@@ -19,9 +19,12 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
+
+from typing import List
 
 import pytest
 
@@ -3127,3 +3130,58 @@ class TestInMemoryEphemeris:
         assert 399 in kernel.codes
         # The SPK factory swap must have been restored.
         assert skyfield.jpllib.SPK is wxskyfield.jplephem.spk.SPK
+
+
+# ── the manual's recipes ────────────────────────────────────────────────
+
+def _recipe_expressions() -> List[str]:
+    """Every $almanac... chain in docs/recipes.md, as evaluable Python.
+
+    The recipes page tells readers its snippets are checked against a real
+    almanac; this is that check.  Cheetah control flow and the snippets'
+    local variables ($pass, $comet) are skipped -- what is verified is that
+    every chain rooted at $almanac resolves and produces a value."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'docs', 'recipes.md')
+    with open(path, 'r') as f:
+        text = f.read()
+    found = []
+    for raw in re.findall(r'\$almanac[A-Za-z0-9_.()=\-,"%\' ]*', text):
+        # A chain ends at the first space outside parentheses -- inside
+        # them a space is legitimate ("%B %e, %Y"), outside it is prose.
+        depth, cut = 0, len(raw)
+        for i, ch in enumerate(raw):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            elif ch == ' ' and depth == 0:
+                cut = i
+                break
+        expr = raw[:cut].rstrip('.,;:%')
+        if expr.count('(') != expr.count(')') or expr == '$almanac':
+            continue
+        found.append(expr[1:])          # drop the leading $
+    return sorted(set(found))
+
+
+class TestManualRecipes:
+    """docs/recipes.md promises its tag chains evaluate.  Keep that true."""
+
+    def test_found_the_recipes(self):
+        exprs = _recipe_expressions()
+        assert len(exprs) > 15, 'only found %d chains -- did recipes.md move?' % len(exprs)
+
+    @pytest.mark.parametrize('expression', _recipe_expressions())
+    def test_recipe_chain_evaluates(self, almanac, expression):
+        value = eval(expression, {'almanac': almanac})
+        assert value is not None
+        if isinstance(value, wxskyfield.SkyfieldAlmanacBinder):
+            # A bare body binder ($almanac.halley, assigned to a snippet's
+            # local and then asked for attributes) is a legitimate
+            # intermediate.  It deliberately refuses to render by itself.
+            return
+        # A ValueHelper with no value is a legitimate answer (N/A); what
+        # must not happen is an exception or an empty rendering of a tag
+        # that should have one.
+        str(value)

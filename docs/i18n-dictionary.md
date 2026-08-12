@@ -1,3 +1,26 @@
+---
+title: The dictionary
+layout: default
+parent: Translations
+nav_order: 1
+description: Every translatable string in weewx-skyfield's Sky page and almanac — the [Texts] keys, the body names, the constellations and the meteor showers.
+---
+
+# The dictionary
+
+[weewx-skyfield manual](https://chaunceygardiner.github.io/weewx-skyfield/) ·
+[weewx-skyfield on GitHub](https://github.com/chaunceygardiner/weewx-skyfield) ·
+[Report an issue](https://github.com/chaunceygardiner/weewx-skyfield/issues)
+
+---
+
+Every string the Sky page and the almanac can translate.  [Translations](i18n.md) explains
+the mechanism and how to start a new language; this page is the reference list.
+
+The complete reference dictionary, as shipped in 2.1 (`skins/Skyfield/lang/en.conf` in the
+installed extension is always the authoritative copy for your version):
+
+```ini
 # skins/Skyfield/lang/en.conf
 #
 # English -- the Sky page's reference dictionary.  Every string the page
@@ -307,3 +330,4 @@
     "%A, %B %-d %Y, %-H:%M %Z" = "%A, %B %-d %Y, %-H:%M %Z"
     "moon {pct}%" = "moon {pct}%"
     "{name} radiant — ZHR {zhr}, peak {date}" = "{name} radiant — ZHR {zhr}, peak {date}"
+```

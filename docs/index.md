@@ -1,22 +1,19 @@
 ---
-title: weewx-skyfield — The drop-in upgrade for WeeWX's almanac
+title: Home
+layout: default
+nav_order: 1
+permalink: /
 description: Skyfield-powered $almanac tags, stars, satellites, comets, eclipses, and a planetarium-style Sky page for WeeWX 5.2+.
 ---
 
-# weewx-skyfield
+# weewx-skyfield — The drop-in upgrade for WeeWX's almanac
 
 **The drop-in upgrade for WeeWX's almanac** — Skyfield-powered `$almanac` tags, stars,
 satellites, comets, eclipses, and a planetarium-style Sky page.
 
-[Installation](installation.md) ·
-[Almanac tags](tags.md) ·
-[The Sky page](sky-page.md) ·
-[Sky panels in your skin](panels.md) ·
-[Translating (i18n)](i18n.md) ·
-[Known Skyfield issues](known-skyfield-issues.md) ·
-[GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
-
----
+[View on GitHub](https://github.com/chaunceygardiner/weewx-skyfield){: .btn .btn-primary }
+[Download weewx-skyfield.zip](https://github.com/chaunceygardiner/weewx-skyfield/releases/latest/download/weewx-skyfield.zip){: .btn }
+[Report an issue](https://github.com/chaunceygardiner/weewx-skyfield/issues){: .btn }
 
 weewx-skyfield replaces WeeWX's built-in almanac (PyEphem or weeutil) for report
 generation.  Report tags such as `$almanac.sunrise`, `$almanac.moon.transit`,
@@ -29,6 +26,16 @@ which is deprecated by its own author in favor of Skyfield.
 No skin changes are needed: the extension answers the same `$almanac` tags as the built-in
 almanac.  Install it, restart WeeWX, and every report generated from then on uses Skyfield
 values.
+
+Installing the extension also installs **The Sky**, pictured below — a planetarium-style
+page drawn entirely from your station's own latitude, longitude and elevation, published at
+`<HTML_ROOT>/skyfield/index.html` and regenerated with live values every report cycle.  It
+is a showcase for what the almanac now knows: the sky above you right now, today's rise and
+set times, the year's arc of the sun, the current lunation, the next satellite pass.
+Nothing on it is fetched from anywhere — the page is self-contained HTML and inline SVG —
+and every panel on it can be dropped into a skin of your own.
+
+[Tour the Sky page](sky-page.md) · [embed its panels](panels.md)
 
 ![The Sky page](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/SkyfieldSampleReport.png)
 
@@ -62,10 +69,10 @@ values.
 - **Eclipses and constellations** — tag families with no PyEphem counterpart at all:
   `$almanac.next_eclipse` finds the next eclipse *visible from your station*, and every body
   reports the constellation it stands in (`$almanac.saturn.constellation`).
-- **The Sky page** — a bundled, self-contained, planetarium-style showcase page computed for
-  your station's location: a full-sky-map dome, rise & set ribbons, the sun's path, the solar
-  year, the lunar month, an orrery, an analemma, satellite pass predictions and more.
-  [Tour the page](sky-page.md), or
+- **The Sky page** (pictured above) — a full-sky-map dome, rise & set ribbons, the sun's
+  path, the solar year, the lunar month, an orrery, an analemma, an equation-of-time curve,
+  satellite pass predictions and a countdown row for the next equinox, eclipse and meteor
+  shower.  [Tour the page](sky-page.md), or
   [embed its panels in your own skin](panels.md).
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are fully translatable through WeeWX's own lang files, with
@@ -79,7 +86,36 @@ values.
   running almanac; the new files take effect on the restart that follows the install.
 - **Fast.**  A transparent result cache reuses expensive rise/set searches within and across
   report cycles — on a heavy eight-page site, template generation dropped from ~17.7 s per
-  report cycle to ~4.6 s.  Details under [the result cache](tags.md#the-result-cache).
+  report cycle to ~4.6 s.  Details under [the result cache](performance.md#the-result-cache).
+
+## The manual
+
+| Start here | |
+|---|---|
+| [Installation](installation.md) | Install, upgrade Skyfield, confirm it took, uninstall |
+| [Configuration](configuration.md) | Every option in one place, with its default |
+| [Upgrading](upgrading.md) | What an existing user needs to know, release by release |
+
+| Using the almanac | |
+|---|---|
+| [Almanac tags](tags.md) | What the tag families mean |
+| [Tag index](tag-index.md) | Every tag A–Z: type, units, and the release it arrived in |
+| [Values, units and types](values-and-units.md) | Degrees vs radians, ValueHelpers, and the `.raw` trap |
+| [Recipes](recipes.md) | Paste-able template snippets |
+| [Accuracy and conventions](accuracy.md) | Where this differs from PyEphem, and why |
+
+| The page, and beyond it | |
+|---|---|
+| [The Sky page](sky-page.md) | The bundled showcase page, panel by panel |
+| [Panels in your own skin](panels.md) | Embedding `$sky_page` in any skin |
+| [Live-updating pages](live-pages.md) | Driving a continuously-updating page with weewx-loopdata |
+
+| Reference | |
+|---|---|
+| [Translations](i18n.md) | The eight bundled translations, and how to add one |
+| [Performance](performance.md) | The result cache, and tuning for small hardware |
+| [Glossary](glossary.md) | Transit, elongation, ZHR — the vocabulary this manual uses |
+| [Troubleshooting](troubleshooting.md) | Symptoms, log messages, and known Skyfield issues |
 
 ## Requirements
 
@@ -156,6 +192,10 @@ provides the positions of the sun, moon, and planets; the **European Space Agenc
 whose Hipparcos mission produced the star catalog, and the **CDS (Strasbourg astronomical Data
 Centre)**, which distributes it via VizieR; **[CelesTrak](https://celestrak.org)**
 (T.S. Kelso), whose GP element service supplies the satellite orbital elements; the
+**[Minor Planet Center](https://www.minorplanetcenter.net)**, whose CometEls.txt supplies
+the comet orbital elements; the
+**[International Meteor Organization (IMO)](https://www.imo.net)**, whose working list of
+visual meteor showers supplies the shower dates, radiants, ZHRs and parent bodies; the
 **[Stellarium](https://stellarium.org) project's contributors**, whose "modern" sky culture
 supplies the constellation stick figures; the
 **International Astronomical Union (IAU)**
@@ -163,8 +203,10 @@ Working Group on Star Names, whose Catalog of Star Names supplies the named-star
 **U.S. Naval Observatory (USNO)** and **Jean Meeus**, whose published definitions and
 algorithms are the reference for rise/set, twilight, and other almanac conventions; and
 **Tom Keffer, Matthew Wall, and the WeeWX project**, whose almanac framework this extension
-plugs into.  **Gert Andersen** contributed the Danish translation; **Christian (peters77)**
-reviewed the German, and **Jacques Terrettaz** the French.
+plugs into.  **Gert Andersen** contributed the Danish translation and
+**Christian (peters77)** reviewed the German.  **Jacques Terrettaz** reviewed the French,
+suggested the dome's constellation figures, and spotted that bright unnamed stars were
+leaving holes in them — which is why the dome now draws the complete catalog.
 
 ## Licensing
 

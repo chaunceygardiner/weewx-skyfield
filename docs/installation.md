@@ -1,16 +1,15 @@
 ---
-title: Installing weewx-skyfield
+title: Installation
+layout: default
+nav_order: 2
 description: Installation, configuration and Skyfield-upgrade instructions for the weewx-skyfield WeeWX extension.
 ---
 
 # Installation
 
-[Home](index.md) ·
-[Almanac tags](tags.md) ·
-[The Sky page](sky-page.md) ·
-[Sky panels in your skin](panels.md) ·
-[Translating (i18n)](i18n.md) ·
-[GitHub project](https://github.com/chaunceygardiner/weewx-skyfield)
+[weewx-skyfield manual](https://chaunceygardiner.github.io/weewx-skyfield/) ·
+[weewx-skyfield on GitHub](https://github.com/chaunceygardiner/weewx-skyfield) ·
+[Report an issue](https://github.com/chaunceygardiner/weewx-skyfield/issues)
 
 ---
 
@@ -54,6 +53,16 @@ weewx-skyfield requires Python 3.9 or later, WeeWX 5.2 or later, and the
 
 4. Restart WeeWX.
 
+5. Confirm it took.  The extension announces itself in the log; this is the line that says
+   your reports are now using Skyfield:
+
+   ```
+   Skyfield almanac registered; reports will use Skyfield for almanac computations.
+   ```
+
+   If that line is absent, one of the [startup messages](troubleshooting.md#startup-messages)
+   says why — an older WeeWX, an older Skyfield, or `enable = false`.
+
 Reports generated from then on (e.g., the Seasons skin's Celestial page) use Skyfield almanac
 values.  No skin changes are needed: the extension answers the same `$almanac` tags as the
 built-in almanac.  [The Sky page](sky-page.md) appears alongside your existing reports at
@@ -86,48 +95,13 @@ old, install with pip as described above instead.
 
 ## Configuration
 
-The installer adds a `[Skyfield]` section to `weewx.conf` with the defaults:
+The installer adds a `[Skyfield]` section to `weewx.conf` and a `[[SkyfieldReport]]` stanza
+under `[StdReport]`.  Both, and every option in them, are documented on one page:
+**[Configuration](configuration.md)**.
 
-```
-[Skyfield]
-    enable = true
-    satellite_downloads = true
-    comet_downloads = true
-    [[Satellites]]
-        iss = 25544
-        tiangong = 48274
-    [[Comets]]
-        halley = 1P
-        hale_bopp = C/1995 O1
-```
-
-- `enable`: When true (the default), the Skyfield almanac is registered and reports are
-  generated with Skyfield almanac values rather than WeeWX's built-in PyEphem/weeutil almanac.
-- `satellite_downloads`: When true (the default), satellite orbital elements are fetched from
-  CelesTrak — at install, at any weewxd startup that finds them missing or stale, then about
-  every three hours.  Set it false on an isolated network; see [Satellites](#satellites)
-  below for what that changes.
-- `comet_downloads`: When true (the default), the MPC's CometEls.txt is fetched — at install,
-  at any weewxd startup that finds it missing or stale, then about every two days.  Same
-  isolated-network story; see [Comets](#comets) below.
-- `[[Satellites]]`: tag name = NORAD catalog number, one line per satellite.  This one list
-  drives both the [satellite tags](tags.md#satellites) and the fetch list.
-- `[[Comets]]`: tag name = MPC designation, one line per comet — `halley = 1P`,
-  `tsuchinshan_atlas = C/2023 A3`; see the [comet tags](tags.md#comets) for the matching
-  rules, and the README's Comets section for a ready-to-paste block of famous comets.
-
-These are the section's only entries — anything else there draws a log warning and is
-ignored.  (The `stars` option was removed in 2.0: the complete star catalog now ships with
-the extension, and stars are simply always available.)  The Sky page's options (`theme`,
-`star_mag_limit`, `star_label_mag`, `constellation_lines`, `lang`) are
-*report* options and belong under `[StdReport]` `[[SkyfieldReport]]`.
-
-(This is weewx-skyfield's own top-level `[Skyfield]` section.  It is unrelated to the
-`[[Skyfield]]` subsection of `[Almanac]` used by the independent weewx-skyfield-almanac
-extension.)
-
-The Sky page has its own `[[SkyfieldReport]]` entry under `[StdReport]` — see
-[The Sky page](sky-page.md#configuring-the-page) for `enable` and `report_timing` there.
+The two sections below cover what the satellite and comet options *do* — where the orbital
+elements come from, how often they refresh, and how to run without any network access at
+all.
 
 ## Satellites
 
@@ -189,7 +163,7 @@ then read "N/A" with a once-per-crossing log warning naming it — see the
 
 Nothing to do: as of 2.0 the complete Hipparcos catalog ships with the extension (as
 `wxskyfield_stars.dat.gz`), so every catalog star is addressable by number
-(`$almanac.hip_57939.rise`) and [The Sky page's dome](sky-page.md#configuring-the-page)
+(`$almanac.hip_57939.rise`) and [The Sky page's dome](configuration.md#the-sky-pages-report-stanza)
 plots the whole field down to `star_mag_limit` out of the box.  Before 2.0 this took
 downloading `hip_main.dat` yourself and placing it in WeeWX's user directory; if you did,
 that copy is now redundant — the extension no longer reads it, and it can be deleted.
@@ -201,25 +175,20 @@ versions of Python 3 earlier than 3.9.
 
 ## Why the DE421 ephemeris (and not DE440)?
 
-JPL has published newer ephemerides since DE421 (2008) — notably DE440 and its shorter-span
-excerpt DE440s (2020), which incorporate another decade of spacecraft ranging data.  This
-extension bundles DE421 anyway, deliberately:
+Short answer: the accuracy difference is invisible at the precision a report displays, and
+DE421 is half the size.  The full reasoning, with the arcsecond arithmetic, is on
+[Accuracy and conventions](accuracy.md#why-the-de421-ephemeris-and-not-de440).
 
-- **The accuracy difference is invisible here.**  DE440's corrections are largest for the
-  outer planets and amount to well under an arcsecond as seen from Earth for every body this
-  almanac serves.  An arcsecond moves a rise or set time by about a fifteenth of a second —
-  while atmospheric refraction at the horizon, which no ephemeris can predict, makes every
-  real rise and set uncertain by tens of seconds.  At the precision reports display, DE421 and
-  DE440 are indistinguishable.
-- **Half the size.**  DE421 is about 16 MB; DE440s is about 32 MB.  The difference would be
-  paid in the release zip and on disk — for corrections no report could display.
-- **DE421's span is enough.**  It covers mid-1899 through 2053, and a weather station's
-  almanac lives within a few years of now; times outside the span fall through to PyEphem as
-  described in the [tag reference](tags.md#fallback-behavior).  DE440s would extend the span
-  to 1849–2150 — the only difference a user could ever see.
+## Uninstalling
 
-Should the 2053 horizon ever draw near, swapping the bundled `.bsp` for a newer one is a small
-change: Skyfield does not care about the ephemeris file's name.
+```
+weectl extension uninstall weewx-skyfield
+```
+
+Reports revert to WeeWX's built-in almanac on the next restart.  One thing is deliberately
+left behind: the cached orbital elements in the `wxskyfield` directory beside your SQLite
+database.  Delete that directory yourself if you want them gone.  See
+[Upgrading](upgrading.md) for what changes between releases.
 
 ## Testing
 

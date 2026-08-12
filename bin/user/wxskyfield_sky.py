@@ -734,8 +734,15 @@ class SkyPage:
                 parts.append(self._t('star catalog unavailable — see the weewxd log'))
             else:
                 parts.append(self._t('star catalog disabled'))
+            if sky.satellites:
+                parts.append(self._t('Satellite elements: CelesTrak'))
             if sky.comets:
                 parts.append(self._t('Comet elements: Minor Planet Center'))
+            # The shower data is built in and the countdown row always
+            # carries the next shower, so this credit is unconditional --
+            # unlike the two element feeds, which a station can decline to
+            # configure.
+            parts.append(self._t('Meteor shower data: IMO'))
             parts.append(self._t('Regenerated every report cycle'))
         return sep.join(parts).replace(
             'weewx-skyfield', '<a href="%s">weewx-skyfield</a>' % REPO_URL)
