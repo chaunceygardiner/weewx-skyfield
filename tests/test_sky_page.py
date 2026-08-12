@@ -510,7 +510,8 @@ class TestCountdownDayCount:
     def test_event_later_today_reads_today(self, almanac):
         """Jacques's case, end to end: bound to 00:30 on the full moon's
         own morning, the chip's date is today's and its detail line must
-        say so."""
+        say so -- and carry the clock time, which on the day itself is the
+        one fact the chip does not already show."""
         ts = wxskyfield_sky._raw(almanac.next_full_moon, 'unix_epoch')
         lt = time.localtime(ts)
         morning = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 30, 0, 0, 0, -1))
@@ -519,7 +520,38 @@ class TestCountdownDayCount:
             wxskyfield_sky.SkyPage().countdown_html(almanac(almanac_time=morning)),
             'full moon')
         assert time.strftime('%b %-d', lt) in chip
-        assert '>today<' in chip
+        assert '>today at %s<' % time.strftime('%H:%M', lt) in chip
+
+    def test_today_phrase_is_one_translatable_key(self):
+        """The today line is a single phrase with a {time} placeholder, not
+        'today' + 'at' + the clock composed in Python: word order is the
+        translator's to choose, and a bare 'at' is a fragment no one can
+        translate in isolation (it would collide with 'at the top', 'at
+        noon', 'at least 10 degrees up').  Every bundled language must
+        carry the key, and each translation must keep the placeholder --
+        one that drops it silently loses the time."""
+        for code in ('en', 'de', 'fr', 'es', 'da', 'nl', 'it', 'no', 'sv'):
+            path = os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'lang',
+                                '%s.conf' % code)
+            with open(path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            m = re.search(r'^\s*"today at \{time\}" = "(.*)"\s*$', text, re.M)
+            assert m, '%s.conf is missing the "today at {time}" key' % code
+            assert '{time}' in m.group(1), \
+                '%s.conf drops the {time} placeholder: %r' % (code, m.group(1))
+            assert '"at" =' not in text, \
+                '%s.conf has a bare "at" key -- translate whole phrases' % code
+
+    def test_today_phrase_translates(self, almanac):
+        """The chip honors a [Texts] override, placeholder and all."""
+        ts = wxskyfield_sky._raw(almanac.next_full_moon, 'unix_epoch')
+        lt = time.localtime(ts)
+        morning = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 30, 0, 0, 0, -1))
+        page = wxskyfield_sky.SkyPage(
+            {'Texts': {'today at {time}': 'heute um {time}'}})
+        chip = self._chip(page.countdown_html(almanac(almanac_time=morning)),
+                          'full moon')
+        assert '>heute um %s<' % time.strftime('%H:%M', lt) in chip
 
     def test_event_after_midnight_reads_one_day(self, almanac):
         """The mirror case, which rounding down gets wrong: bound to 23:30

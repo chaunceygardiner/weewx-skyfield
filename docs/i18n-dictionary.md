@@ -243,6 +243,7 @@ installed extension is always the authoritative copy for your version):
     "star catalog unavailable — see the weewxd log" = "star catalog unavailable — see the weewxd log"
     "star catalog disabled" = "star catalog disabled"
     "today" = "today"
+    "today at {time}" = "today at {time}"
     "in {n} day" = "in {n} day"
     "in {n} days" = "in {n} days"
     "new moon" = "new moon"

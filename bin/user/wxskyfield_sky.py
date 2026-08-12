@@ -777,7 +777,16 @@ class SkyPage:
         def when_str(ts: float) -> str:
             n = _days_until(alm.time_ts, ts)
             if n == 0:
-                return self._t('today')
+                # The one case where the day count alone leaves the reader
+                # worse off: on the day itself, "today" does not say whether
+                # the event is still ahead.  The clock time is the fact that
+                # matters exactly when interest is highest, and it is the
+                # only thing the chip does not already carry (the line above
+                # is the date).  One phrase, not "today" + "at" + the clock:
+                # word order is the translator's to choose, and a lone "at"
+                # is a fragment no one can translate in isolation.
+                # Jacques Terrettaz's follow-up on issue #6.
+                return self._t('today at {time}', time=_t_hm(ts))
             if n == 1:
                 return self._t('in {n} day', n=1)
             return self._t('in {n} days', n=n)

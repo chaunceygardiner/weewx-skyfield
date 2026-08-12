@@ -1,6 +1,19 @@
 weewx-skyfield change history
 -----------------------------
 
+2.2 (in progress)
+-----------------
+- A countdown chip for something happening today now says when.  "today"
+  alone is the least a chip ever tells you, at the moment interest in it
+  is highest -- it does not say whether the event is still ahead -- and
+  the clock time is the only fact the chip is not already carrying, since
+  the line above it is the date.  The new-moon chip on the morning of an
+  eclipse now reads "today at 11:14".  Suggested by Jacques Terrettaz,
+  following his report of the day-count bug fixed in 2.1.2 (issue #6).
+  The string is a single translatable phrase with a {time} placeholder,
+  so a translation chooses its own word order, and it ships in all nine
+  bundled languages.
+
 2.1.2 (2026/08/12)
 ------------------
 - Fixed: a countdown chip disagreed with its own date.  An event later
