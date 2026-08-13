@@ -177,7 +177,7 @@ Each plain-float angle has a unit-aware twin; both are listed, twin second.
 | Tag | Type | Since | Bodies | Notes |
 |---|---|---|---|---|
 | `name` | str | 1.0 | | The English display name, from the tag name. |
-| `label` | str | 1.12 | | The translated display name, from the report's `[Almanac]` section, falling back to `name`.  See [Translations](i18n.md). |
+| `label` | str | 1.12 | | The translated display name, from the report's `[Almanac]` section, falling back to `name`.  Translation needs WeeWX 5.3; on 5.2 it is `name`.  See [Translations](i18n.md). |
 
 ### The moon only
 
@@ -258,7 +258,7 @@ Attributes of `$almanac.next_meteor_shower` and of each item of
 | Attribute | Type | Notes |
 |---|---|---|
 | `name` | str | Stable English data, like `constellation`. |
-| `label` | str | The report's `[Almanac]` `[[MeteorShowers]]` translation, falling back to `name`. |
+| `label` | str | The report's `[Almanac]` `[[MeteorShowers]]` translation, falling back to `name`.  Translation needs WeeWX 5.3. |
 | `peak` | time | This apparition's peak, computed from the sun's ecliptic longitude.  For an active shower it may lie in the past. |
 | `zhr` | int | Zenithal hourly rate at the peak — see the [glossary](glossary.md). |
 | `parent` | str | The body whose debris the shower is. |
@@ -277,7 +277,7 @@ regardless of the report's language.
 |---|---|---|
 | `name` | str | The Latin name again. |
 | `abbr` | str | The IAU abbreviation — `Psc`. |
-| `label` | str | The translated display name, from `[Almanac]` `[[Constellations]]` keyed by abbreviation, falling back to the Latin. |
+| `label` | str | The translated display name, from `[Almanac]` `[[Constellations]]` keyed by abbreviation, falling back to the Latin.  Translation needs WeeWX 5.3. |
 
 ## Almanac arguments
 

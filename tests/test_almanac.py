@@ -3185,3 +3185,109 @@ class TestManualRecipes:
         # must not happen is an exception or an empty rendering of a tag
         # that should have one.
         str(value)
+
+
+class _TextsIsAHeavenlyBody:
+    """A stand-in almanac type reproducing what WeeWX's PyEphem almanac
+    does with an unrecognized attribute: treat it as the name of a
+    heavenly body and hand back a binder.  Registered LAST, so it only
+    answers what every real almanac has already declined."""
+
+    class Binder:
+        def __getattr__(self, attr):
+            raise AttributeError(attr)
+
+    def get_almanac_data(self, almanac_obj, attr):
+        return _TextsIsAHeavenlyBody.Binder()
+
+
+@contextlib.contextmanager
+def weewx_52_almanac(sky):
+    """An Almanac as WeeWX 5.2 and earlier build one: no .texts.
+
+    5.2 is this extension's stated floor and its Almanac.__init__ has no
+    texts parameter, so the attribute is simply absent.  The suite runs on
+    5.3+, where it is always set, so the test removes it -- and appends
+    the catch-all above, which is the half that makes this a real
+    reproduction: on 5.2 the missing attribute does NOT raise.  It falls
+    through Almanac.__getattr__ to PyEphem's "must be a heavenly body"
+    branch, which returns a truthy binder, so `getattr(alm, 'texts',
+    None) or {}` keeps the binder and blows up on .get one step later.
+    A fake that merely lacks the attribute passes against that broken
+    code and proves nothing.
+    """
+    with saved_almanacs():
+        assert wxskyfield.register_almanac(sky)
+        weewx.almanac.almanacs.append(_TextsIsAHeavenlyBody())
+        alm = weewx.almanac.Almanac(
+            TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+            formatter=weewx.units.get_default_formatter())
+        del alm.__dict__['texts']
+        assert 'texts' not in alm.__dict__
+        # The premise: the lookup yields a truthy non-dict, not None.
+        probe = getattr(alm, 'texts', None)
+        assert probe is not None and not isinstance(probe, dict) and bool(probe)
+        yield alm
+
+
+class TestWeeWX52NoTexts:
+    """Label translation reads the report's [Almanac] section off
+    Almanac.texts, which arrived in WeeWX 5.3.  This extension supports
+    5.2, where every label must quietly stay Latin/English -- and, above
+    all, no tag may raise."""
+
+    def test_body_label(self, sky):
+        with weewx_52_almanac(sky) as alm:
+            assert alm.moon.label == 'Moon'
+            assert alm.jupiter.label == 'Jupiter'
+
+    def test_constellation_label(self, sky):
+        with weewx_52_almanac(sky) as alm:
+            c = alm.sun.constellation
+            assert c == 'Gemini'
+            assert c.label == 'Gemini'
+            assert c.abbr == 'Gem'
+
+    def test_meteor_shower_label(self, sky):
+        with weewx_52_almanac(sky) as alm:
+            shower = alm.next_meteor_shower
+            assert shower.label == shower.name
+
+    def test_moon_phase_still_works(self, sky):
+        """moon_phases predates texts, so the phase name is unaffected."""
+        with weewx_52_almanac(sky) as alm:
+            assert str(alm.moon_phase) in weeutil.Moon.moon_phases
+
+    def test_almanac_texts_helper(self, sky):
+        with weewx_52_almanac(sky) as alm:
+            assert wxskyfield.almanac_texts(alm) == {}
+
+    def test_helper_reads_the_section_on_53(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter(),
+                texts={'moon': 'Mond'})
+            assert wxskyfield.almanac_texts(alm) == {'moon': 'Mond'}
+
+    def test_helper_absorbs_a_malformed_section(self, sky):
+        class Scalar:
+            def __init__(self):
+                self.texts = 'oops'
+        assert wxskyfield.almanac_texts(Scalar()) == {}
+
+    def test_helper_absorbs_a_dictless_almanac(self):
+        """A foreign almanac using __slots__ has no __dict__ at all."""
+        class Slotted:
+            __slots__ = ()
+        assert wxskyfield.almanac_texts(Slotted()) == {}
+
+    def test_helper_never_hands_back_its_own_default(self):
+        """The empty-case return must not be a shared mutable a caller
+        could scribble on."""
+        class Slotted:
+            __slots__ = ()
+        d = wxskyfield.almanac_texts(Slotted())
+        d['moon'] = 'scribble'
+        assert wxskyfield.almanac_texts(Slotted()) == {}

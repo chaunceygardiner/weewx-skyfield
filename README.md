@@ -87,7 +87,9 @@ panel on it can be dropped into a skin of your own.
   [embed its panels](https://chaunceygardiner.github.io/weewx-skyfield/panels.html)
 
 - **Speaks your language** (1.12).  The Sky page, its panels and the almanac's body names are
-  fully translatable through WeeWX's own lang files, with per-string English fallback.
+  translatable through WeeWX's own lang files, with per-string English fallback.  (Body,
+  constellation and meteor shower names need WeeWX 5.3 or later; the page itself translates
+  on 5.2.)
   Complete German, French and Danish (all from native speakers) and Dutch, Spanish, Italian,
   Norwegian and Swedish (Beta) translations ship with the skin.
   → [How to translate](https://chaunceygardiner.github.io/weewx-skyfield/i18n.html)

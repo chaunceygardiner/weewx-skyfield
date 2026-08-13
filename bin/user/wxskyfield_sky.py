@@ -378,7 +378,7 @@ class SkyPage:
         texts (the same source $almanac.<body>.label reads), else the
         English name.  Read straight off the almanac's texts so the page
         keeps rendering when a non-Skyfield almanac serves it."""
-        val = (getattr(alm, 'texts', None) or {}).get(name)
+        val = _wxskyfield().almanac_texts(alm).get(name)
         if isinstance(val, str):
             return val
         return name.replace('_', ' ').title()
@@ -562,8 +562,7 @@ class SkyPage:
             if run:
                 segs.append(self._con_polyline(run))
         labels: List[Tuple[float, float, str]] = []
-        texts = getattr(alm, 'texts', None)
-        con_names = texts.get('Constellations') if isinstance(texts, dict) else None
+        con_names = _wxskyfield().almanac_texts(alm).get('Constellations')
         if not isinstance(con_names, dict):
             con_names = {}
         latin = _wxskyfield().CONSTELLATION_NAMES

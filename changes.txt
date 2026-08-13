@@ -1,8 +1,23 @@
 weewx-skyfield change history
 -----------------------------
 
-2.2 (in progress)
------------------
+2.1.3 (2026/08/13)
+------------------
+- Fixed: on WeeWX 5.2, every tag that carries a display name --
+  $almanac.<body>.label, .constellation.label and
+  $almanac.next_meteor_shower.label -- reported an error instead of a
+  name, and the Sky page, which uses them for its body names and its
+  constellation figure labels, failed with them.  Those names come from
+  the report's [Almanac] section, which WeeWX only hands to an almanac
+  from 5.3 on.  They now fall back to the English and Latin names, which
+  is what 5.3 gives them anyway when a report translates nothing.  The
+  5.2 floor stands.  Found by way of bellrichm's report against
+  weewx-loopdata (its issue #15).
+- Translating body, constellation and meteor shower names is now
+  documented as needing WeeWX 5.3; the manual and the README had called
+  the Sky page "fully translatable" without qualification.  Computed
+  values, moon_phases, and the [Texts], [Units] and [Labels]
+  translations are unaffected on 5.2.
 - A countdown chip for something happening today now says when.  "today"
   alone is the least a chip ever tells you, at the moment interest in it
   is highest -- it does not say whether the event is still ahead -- and

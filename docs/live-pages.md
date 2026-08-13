@@ -82,7 +82,8 @@ as fresh elements arrived.  That is the reason for the 6.9 floor.
 Live values follow the language of loopdata's *target report* — one language per loopdata
 instance.  A field such as `almanac.moon.label` renders in that report's language, so a
 station serving two languages needs the label resolved per page rather than per field.  See
-[Translations](i18n.md).
+[Translations](i18n.md).  Body, constellation and meteor shower names need WeeWX 5.3 or
+later; on 5.2 the fields still publish, in English and Latin.
 
 ## Reusing this extension's charts, live
 

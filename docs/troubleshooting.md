@@ -88,6 +88,12 @@ Mars has no `.next_pass`), or an almanac time outside the bundled ephemeris's sp
 unrecognized attribute on one is always a clean error rather than a mysterious PyEphem
 value.
 
+One version-specific cause is fixed in 2.1.3: before it, on WeeWX 5.2 only, every display
+name — `$almanac.<body>.label`, `.constellation.label` and
+`$almanac.next_meteor_shower.label` — raised instead of answering, and the Sky page, which
+uses them, failed with them.  Upgrading weewx-skyfield fixes it on 5.2; the names themselves
+still need WeeWX 5.3, and stay English and Latin below it.
+
 ### Reports got slower
 
 The first report cycle after a restart, and the first after local midnight, pay full
@@ -127,7 +133,9 @@ while keeping every tag.
 ## Known Skyfield issues
 
 Issues in the underlying [Skyfield](https://rhodesmill.org/skyfield/) library that you might
-notice.  None require action; entries are removed as upstream releases fix them.
+notice.  None require action.  An entry stays here while any Skyfield this extension
+supports is still affected, and is removed once the oldest supported release carries the
+fix.
 
 ### A rare `RuntimeWarning` from `almanac.py` line 339
 

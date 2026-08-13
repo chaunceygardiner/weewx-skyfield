@@ -75,12 +75,13 @@ and every panel on it can be dropped into a skin of your own.
   shower.  [Tour the page](sky-page.md), or
   [embed its panels in your own skin](panels.md).
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
-  names (`$almanac.moon.label`) are fully translatable through WeeWX's own lang files, with
+  names (`$almanac.moon.label`) are translatable through WeeWX's own lang files, with
   per-string English fallback; complete German, French and Danish (all from native
   speakers) and Dutch, Spanish, Italian, Norwegian and Swedish (Beta) translations ship
   with the skin.
   1.13 adds the constellations (`$almanac.saturn.constellation.label`), all 88 in each.
-  [How to translate](i18n.md).
+  (Body, constellation and meteor shower names need WeeWX 5.3 or later; the page itself
+  translates on 5.2.)  [How to translate](i18n.md).
 - **Safe to upgrade over a running WeeWX.**  The ephemeris is read fully into memory at
   startup (about 16 MB), so replacing the extension's files cannot disturb — or crash — the
   running almanac; the new files take effect on the restart that follows the install.
@@ -120,7 +121,8 @@ and every panel on it can be dropped into a skin of your own.
 ## Requirements
 
 - Python 3.9 or later
-- WeeWX 5.2 or later
+- WeeWX 5.2 or later (translated body, constellation and meteor shower names need 5.3 —
+  see [Translating the Sky page](i18n.md#how-it-works))
 - [Skyfield](https://rhodesmill.org/skyfield/) 1.47 or later, and NumPy
 - PyEphem is **not** required
 

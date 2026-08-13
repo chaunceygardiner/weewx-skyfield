@@ -15,7 +15,8 @@ description: Installation, configuration and Skyfield-upgrade instructions for t
 
 weewx-skyfield requires Python 3.9 or later, WeeWX 5.2 or later, and the
 [Skyfield](https://rhodesmill.org/skyfield/) (1.47 or later) and NumPy libraries.  PyEphem is
-**not** required.
+**not** required.  Translated body, constellation and meteor shower names need WeeWX 5.3 or
+later — see [Translations](i18n.md#how-it-works).
 
 ## Installing the extension
 

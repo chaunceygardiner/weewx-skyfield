@@ -53,6 +53,8 @@ not in English:
    `[Texts]` and `[Almanac]` from *your* report, not from the bundled skin, so without this
    step they render in English.  The copy/merge recipe is on the translation page:
    [Copying the dictionary into an embedding skin](i18n.md#copying-the-dictionary-into-an-embedding-skin).
+   The `[Almanac]` half — body, constellation and meteor shower names — needs WeeWX 5.3 or
+   later; on 5.2 those stay English and Latin while everything in `[Texts]` still translates.
 
 The bundled template, `skins/Skyfield/index.html.tmpl`, shows every panel in use and is the
 reference for the wrapper markup mentioned below.  A failing panel never takes down report

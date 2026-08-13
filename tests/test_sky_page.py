@@ -1781,3 +1781,52 @@ class TestI18n:
         assert 'IAU-CSN-stjärnnamn' in footer
         # Swedish moon phase names flow through the same texts dict.
         assert str(alm.moon_phase) in list(conf['Almanac']['moon_phases'])
+
+
+class TestWeeWX52NoTexts:
+    """The Sky page reads body and constellation names off Almanac.texts,
+    which WeeWX gained in 5.3.  On 5.2 -- still this extension's floor --
+    the page must render whole, with those names in English/Latin.
+
+    The stand-in almanac type below is the reproduction's essential half:
+    on 5.2 the missing attribute does not raise, it falls through to
+    PyEphem's "unrecognized attribute must be a heavenly body" branch and
+    yields a truthy binder, defeating a `getattr(...) or {}` guard.
+    """
+
+    class _Binder:
+        def __getattr__(self, attr):
+            raise AttributeError(attr)
+
+    class _TextsIsAHeavenlyBody:
+        def get_almanac_data(self, almanac_obj, attr):
+            return TestWeeWX52NoTexts._Binder()
+
+    @contextlib.contextmanager
+    def weewx_52_almanac(self, sky):
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            weewx.almanac.almanacs.append(self._TextsIsAHeavenlyBody())
+            alm = weewx.almanac.Almanac(
+                TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                formatter=weewx.units.get_default_formatter())
+            del alm.__dict__['texts']
+            probe = getattr(alm, 'texts', None)
+            assert probe is not None and not isinstance(probe, dict) and bool(probe)
+            yield alm
+
+    def test_panels_render(self, sky):
+        """Every panel that reads a body or constellation name."""
+        with self.weewx_52_almanac(sky) as alm:
+            page = wxskyfield_sky.SkyPage({})
+            dome = page.dome_svg(alm)
+            table = page.table_html(alm)
+            chips = page.chips_html(alm)
+            ribbons = page.ribbons_svg(alm)
+        assert 'Moon' in table and 'Jupiter' in table
+        assert dome and chips and ribbons
+
+    def test_label_helper(self, sky):
+        with self.weewx_52_almanac(sky) as alm:
+            assert wxskyfield_sky.SkyPage._label(alm, 'moon') == 'Moon'
+            assert wxskyfield_sky.SkyPage._label(alm, 'proxima_centauri') == 'Proxima Centauri'

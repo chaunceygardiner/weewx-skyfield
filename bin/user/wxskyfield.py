@@ -61,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.1.2'
+WXSKYFIELD_VERSION = '2.1.3'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -1000,6 +1000,34 @@ class _SunLongitudeCrossed:
         return (self.almanac_type.sun_longitude_degrees(t) - self.target) % 360.0 < 180.0
 
 
+_NO_TEXTS: Dict[str, Any] = {}
+
+
+def almanac_texts(almanac_obj: Any) -> Dict[str, Any]:
+    """The report's [Almanac] section (moon phase names, body names,
+    constellation names), or {} on a WeeWX that has none.
+
+    WeeWX 5.3 gave Almanac a .texts instance attribute carrying the whole
+    section; through 5.2 -- the version this extension still supports --
+    there is no such attribute, and label translation simply does not
+    happen there.
+
+    Read through __dict__ deliberately, NOT getattr: on 5.2 the attribute
+    lookup does not fail, so a getattr default never fires.  It falls
+    through Almanac.__getattr__, which walks weewx.almanac.almanacs (ours
+    declines 'texts' with UnknownType, correctly) until PyEphem's
+    catch-all treats any unrecognized name as a heavenly body and returns
+    a truthy AlmanacBinder for a body called "texts" -- which then raises
+    AttributeError one attribute later, on .get.  Without PyEphem the
+    lookup raises instead.  __dict__.get bypasses __getattr__ entirely and
+    is plainly None before 5.3.  The isinstance also absorbs a malformed
+    [Almanac] section, and the __dict__ default a __slots__ object -- the
+    Sky page's labels are contracted to survive a foreign almanac.
+    """
+    texts = getattr(almanac_obj, '__dict__', _NO_TEXTS).get('texts')
+    return texts if isinstance(texts, dict) else {}
+
+
 class MeteorShowerInfo:
     """One shower as $almanac.next_meteor_shower (and each item of
     $almanac.active_meteor_showers) serves it: plain pre-computed
@@ -1011,7 +1039,7 @@ class MeteorShowerInfo:
                  shower: MeteorShower, peak_ts: Optional[float]):
         self.key = shower.key
         self.name = shower.name
-        labels = (getattr(almanac_obj, 'texts', None) or {}).get('MeteorShowers')
+        labels = almanac_texts(almanac_obj).get('MeteorShowers')
         self.label = (labels.get(shower.key, shower.name)
                       if isinstance(labels, dict) else shower.name)
         self.peak = almanac_type.time_value(almanac_obj, peak_ts, 'ephem_year')
@@ -3636,7 +3664,7 @@ class SkyfieldAlmanacBinder:
             # itself stays the Latin str so consumers reading the tag as
             # data (loopdata fields, template comparisons) never see it
             # shift with a report's language.
-            labels = self.almanac.texts.get('Constellations')
+            labels = almanac_texts(self.almanac).get('Constellations')
             label = labels.get(abbr, latin) if isinstance(labels, dict) else latin
             return Constellation(latin, abbr, label)
         elif attr == 'name':
@@ -3647,8 +3675,8 @@ class SkyfieldAlmanacBinder:
             # moon_phases); WeeWX pipes that section into every almanac as
             # .texts.  Untranslated bodies fall back to the English .name,
             # mirroring $obs.label's fall-through.
-            return self.almanac.texts.get(self.heavenly_body,
-                                          self.heavenly_body.replace('_', ' ').title())
+            return almanac_texts(self.almanac).get(
+                self.heavenly_body, self.heavenly_body.replace('_', ' ').title())
 
         # Something Skyfield does not compute (e.g., a_epoch, or PyEphem's
         # deprecated rise_time family).  Fall back to the built-in PyEphem

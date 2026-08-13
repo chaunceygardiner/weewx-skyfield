@@ -163,6 +163,11 @@ back to English, so a partial list is fine.
 | `[[Constellations]]` | `$almanac.<body>.constellation.label`, keyed by IAU abbreviation |
 | `[[MeteorShowers]]` | `$almanac.next_meteor_shower.label`, keyed by shower name |
 
+This whole section needs **WeeWX 5.3 or later**, which is what began handing an almanac the
+report's `[Almanac]` texts.  On 5.2 the keys above are read by nothing — the names stay
+English and Latin — while `moon_phases`, in the same section, still works, as does the rest
+of the Sky page's translation.
+
 The lookup follows each report's own language, so the entry belongs in the report that uses
 the tag.  Putting it under `[StdReport]` `[[Defaults]]` `[[[Almanac]]]` in `weewx.conf`
 applies it to every report at once and survives skin upgrades — see

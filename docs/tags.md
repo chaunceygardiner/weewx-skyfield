@@ -147,6 +147,11 @@ On [live-updating pages](index.md#live-updating-pages), a weewx-loopdata almanac
 as `almanac.moon.label` renders in the language of loopdata's target report — one language
 per loopdata instance.
 
+Translating names this way needs **WeeWX 5.3 or later**: 5.3 is what began handing an almanac
+the report's whole `[Almanac]` section.  On 5.2 the tag still renders — it gives the English
+name — and this applies equally to `.constellation.label` and
+`$almanac.next_meteor_shower.label`.
+
 ## Stars
 
 Named stars (e.g., `$almanac.rigel.rise`, `$almanac.polaris.circumpolar`,
