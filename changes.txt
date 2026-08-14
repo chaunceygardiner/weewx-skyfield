@@ -1,6 +1,22 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3 (in progress)
+-----------------
+- Every screenshot in the README and the manual is 2.2's drawing.  The
+  sky dome, the sample Sky page and the panel shots now show the
+  gridlines and lifted labels 2.2 gave them, and the Dutch, Spanish and
+  Danish sample pages -- which had not been re-shot since 1.15 to 1.17 --
+  show the current page in each language.  The single-column phone shots
+  of the Spanish and Danish pages are gone; the full-width ones carry
+  the same point.
+- The caption under the animated Tiangong pass says what the animation
+  shows.  It had the satellite entering Earth's shadow "still overhead",
+  which put the moment at the top of the sky; the marker actually inverts
+  a third of the way across, still climbing, and then crosses the exact
+  center of the dome already dark.  README, home page and the
+  Live-updating pages chapter.
+
 2.2 (2026/08/14)
 ----------------
 - The Sky Dome and Next Visible Pass charts are easier to read on both

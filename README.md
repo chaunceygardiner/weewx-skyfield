@@ -185,9 +185,9 @@ report tags and the live values, so they always agree.
 
 *The animation is the [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial)
 live page at work, moved by weewx-loopdata fields — weewx-skyfield's own Sky page stays
-static.  The chart itself is this extension's dome, embedded there.  Tiangong crosses the
-exact center of the dome, and partway across the marker inverts to a hollow ring as it slips
-into Earth's shadow — still overhead, no longer shining.*
+static.  The chart itself is this extension's dome, embedded there.  A third of the way
+across, still climbing, the marker inverts to a hollow ring as Tiangong slips into Earth's
+shadow — and it goes on to cross the exact center of the dome dark, no longer shining.*
 
 → [Live-updating pages](https://chaunceygardiner.github.io/weewx-skyfield/live-pages.html)
 

@@ -164,10 +164,10 @@ paloaltoweather.com pages above update the same way.
 live page at work, moved by
 [weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) fields —
 weewx-skyfield's own Sky page stays static, refreshing once per report cycle.  The chart
-itself is this extension's dome, embedded there.  Tiangong — one of the two satellites the
-installer configures out of the box — crosses the exact center of the dome, and partway
-across the marker inverts to a hollow ring as Tiangong slips into Earth's shadow — still
-overhead, no longer shining.  In the opening seconds Terra is finishing its own low western
+itself is this extension's dome, embedded there.  A third of the way across, still climbing, the marker
+inverts to a hollow ring as Tiangong — one of the two satellites the installer configures
+out of the box — slips into Earth's shadow; it goes on to cross the exact center of the
+dome dark, no longer shining.  In the opening seconds Terra is finishing its own low western
 pass: two satellites on the dome at once.  2-second frames played at 15 fps (about 30×
 speed), replayed through the live page with the orbital elements Space-Track archived for
 July 15.*
