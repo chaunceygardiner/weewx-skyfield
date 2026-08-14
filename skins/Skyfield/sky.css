@@ -90,13 +90,23 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
 svg{width:100%; height:auto; display:block}
 svg text{fill:var(--ink)}
 .cardinal{font-size:14px; fill:var(--brass); letter-spacing:.1em}
+/* The sky charts' small labels are their own value, not --muted: --muted is
+   set for body copy on the panel SURFACE, and the dome and next-visible-pass
+   charts put these on the dome gradient instead, whose rim is much lighter.
+   There --muted reached only 3.70:1.  .skylab is the scoped opt-in -- the
+   axis labels on every other panel are on the panel surface and keep plain
+   .gridlab.  The paper plate needs no lift at all: its --muted clears 4.94
+   on the dome, so the light rules hand it straight back.  (2.2) */
 .gridlab{font-size:10px; fill:var(--muted)}
+.skylab{fill:#9FA5C4}
+:root.theme-light .skylab{fill:var(--muted)}
 .moonlab{font-size:10px; fill:#C9D0DA}
 :root.theme-light .moonlab{fill:#767E8A}
-.starlab{font-size:10px; fill:var(--muted); font-family:Georgia, serif; font-style:italic}
-.conlab{font-size:10px; fill:#7C8FC9; font-family:Georgia, serif; font-style:italic;
+.starlab{font-size:10px; fill:#9FA5C4; font-family:Georgia, serif; font-style:italic}
+:root.theme-light .starlab{fill:var(--muted)}
+.conlab{font-size:10px; fill:#9DABD7; font-family:Georgia, serif; font-style:italic;
         letter-spacing:.14em; text-transform:uppercase}
-:root.theme-light .conlab{fill:#8A96AC}
+:root.theme-light .conlab{fill:#57637B}
 .bodylab{font-size:11px; fill:var(--ink); font-family:Georgia, serif}
 .satlab{fill:var(--brass); font-family:Georgia, serif}
 .rowlab{font-size:13px; fill:var(--ink); font-family:Georgia, serif;

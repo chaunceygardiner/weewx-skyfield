@@ -1626,8 +1626,8 @@ class TestEclipses:
 
     def test_combined(self, almanac):
         """next_/previous_eclipse pick the sooner (later) of the two
-        kinds, with _kind naming the winner -- the selection skins would
-        otherwise reimplement (added for weewx-liveseasons)."""
+        kinds, with _kind naming the winner -- the selection every skin
+        showing "the next eclipse" would otherwise reimplement."""
         assert almanac.next_eclipse.raw == almanac.next_lunar_eclipse.raw
         assert almanac.next_eclipse_kind == 'lunar'
         assert almanac.next_eclipse_type == 'total'

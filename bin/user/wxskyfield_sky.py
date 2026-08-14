@@ -31,8 +31,14 @@ log = logging.getLogger(__name__)
 # "paper atlas" plate for light-themed consuming skins.  Only baked SVG/HTML
 # attributes come from the palette; typography stays class-based, styled by
 # the consuming skin's CSS.  Keys: ink (star dots, curves, transit ticks),
-# muted, brass (accents, now-markers), line (gridlines, orbit circles,
-# altitude rings), halo (the stroke lifting body dots off the plate), body
+# muted, brass (accents, now-markers), line (gridlines and orbit circles on
+# the PANEL surface), grid (the sky charts' altitude rings and
+# meridian/horizon cross, which read against the dome gradient instead and
+# so cannot share line's value -- see 2.2), bandgrid (the gridlines of the
+# three panels that plot over twilight BANDS -- ribbons, sun path, day
+# length -- a third surface again, and the third value), bandcase (the
+# casing under those gridlines, None where the plate does not need one --
+# see _band_rule), halo (the stroke lifting body dots off the plate), body
 # (identity colors, colorblind-validated against the plate surface), ring
 # (per-body override of the halo for bodies too pale to hold an edge on the
 # plate; pale ribbon bars also take it as a 1px stroke), twilight (mid-tone
@@ -47,12 +53,19 @@ log = logging.getLogger(__name__)
 # Mercury keeps the gray FAMILY at two weights (dark on paper, light on
 # navy), and Neptune stays a readable mid-blue on the night plate.  The
 # pre-1.5 colors survive as 'classic-night' / 'classic-light'.
+#
+# 2.2 audited every mark against the surface it actually sits on and moved
+# what fell short: `grid` on all four plates, and night Mars, the one body
+# dot under 3:1 on its own dome (2.34, now 3.02).  The classic plates take
+# the chrome fix but keep their body colors -- preserving those is the whole
+# reason they exist.
 PALETTES: Dict[str, Dict[str, Any]] = {
     'night': {
         'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
-        'line': '#2A3358', 'halo': '#0A0F22',
+        'line': '#2A3358', 'grid': '#6E7DBA', 'bandgrid': '#6E7DBA',
+        'bandcase': None, 'halo': '#0A0F22',
         'body': {'sun': '#FFD75E', 'moon': '#C9D0DA', 'mercury': '#9CA0AC',
-                 'venus': '#F0E3BE', 'mars': '#C04F36', 'jupiter': '#D89A56',
+                 'venus': '#F0E3BE', 'mars': '#CE6750', 'jupiter': '#D89A56',
                  'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
         'ring': {},
         'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
@@ -66,12 +79,13 @@ PALETTES: Dict[str, Dict[str, Any]] = {
     },
     'light': {
         'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
-        'line': '#c9cfd8', 'halo': '#ffffff',
+        'line': '#c9cfd8', 'grid': '#7A899F', 'bandgrid': '#1d2c4e',
+        'bandcase': '#ffffff', 'halo': '#ffffff',
         'body': {'sun': '#FACC15', 'moon': '#D6DAE0', 'mercury': '#52525B',
                  'venus': '#F0E4BE', 'mars': '#b23a24', 'jupiter': '#b06f2e',
                  'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
                  'pluto': '#6a5f96'},
-        'ring': {'sun': '#C77F00', 'moon': '#767E8A', 'venus': '#9C8B4D'},
+        'ring': {'sun': '#BC7800', 'moon': '#767E8A', 'venus': '#97864A'},
         'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
                      'civil': '#9FBCDE', 'day': '#D7E6F5'},
         'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
@@ -84,7 +98,8 @@ PALETTES: Dict[str, Dict[str, Any]] = {
     # The pre-1.5 palettes, kept for skins attached to the old colors.
     'classic-night': {
         'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
-        'line': '#2A3358', 'halo': '#0A0F22',
+        'line': '#2A3358', 'grid': '#6E7DBA', 'bandgrid': '#6E7DBA',
+        'bandcase': None, 'halo': '#0A0F22',
         'body': {'sun': '#B98C31', 'moon': '#7E92DA', 'mercury': '#AB763B',
                  'venus': '#D2B458', 'mars': '#C04F36', 'jupiter': '#D89A56',
                  'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
@@ -100,7 +115,8 @@ PALETTES: Dict[str, Dict[str, Any]] = {
     },
     'classic-light': {
         'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
-        'line': '#c9cfd8', 'halo': '#ffffff',
+        'line': '#c9cfd8', 'grid': '#7A899F', 'bandgrid': '#1d2c4e',
+        'bandcase': '#ffffff', 'halo': '#ffffff',
         'body': {'sun': '#B8860B', 'moon': '#4A5FB8', 'mercury': '#8a5a24',
                  'venus': '#a8862c', 'mars': '#b23a24', 'jupiter': '#b06f2e',
                  'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
@@ -122,6 +138,72 @@ def _ring(pal: Dict[str, Any], name: str) -> str:
     """The stroke for a body's mark: its ring color if the palette gives it
     one (pale bodies on the light plate), else the plate's uniform halo."""
     return pal.get('ring', {}).get(name, pal['halo'])
+
+
+# A band gridline's casing: the wide under-stroke that lets a rule cross
+# twilight bands of any depth.  See _band_rule.
+BAND_CASING_OPACITY = 0.55
+BAND_CASING_WIDTH = 3
+
+# The only two weights a band gridline may take.  A rank rather than a
+# number at each call site, so a panel cannot quietly invent a third
+# weight that no contrast audit knows to measure: the audit walks this
+# mapping.  Primary carries a label (the hours, the altitudes), secondary
+# is the finer rule between them -- the same pair, and the same values,
+# the dome's rings and cross use.
+BAND_RULE_OPACITY = {'primary': 0.75, 'secondary': 0.65}
+
+# The sky charts' own chrome and star field.  Named for the same reason:
+# the contrast audit READS these rather than grepping _sky_chart for the
+# numbers, so changing one makes the audit recompute against it -- a value
+# that stops clearing its floor fails, instead of quietly turning every
+# ratio the audit reports into fiction.
+DOME_RING_OPACITY = 0.75
+DOME_CROSS_OPACITY = 0.65
+# The star field dims while the sun is up, because those stars are not
+# visible and the chart should not pretend otherwise.  A star's NAME sits
+# a touch above its dot.
+STAR_OPACITY_SUN_UP = 0.55
+STAR_OPACITY_DARK = 0.95
+STAR_LABEL_BUMP = 0.05
+# The constellation figures are background context and dim further still.
+CONLINE_OPACITY_SUN_UP = 0.40
+CONLINE_OPACITY_DARK = 0.55
+
+
+def _num(v: float) -> str:
+    """An SVG coordinate: integral values without a decimal point.  The
+    sites feeding _band_rule mix ints and floats (an hour rule's x is
+    computed, an altitude rule's y is not), and formatting them all %.1f
+    would spell whole numbers 118.0 -- so normalize here instead."""
+    return '%d' % v if float(v).is_integer() else '%.1f' % v
+
+
+def _band_rule(pal: Dict[str, Any], x1: float, y1: float, x2: float,
+               y2: float, rank: str) -> str:
+    """One gridline drawn over the TWILIGHT BANDS -- the surface the ribbons,
+    sun-path and day-length panels plot on.
+
+    On the night plates the bands are all dark, so `bandgrid` alone reads
+    against every one of them (1.97-3.17:1) and the rule is a single stroke.
+    The light plates cannot work that way: their ramp runs #3A5175 to
+    #D7E6F5, a wider luminance span than any single stroke color can
+    straddle -- the best candidate measured bottoms out at 1.72.  So they
+    give `bandcase`, and the rule is drawn twice: a wide pale casing, then
+    the rule itself on top of it.  The rule then reads against its own
+    casing rather than against the band (3.15-4.36:1 on every band), which
+    is the cartographer's answer to a line crossing varied ground, and the
+    same trick the dome's labels already use as a halo.  New in 2.2."""
+    coords = ('x1="%s" y1="%s" x2="%s" y2="%s"'
+              % (_num(x1), _num(y1), _num(x2), _num(y2)))
+
+    strokes = []
+    if pal['bandcase']:
+        strokes.append((pal['bandcase'], BAND_CASING_WIDTH,
+                        BAND_CASING_OPACITY))
+    strokes.append((pal['bandgrid'], 1, BAND_RULE_OPACITY[rank]))
+    return ''.join('<line %s stroke="%s" stroke-width="%s" opacity="%s"/>'
+                   % ((coords,) + s) for s in strokes)
 
 
 class SkyPageUsageError(ValueError):
@@ -925,14 +1007,15 @@ class SkyPage:
         exist; the dome stopped drawing it in 2.0, because an undated
         future track on the now-sky read as tonight's.  grad_id/clip_id
         keep the two charts' SVG ids distinct on the one page."""
-        ink, line, brass, body_color = pal['ink'], pal['line'], pal['brass'], pal['body']
+        ink, grid, brass, body_color = pal['ink'], pal['grid'], pal['brass'], pal['body']
         S, cx, cy, R = 680, 340, 348, 296
         star_px = 10.0 * label_scale
         body_px = 11.0 * label_scale
         card_px = 14.0 * label_scale
         grid_px = 10.0 * label_scale
         sun = self._body(alm, 'sun')
-        star_op = 0.55 if sun['alt'] > 0 else 0.95
+        star_op = (STAR_OPACITY_SUN_UP if sun['alt'] > 0
+                   else STAR_OPACITY_DARK)
         p = ['<svg viewBox="0 0 %d 706" role="img" aria-label="%s">' % (S, aria)]
         p.append('<defs><radialGradient id="%s">%s</radialGradient>'
                  '<clipPath id="%s"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
@@ -940,14 +1023,19 @@ class SkyPage:
                     ''.join('<stop offset="%s" stop-color="%s"/>' % s
                             for s in pal['dome_stops']), clip_id, cx, cy, R))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#%s)"/>' % (cx, cy, R, grad_id))
+        # The altitude rings and the meridian/horizon cross read against the
+        # dome gradient, not against a panel edge, so they take the palette's
+        # own `grid` rather than `line` (the section-border color, which on
+        # both plates is within a hair of the dome's own luminance -- 1.07:1
+        # on the night plate, invisible).  Fixed in 2.2.
         for alt in (30, 60):
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" stroke="%s" '
-                     'stroke-width="1" stroke-dasharray="3 5" opacity="0.7"/>'
-                     % (cx, cy, R * (90 - alt) / 90.0, line))
-        p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" opacity="0.5"/>'
-                 % (cx - R, cy, cx + R, cy, line))
-        p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" stroke-width="1" opacity="0.5"/>'
-                 % (cx, cy - R, cx, cy + R, line))
+                     'stroke-width="1" stroke-dasharray="3 5" opacity="%s"/>'
+                     % (cx, cy, R * (90 - alt) / 90.0, grid, DOME_RING_OPACITY))
+        for x1, y1, x2, y2 in ((cx - R, cy, cx + R, cy), (cx, cy - R, cx, cy + R)):
+            p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="%s" '
+                     'stroke-width="1" opacity="%s"/>'
+                     % (x1, y1, x2, y2, grid, DOME_CROSS_OPACITY))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="none" stroke="%s" stroke-width="1.5"/>'
                  % (cx, cy, R, pal['dome_rim']))
         c_n, c_e, c_s, c_w = self._cardinals(alm)
@@ -956,10 +1044,14 @@ class SkyPage:
             p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal" '
                      'style="font-size:%.1fpx">%s</text>'
                      % (cx + dx, cy + dy, anch, card_px, _esc(label)))
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
+        # skylab, not plain gridlab: these two sit on the dome gradient,
+        # where the axis-label gray every other panel uses reaches only
+        # 3.70:1.  The other panels' labels are on the panel surface and
+        # keep it (2.2).
+        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab skylab" '
                  'style="font-size:%.1fpx">30&#176;</text>'
                  % (int(cx + 6 + R / 3), cy - 6, grid_px))
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab" '
+        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab skylab" '
                  'style="font-size:%.1fpx">60&#176;</text>'
                  % (int(cx + 8 + R * 2 / 3), cy - 6, grid_px))
         con_labels: List[Tuple[float, float, str]] = []
@@ -968,7 +1060,9 @@ class SkyPage:
             if segs:
                 p.append('<g clip-path="url(#%s)" fill="none" stroke="%s" '
                          'stroke-width="1" stroke-linecap="round" opacity="%.2f">%s</g>'
-                         % (clip_id, pal['conline'], 0.40 if sun['alt'] > 0 else 0.55,
+                         % (clip_id, pal['conline'],
+                            CONLINE_OPACITY_SUN_UP if sun['alt'] > 0
+                            else CONLINE_OPACITY_DARK,
                             ''.join(segs)))
         # Labels are placed after every mark is drawn: body labels first (each
         # nudged vertically until it clears the ones already placed), then
@@ -1206,7 +1300,7 @@ class SkyPage:
                 _try_label(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
                            body=track['name'])
         for x, y, name in star_labels:
-            _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + 0.05)
+            _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + STAR_LABEL_BUMP)
         # Constellation names go last: background context that yields to
         # every body and star label (a collision simply drops the name --
         # its figure still shows).
@@ -1269,7 +1363,7 @@ class SkyPage:
     def ribbons_svg(self, alm, palette: str = 'night') -> str:
         import weeutil.weeutil
         pal = _palette(palette)
-        ink, line, brass, body_color = pal['ink'], pal['line'], pal['brass'], pal['body']
+        ink, brass, body_color = pal['ink'], pal['brass'], pal['body']
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         eod = sod + 86400
         X0, X1, ROW, TOP = 118, 952, 30, 34
@@ -1297,10 +1391,12 @@ class SkyPage:
             end = edges[i + 1][0] if i + 1 < len(edges) else eod
             p.append('<rect x="%.1f" y="%d" width="%.1f" height="%d" fill="%s"/>'
                      % (X(ts), TOP, max(0.0, X(end) - X(ts)), plot_h, pal['twilight'][shade]))
+        # These cross the twilight bands, not the panel surface -- in `line`
+        # at 0.35 they measured 1.02-1.13:1 on the night plate, the dome's
+        # 2.1.3 defect exactly.  See _band_rule (2.2).
         for h in range(0, 25, 3):
             x = X0 + (X1 - X0) * h / 24.0
-            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
-                     'stroke-width="1" opacity="0.35"/>' % (x, TOP, x, TOP + plot_h, line))
+            p.append(_band_rule(pal, x, TOP, x, TOP + plot_h, 'primary'))
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%02d</text>'
                      % (x, TOP + plot_h + 18, h % 24))
         for i, b in enumerate(bodies):
@@ -1657,7 +1753,7 @@ class SkyPage:
         sun needs no special casing."""
         import weeutil.weeutil
         pal = _palette(palette)
-        ink, line, body_color = pal['ink'], pal['line'], pal['body']
+        ink, body_color = pal['ink'], pal['body']
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         FLOOR = -24.0
         sun_pts, moon_pts = [], []
@@ -1686,11 +1782,13 @@ class SkyPage:
                 continue
             p.append('<rect x="%d" y="%.1f" width="%d" height="%.1f" fill="%s"/>'
                      % (PX0, Y(hi), PX1 - PX0, Y(lo) - Y(hi), pal['twilight'][shade]))
+        # Altitude rules and, below, the azimuth rules: both are drawn over the
+        # day/twilight bands rather than the panel surface, so both go through
+        # _band_rule (2.2) -- 1.02-1.15:1 in `line` on the night plate.
         for alt in (30, 60, 90):
             if alt >= top:
                 continue
-            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
-                     'stroke-width="1" opacity="0.4"/>' % (PX0, Y(alt), PX1, Y(alt), line))
+            p.append(_band_rule(pal, PX0, Y(alt), PX1, Y(alt), 'primary'))
             p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%d&#176;</text>'
                      % (PX0 - 6, Y(alt) + 4, alt))
         p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
@@ -1698,8 +1796,7 @@ class SkyPage:
         p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">0&#176;</text>'
                  % (PX0 - 6, Y(0) + 4, ))
         for az in range(45, 360, 45):
-            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
-                     'stroke-width="1" opacity="0.25"/>' % (X(az), PY0, X(az), PY1, line))
+            p.append(_band_rule(pal, X(az), PY0, X(az), PY1, 'secondary'))
         c_n, c_e, c_s, c_w = self._cardinals(alm)
         for az, label in ((0, c_n), (90, c_e), (180, c_s), (270, c_w), (360, c_n)):
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono cardinal" '
@@ -1844,7 +1941,7 @@ class SkyPage:
         curve is solar noon (the transit), the brass line is today."""
         import calendar
         pal = _palette(palette)
-        ink, line, brass = pal['ink'], pal['line'], pal['brass']
+        ink, brass = pal['ink'], pal['brass']
         year = time.localtime(alm.time_ts).tm_year
         # Local standard noon Jan 1, stepped weekly (as the analemma does).
         noon0 = calendar.timegm((year, 1, 1, 12, 0, 0)) + time.timezone
@@ -1903,18 +2000,18 @@ class SkyPage:
                                                   date=self._date(ts),
                                                   duration=self._dur(max(0.0, sset - rise))))
                 p.append(rect)
+        # Hour rules and month rules alike sit on the twilight columns, so
+        # both go through _band_rule rather than taking the panel-surface
+        # `line` they had through 2.1.3 (2.2).
         for h in range(0, 25, 3):
-            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
-                     'stroke-width="1" opacity="0.3"/>' % (X0, Y(h), X1, Y(h), line))
+            p.append(_band_rule(pal, X0, Y(h), X1, Y(h), 'primary'))
             p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%02d</text>'
                      % (X0 - 8, Y(h) + 4, h % 24))
         for mon in range(1, 13):
             ts_m = calendar.timegm((year, mon, 1, 12, 0, 0)) + time.timezone
             wf = (ts_m - noon0) / (7 * 86400.0)
             if wf > 0.2:
-                p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" '
-                         'stroke-width="1" opacity="0.25"/>'
-                         % (XW(wf), TOP, XW(wf), TOP + PH, line))
+                p.append(_band_rule(pal, XW(wf), TOP, XW(wf), TOP + PH, 'secondary'))
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
                      % (min(XW(wf + 2.2), X1 - 10.0), TOP + PH + 20,
                         time.strftime('%b', time.localtime(ts_m))))

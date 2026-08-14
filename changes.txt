@@ -1,6 +1,29 @@
 weewx-skyfield change history
 -----------------------------
 
+2.2 (2026/08/14)
+----------------
+- The Sky Dome and Next Visible Pass charts are easier to read on both
+  plates.  The altitude rings and the meridian/horizon cross were drawn
+  in the panel border color, invisible against the dome (1.07:1); they
+  have their own color now.  Star names, the 30/60 degree marks and the
+  constellation names are lifted to 4.5:1 on the dark-sky dome -- while
+  the sun is up the chart dims its star field on purpose, those stars not
+  being visible -- and Mars, the one planet dot
+  under 3:1, is a little brighter.  The constellation figures stay
+  recessive on purpose -- bright enough to pass, they read as a net over
+  the sky rather than figures in it.
+- The Ribbons, Sun Path and Day Length panels get their gridlines back
+  too.  Their hour, altitude, azimuth and month rules are drawn over the
+  twilight bands rather than on the panel surface, and had taken the same
+  panel border color the dome's rings did: 1.02 to 1.15 to 1 on the night
+  plate, present and correct and invisible.  They now take a color of
+  their own.  On the light plate no single color can do the job -- those
+  bands run from a dark blue to nearly white, a wider range than one line
+  color can straddle -- so each rule there is drawn over a pale casing and
+  reads against that instead, the way a road on a map stays legible over
+  land and water alike.
+
 2.1.3 (2026/08/13)
 ------------------
 - Fixed: on WeeWX 5.2, every tag that carries a display name --

@@ -17,7 +17,7 @@ description: Every translatable string in weewx-skyfield's Sky page and almanac 
 Every string the Sky page and the almanac can translate.  [Translations](i18n.md) explains
 the mechanism and how to start a new language; this page is the reference list.
 
-The complete reference dictionary, as shipped in 2.1.3 (`skins/Skyfield/lang/en.conf` in the
+The complete reference dictionary, as shipped in 2.2 (`skins/Skyfield/lang/en.conf` in the
 installed extension is always the authoritative copy for your version):
 
 ```ini

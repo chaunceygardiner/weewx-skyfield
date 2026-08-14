@@ -994,10 +994,10 @@ class TestPalettes:
                  'countdown_html', 'header_sub')
 
     # The complete set of night-plate colors ever baked into markup.
-    NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358', '#0A0F22',
-                   '#1E2745', '#DDD8C4', '#161F3D', '#1B2749', '#2A3A63',
-                   '#0B1129', '#131B38', '#1A2547', '#233153', '#2E3D5C',
-                   '#FFD75E', '#C9D0DA', '#C04F36')
+    NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358', '#6E7DBA',
+                   '#0A0F22', '#1E2745', '#DDD8C4', '#161F3D', '#1B2749',
+                   '#2A3A63', '#0B1129', '#131B38', '#1A2547', '#233153',
+                   '#2E3D5C', '#FFD75E', '#C9D0DA', '#C04F36', '#CE6750')
 
     def test_default_is_night(self, almanac, page):
         for name in self.RENDERERS:
@@ -1009,8 +1009,11 @@ class TestPalettes:
         colors as of 1.5."""
         dome = page.dome_svg(almanac)
         for hexval in ('#161F3D', '#1B2749', '#2A3A63',     # dome gradient
-                       '#2A3358', '#D3A94C', '#E9E4D4', '#0A0F22'):
+                       '#6E7DBA', '#D3A94C', '#E9E4D4', '#0A0F22'):
             assert hexval in dome
+        # The rings and cross take `grid`, never the panel-border `line`:
+        # on the dome gradient that value is 1.07:1, invisible (2.2).
+        assert '#2A3358' not in dome
         assert '#2E3D5C' in page.ribbons_svg(almanac)       # day twilight band
         moon = page.moon_svg(almanac)
         for hexval in ('#1E2745', '#DDD8C4', '#2A3358'):    # disc + ring
@@ -1029,8 +1032,9 @@ class TestPalettes:
     def test_light_values(self, almanac, page):
         dome = page.dome_svg(almanac, palette='light')
         for hexval in ('#ffffff', '#efece2',                # dome gradient
-                       '#8a94a6', '#1d2c4e', '#c9cfd8'):    # rim, ink, line
+                       '#8a94a6', '#1d2c4e', '#7A899F'):    # rim, ink, grid
             assert hexval in dome
+        assert '#c9cfd8' not in dome
         ribbons = page.ribbons_svg(almanac, palette='light')
         for hexval in ('#D7E6F5', '#B45309', '#FACC15'):    # day band, now, sun
             assert hexval in ribbons
@@ -1049,10 +1053,10 @@ class TestPalettes:
         (as an inset box-shadow).  The night plate defines no rings —
         nothing pale needs a lift on navy."""
         ribbons = page.ribbons_svg(almanac, palette='light')
-        for hexval in ('#767E8A', '#9C8B4D'):               # moon, venus bars
+        for hexval in ('#767E8A', '#97864A'):               # moon, venus bars
             assert hexval in ribbons
-        assert '#C77F00' in page.orrery_svg(almanac, palette='light')
-        assert 'box-shadow:inset 0 0 0 1.5px #C77F00' in \
+        assert '#BC7800' in page.orrery_svg(almanac, palette='light')
+        assert 'box-shadow:inset 0 0 0 1.5px #BC7800' in \
             page.chips_html(almanac, palette='light')
         assert 'box-shadow:inset 0 0 0 1.5px #767E8A' in \
             page.table_html(almanac, palette='light')
@@ -1077,6 +1081,309 @@ class TestPalettes:
         for name in self.RENDERERS:
             with pytest.raises(ValueError, match='light, night'):
                 getattr(page, name)(almanac, palette='sepia')
+
+
+def _luminance(hexval):
+    """WCAG 2.x relative luminance of an #rrggbb string."""
+    h = hexval.lstrip('#')
+    out = 0.0
+    for weight, i in ((0.2126, 0), (0.7152, 2), (0.0722, 4)):
+        c = int(h[i:i + 2], 16) / 255.0
+        out += weight * (c / 12.92 if c <= 0.03928
+                         else ((c + 0.055) / 1.055) ** 2.4)
+    return out
+
+
+def _composite(fg, bg, opacity):
+    """The real color of a translucent mark: SVG opacity is alpha
+    compositing, so what the eye gets is the blend.  Returned as a hex
+    string so it can serve as the BACKGROUND of a further mark -- which is
+    what a casing is (see _band_rule)."""
+    f, b = fg.lstrip('#'), bg.lstrip('#')
+    return '#' + ''.join(
+        '%02X' % round(int(f[i:i + 2], 16) * opacity
+                       + int(b[i:i + 2], 16) * (1 - opacity))
+        for i in (0, 2, 4))
+
+
+def _contrast(fg, bg, opacity=1.0):
+    """WCAG contrast of fg over bg, fg first composited at `opacity` --
+    SVG opacity is alpha compositing, so a translucent mark's real color
+    is the blend, not the value in the palette."""
+    fg = _composite(fg, bg, opacity)
+    a, b = _luminance(fg), _luminance(bg)
+    hi, lo = max(a, b), min(a, b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+class TestSkyChartContrast:
+    """Every mark on the two sky charts (the dome and the Next Visible Pass
+    chart -- one _sky_chart, so one audit) must hold its floor against the
+    dome gradient it is drawn on, on BOTH plates.
+
+    This exists because the altitude rings and the meridian/horizon cross
+    shipped through 2.1.3 at 1.07:1 -- they took `line`, the panel-border
+    color, whose luminance is within a hair of the dome's own.  Nothing
+    caught it: the rings were present, correct and invisible.  A golden-hex
+    test cannot see that; only the ratio can.
+
+    Floors are WCAG 2.x: 4.5 for text, 3.0 for graphics.  Two marks are
+    deliberately exempt and carry their own floor -- see FIGURE_FLOOR."""
+
+    SKIN_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield')
+    TEXT_FLOOR = 4.5
+    MARK_FLOOR = 3.0
+    # The rings and cross are chrome: they orient the eye and then get out
+    # of the way, so they sit below the graphics floor on purpose.  The bar
+    # is that they stay unambiguously visible -- an order of magnitude off
+    # the 1.07 that made them disappear.
+    CHROME_FLOOR = 1.9
+    # The constellation FIGURES are the one mark left under its floor by
+    # choice (night 1.87, light 1.47).  Mockups of the WCAG-compliant
+    # version showed why: at the half scale the phone layout uses, lines
+    # bright enough to pass turn the star field into a net over the sky
+    # rather than figures within it.  Their LABELS were lifted instead --
+    # a dozen marks, not five hundred segments.  This floor is "no worse
+    # than 2.2 shipped", not a standard.
+    FIGURE_FLOOR = 1.4
+
+    def _dome_stops(self, pal):
+        """Every stop of the dome gradient.  Which one is hardest to hold a
+        mark against depends on the mark's own luminance, so rather than
+        reason about it the audit tests all of them."""
+        return [c for _offset, c in pal['dome_stops']]
+
+    def _chart_label_fills(self):
+        """The chart's text colors live in sky.css, not the palette, so
+        read them from the shipped file -- a CSS edit must be able to fail
+        this audit.  .skylab is the sky charts' scoped opt-in out of the
+        panel-surface .gridlab gray.  Returns {class: (night, light)}."""
+        with open(os.path.join(self.SKIN_DIR, 'sky.css')) as f:
+            css = f.read()
+        root = re.search(r':root\{(.*?)\}', css, re.S).group(1)
+        light_root = re.search(r':root\.theme-light\{(.*?)\}', css, re.S).group(1)
+
+        def var(block, name):
+            return re.search(r'--%s:\s*(#[0-9A-Fa-f]{6})' % name, block).group(1)
+
+        # Selector -> declarations, matched EXACTLY.  Reading the first
+        # `.cls{` in the file would grade a scoped rule as the base one the
+        # day someone reorders the stylesheet, and requiring `fill` to be a
+        # rule's last declaration would silently fall back to the dark value
+        # the day a light override gains a second property.  Neither failure
+        # announces itself, so parse instead of pattern-matching.
+        rules = [(' '.join(sel.split()), body)
+                 for sel, body in re.findall(r'([^{}]+)\{([^{}]*)\}', css)]
+
+        def fill_of(selector):
+            bodies = [b for sel, b in rules if sel == selector]
+            assert len(bodies) < 2, 'two rules for %s -- which wins?' % selector
+            if not bodies:
+                return None
+            m = re.search(r'(?:^|;)\s*fill:\s*([^;]+)', bodies[0])
+            return m.group(1).strip() if m else None
+
+        out = {}
+        for cls in ('skylab', 'starlab', 'conlab'):
+            dark = fill_of('.%s' % cls)
+            assert dark, cls
+            light = fill_of(':root.theme-light .%s' % cls) or dark
+            resolved = []
+            for value, block in ((dark, root), (light, light_root)):
+                value = value.strip()
+                v = re.match(r'var\(--([a-z]+)\)', value)
+                resolved.append(var(block, v.group(1)) if v else value)
+            out[cls] = tuple(resolved)
+        return out
+
+    def test_text_marks_hold_45(self):
+        """Star names, ring degrees and constellation names, composited at
+        the opacities the chart actually renders them with -- read from the
+        module, not restated here, so a change to either recomputes these
+        ratios rather than making them fiction.
+
+        SCOPE, deliberate: the dark-sky opacity.  While the sun is up the
+        chart dims its star field to STAR_OPACITY_SUN_UP, which puts these
+        same labels at 2.2-3.3 -- under the floor, on purpose, because
+        those stars are not visible and their names are not there to be
+        read.  Only .skylab, which never dims, holds 4.5 around the
+        clock."""
+        fills = self._chart_label_fills()
+        dark = wxskyfield_sky.STAR_OPACITY_DARK
+        for plate, idx in (('night', 0), ('light', 1)):
+            pal = wxskyfield_sky.PALETTES[plate]
+            for cls, opacity in (('skylab', 1.0),
+                                 ('starlab', dark + wxskyfield_sky.STAR_LABEL_BUMP),
+                                 ('conlab', dark)):
+                fill = fills[cls][idx]
+                for stop in self._dome_stops(pal):
+                    got = _contrast(fill, stop, opacity)
+                    assert got >= self.TEXT_FLOOR, (
+                        '%s .%s %s on %s is %.2f, under %.1f'
+                        % (plate, cls, fill, stop, got, self.TEXT_FLOOR))
+
+    def test_body_dots_hold_3(self):
+        """A body dot clears the graphics floor by its FILL or by its RING
+        -- that is exactly what the palette's `ring` key is for, and the
+        pale bodies on the paper plate (sun, venus) rely on it."""
+        for plate in ('night', 'light'):
+            pal = wxskyfield_sky.PALETTES[plate]
+            for name, fill in pal['body'].items():
+                ring = pal['ring'].get(name)
+                for stop in self._dome_stops(pal):
+                    best = _contrast(fill, stop)
+                    if ring:
+                        best = max(best, _contrast(ring, stop))
+                    assert best >= self.MARK_FLOOR, (
+                        '%s %s (fill %s, ring %s) is %.2f on %s, under %.1f'
+                        % (plate, name, fill, ring, best, stop, self.MARK_FLOOR))
+
+    def test_rings_and_cross_are_visible(self):
+        """The 2.1.3 defect, pinned.  `grid` must never fall back to
+        `line`: on both plates that value is ~1.1 against the dome."""
+        for plate in ('night', 'light', 'classic-night', 'classic-light'):
+            pal = wxskyfield_sky.PALETTES[plate]
+            assert pal['grid'] != pal['line'], plate
+            for opacity in (wxskyfield_sky.DOME_RING_OPACITY,
+                            wxskyfield_sky.DOME_CROSS_OPACITY):
+                for stop in self._dome_stops(pal):
+                    got = _contrast(pal['grid'], stop, opacity)
+                    assert got >= self.CHROME_FLOOR, (
+                        '%s grid %s at %.2f is %.2f on %s, under %.1f'
+                        % (plate, pal['grid'], opacity, got, stop,
+                           self.CHROME_FLOOR))
+
+    def test_constellation_figures_stay_recessive(self):
+        """Two-sided on purpose: the figures must stay visible, and must
+        NOT be lifted to the graphics floor without revisiting the half
+        scale render that argued against it."""
+        for plate in ('night', 'light'):
+            pal = wxskyfield_sky.PALETTES[plate]
+            for stop in self._dome_stops(pal):
+                got = _contrast(pal['conline'],
+                                stop, wxskyfield_sky.CONLINE_OPACITY_DARK)
+                assert got >= self.FIGURE_FLOOR, (
+                    '%s conline %s is %.2f on %s, under %.1f'
+                    % (plate, pal['conline'], got, stop, self.FIGURE_FLOOR))
+
+    def test_the_dome_draws_the_opacities_the_audit_reads(self, almanac, page):
+        """The audit's ratios are composites at the module's opacities, so
+        they mean nothing unless the dome really renders at them.  Checked
+        in the rendered svg: the constant and the chart cannot drift apart
+        without this failing, and no source grep is involved."""
+        dome = page.dome_svg(almanac)
+        assert ('stroke-dasharray="3 5" opacity="%s"'
+                % wxskyfield_sky.DOME_RING_OPACITY) in dome
+        assert dome.count('stroke-width="1" opacity="%s"'
+                          % wxskyfield_sky.DOME_CROSS_OPACITY) == 2
+        # Whichever star opacity the fixture instant calls for -- it is
+        # local noon, so the dimmed one -- with the labels a shade above
+        # it.  Derived rather than written down: the pair that matters is
+        # (what the module says, what the chart drew), not the clock.
+        star_op = (wxskyfield_sky.STAR_OPACITY_SUN_UP if page.sun_is_up(almanac)
+                   else wxskyfield_sky.STAR_OPACITY_DARK)
+        for cls, expected in (
+                ('starlab', star_op + wxskyfield_sky.STAR_LABEL_BUMP),
+                ('conlab', star_op)):
+            drawn = [float(o) for o in re.findall(
+                r'<text[^>]*class="%s"[^>]*opacity="([\d.]+)"' % cls, dome)]
+            assert drawn, cls
+            assert all(o == pytest.approx(expected) for o in drawn), (cls, drawn)
+
+
+class TestPanelGridContrast:
+    """The three panels that plot over TWILIGHT BANDS -- ribbons, sun path
+    and day length -- draw their gridlines on a third surface again: not the
+    panel (`line`), not the dome gradient (`grid`), but the bands.  Through
+    2.1.3 all five sites took `line` and measured 1.02-1.15:1 on the night
+    plate -- the dome's own defect, on three more panels, found by a review
+    of the 2.2 dome fix.  They take `bandgrid` from 2.2.
+
+    The floor is the sky charts' CHROME_FLOOR, not the graphics floor: these
+    are the same class of mark as the dome's rings, and the same bar applies
+    -- orient the eye, then get out of the way, but never disappear."""
+
+    FLOOR = TestSkyChartContrast.CHROME_FLOOR
+
+    # The three renderers that plot over the bands.  Every gridline in them
+    # goes through _band_rule, which takes a RANK rather than a number, so
+    # the weights a panel may draw are exactly BAND_RULE_OPACITY's values
+    # and this audit measures all of them: a new panel cannot invent a
+    # third weight without adding it here first.
+    RENDERERS = ('ribbons_svg', 'sunpath_svg', 'daylength_svg')
+
+    def test_every_plate_holds_the_chrome_floor(self):
+        """Walks PALETTES rather than a hardcoded roster, so a fifth plate
+        is covered the day it is added, and branches on what the plate
+        DECLARES rather than on its name.
+
+        A plate with no casing is measured against the bands themselves.  A
+        plate with one is measured against the casing -- because that is
+        what its rule actually sits on -- with the casing first composited
+        over each band, since a casing over a pale band barely lightens it
+        and the band still sets the answer.  The light ramp is why the
+        casing exists: #3A5175 to #D7E6F5 is a wider luminance span than
+        any single stroke color can straddle, the best candidate swept
+        bottoming out at 1.72.
+
+        Every band, not just the worst: which shades a panel paints depends
+        on the day and the latitude."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            for rank, opacity in wxskyfield_sky.BAND_RULE_OPACITY.items():
+                for shade, band in pal['twilight'].items():
+                    under = (_composite(pal['bandcase'], band,
+                                        wxskyfield_sky.BAND_CASING_OPACITY)
+                             if pal['bandcase'] else band)
+                    got = _contrast(pal['bandgrid'], under, opacity)
+                    assert got >= self.FLOOR, (
+                        '%s %s rule on the %s band is %.2f, under %.1f'
+                        % (plate, rank, shade, got, self.FLOOR))
+
+    def test_the_night_plates_draw_no_casing(self):
+        """The casing is the light plates' answer to a ramp they cannot
+        straddle.  The night plates read against every one of their own
+        bands with a single stroke, so they must not pay for a second
+        element per gridline."""
+        for plate in ('night', 'classic-night'):
+            assert wxskyfield_sky.PALETTES[plate]['bandcase'] is None, plate
+
+    def test_every_palette_carries_the_same_keys(self):
+        """_band_rule reads `bandgrid` and `bandcase` by subscript, so a
+        plate that omits one raises inside a guarded renderer and blanks
+        three panels at report time.  Key parity is the cheap way to make
+        that a test failure instead."""
+        rosters = {plate: frozenset(pal)
+                   for plate, pal in wxskyfield_sky.PALETTES.items()}
+        reference = rosters['night']
+        for plate, keys in rosters.items():
+            assert keys == reference, (
+                '%s differs: missing %s, extra %s'
+                % (plate, sorted(reference - keys), sorted(keys - reference)))
+
+    def test_no_band_gridline_takes_the_panel_color(self, almanac, page):
+        """The 2.1.3 defect itself: these rules drawn in `line`, the
+        panel-border color, on a surface that is not the panel.
+
+        Checked in the RENDERED svg, not in the source -- the color is
+        caught however it arrives, and a reflow of the call sites cannot
+        make the guard pass by accident."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            for renderer in self.RENDERERS:
+                svg = getattr(page, renderer)(almanac, palette=plate)
+                assert pal['bandgrid'] in svg, (plate, renderer)
+                assert 'stroke="%s"' % pal['line'] not in svg, (plate, renderer)
+
+    def test_the_casing_is_wider_than_the_rule_it_carries(self):
+        """A casing narrower than its rule would not be a casing.  Pins the
+        geometry the ratios assume: one wide pale stroke, one thin rule
+        centred on it, in that order -- painted after, the casing would
+        bury what it is there to carry."""
+        svg = wxskyfield_sky._band_rule(
+            wxskyfield_sky.PALETTES['light'], 0, 0, 10, 0, 'primary')
+        casing, rule = svg.split('/>')[0], svg.split('/>')[1]
+        assert svg.count('<line') == 2
+        assert 'stroke-width="%d"' % wxskyfield_sky.BAND_CASING_WIDTH in casing
+        assert 'stroke-width="1"' in rule
 
 
 class TestTheme:

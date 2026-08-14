@@ -42,6 +42,15 @@ not in English:
    label, and the pass chart's `passhead`/`passname`/`passwhen` head-line rules), and text
    with no rule renders at the
    16px SVG default in the wrong color — changes.txt calls out new classes.
+   2.2 added one more, `skylab`, the sky charts' 30°/60° ring-degree labels, and that one
+   fails more gently — which is exactly why it is worth reading about.
+
+   Those labels carry `class="mono gridlab skylab"`, so a skin without a `skylab` rule gets
+   `gridlab`'s color rather than the 16px default — the label looks fine and simply misses
+   the 2.2 contrast lift.  Two things to watch when you add it: `skylab` and `gridlab` are
+   equal specificity and both match the element, so the `skylab` rule must come *after* your
+   `gridlab` rule; and if your `gridlab` rule is scoped (`.night .gridlab`), scope `skylab`
+   the same way or it will lose.
 
    The panels' tooltips are native SVG `<title>` elements, so they work on hover with no
    help — but hover does not exist on a touch screen.  The bundled skin ships
@@ -66,8 +75,10 @@ markup: `'night'` (the default, used in the screenshots below) or `'light'`, a p
 plate for light-themed pages: `$sky_page.analemma_svg($almanac, palette='light')`.  As of 1.5
 both plates draw the bodies in the traditional astronomy colors — yellow sun, silver moon,
 gray Mercury, pearly Venus, blue Earth, red Mars and so on — with pale bodies carrying a thin
-ring on the light plate so they hold their edge on paper; the pre-1.5 colors remain available
-as `palette='classic-night'` and `'classic-light'`.
+ring on the light plate so they hold their edge on paper; the pre-1.5 *body* colors remain
+available as `palette='classic-night'` and `'classic-light'`.  Those two preserve the body
+scheme only: chart fixes that are not about identity reach them like any other plate, so
+they took 2.2's sky-chart contrast work along with `'night'` and `'light'`.
 
 ## The sky dome — `dome_svg`
 

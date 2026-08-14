@@ -79,6 +79,7 @@ map.  To restore the sparse pre-2.0 look:
 
 | Release | Worth knowing |
 |---|---|
+| **2.2** | The sky charts are easier to read: the altitude rings and meridian/horizon cross were invisible against the dome and now have their own color, and the small labels are lifted to a readable contrast.  Nothing to configure — but a skin that [embeds the panels](panels.md) and copied individual CSS rules should pick up the new `skylab` class. |
 | **2.1** | Comets (`[[Comets]]`, Halley and Hale-Bopp by default), the twelve major meteor showers, moon perigee/apogee and `next_supermoon`, Earth's perihelion/aphelion, solar time and the equation of time.  Unit-aware `distance`/`distance_from_sun` twins and `illumination`. |
 | **2.0** | Satellites (`[[Satellites]]`, ISS and Tiangong by default) with the pass family; the complete Hipparcos catalog bundled; `sky.js` so tooltips answer taps on touch screens. |
 | **1.19** | The dome draws the 88 constellations' stick figures. |
