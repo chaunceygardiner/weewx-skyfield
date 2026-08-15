@@ -92,6 +92,12 @@ which is what tells you how a chart's orientation relates to the view through a 
 direct measure of its distance.  A star without a measured parallax has no known distance,
 which is why this extension reports `N/A` rather than a fictitious number.
 
+**Plate** — this manual's word for one of the Sky page's two color schemes, borrowed from
+printed star atlases: the **night plate** (the default dark theme) and the **paper plate**
+(the light one).  A plate is chosen at generation time by the `theme`
+[option](configuration.md#the-sky-pages-report-stanza) and baked into the page; see
+[the two plates](sky-page.md#the-two-plates).
+
 **Radiant** — the point on the sky meteors in a shower appear to stream away from.
 
 **Refraction** — the atmosphere bending light near the horizon, which makes bodies appear

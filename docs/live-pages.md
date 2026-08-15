@@ -99,6 +99,7 @@ these are a stable contract:
 | `<g class="dome-track" data-body="iss">` | pass chart | The pass arc's group. |
 | `$sky_page.satellite_names()` | template | The configured satellite tag names, in config order. |
 | `$sky_page.comet_names()` | template | The configured comet tag names, in config order. |
+| `$sky_page.theme($almanac)` / `.palette($almanac)` | template | The consuming report's own theme, resolved — see [Helpers](panels.md#helpers--theme-palette-header_sub-and-sun_is_up).  Resolve once per page: the palette is baked into each fragment, so a page that re-renders fragments must hand every one the same value or the chart flips plate on a refresh. |
 
 Locate marks by these names, never by tooltip text — tooltips are translated.
 

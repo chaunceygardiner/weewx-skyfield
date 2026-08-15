@@ -1,8 +1,51 @@
 weewx-skyfield change history
 -----------------------------
 
-2.3 (in progress)
------------------
+2.3 (2026/08/14)
+----------------
+- ACTION REQUIRED, only if a skin of yours passes palette='classic-night'
+  or palette='classic-light' to a $sky_page panel: those two palettes are
+  gone.  The names still render -- they now draw the current 'night' and
+  'light' plates, and each logs one warning naming its replacement -- so
+  nothing breaks, but the pre-1.5 body colors they carried are no longer
+  available.  A classic value in the report's own theme option is treated
+  the same way, warned about and drawn as dark or light; that was never a
+  legal theme value and used to fail the page.  The classic palettes
+  existed for a very short time before 1.5 shipped, and keeping them meant
+  every later contrast fix had to be argued twice, the second time on a
+  plate whose premise was that its colors could not move.
+- Three panels are readable on a light-themed page: Rise & Set, The Sun's
+  Path and The Solar Year.  Every mark they carry -- each body's
+  above-horizon bar, the transit ticks and the "now" line, the sun's and
+  moon's arcs, the horizon line and hour dots, the sunrise/sunset/solar-noon
+  traces and the today line -- is drawn over the twilight bands, and on the
+  paper plate each took a color chosen for a panel surface and disappeared
+  into the band beneath it: Mars measured 1.01 to 1, Mercury 1.04, Pluto
+  1.06, the "now" line 1.20, the sun's own arc 1.21 and the moon's 1.10.  A
+  body's color says which body it is and cannot also be chosen to hold up
+  against five twilight depths, so the contrast now comes from around each
+  mark instead -- a casing beneath it, an outline on it where the shape can
+  carry one, and, for a line, the plate's darker edge color in place of a
+  pale fill.  Every mark reads at 3.59 to 1 or better on both plates.  2.2
+  fixed the gridlines that cross these bands; this is the same defect on
+  the data they cross.
+- On the dark theme the same panels gain a hairline rim on their bars.  It
+  is what lets the audit hold for any future body color rather than for
+  today's, and at page scale it is not a restyle -- but it is a change to
+  the default look, and a reader comparing screenshots deserves to know
+  where it came from.
+- The manual shows the light theme.  `theme = light` has been an option
+  since 1.15 and every image in the manual was the dark page, so the one
+  way to see what the option does was to set it; the Sky page chapter now
+  carries the same page on the paper plate, and the theme option links to
+  it.
+- The manual documents `$sky_page.theme()` and `$sky_page.palette()`.
+  They are how a skin embedding the panels offers both plates -- they read
+  the theme option from the EMBEDDING report's own stanza, so a skin adds
+  one option and writes no resolving logic -- and they had never been
+  written down anywhere, on the page whose whole subject is embedding.
+  Panels in your own skin now covers them, including resolving the pair
+  once per page rather than per panel call.
 - Every screenshot in the README and the manual is 2.2's drawing.  The
   sky dome, the sample Sky page and the panel shots now show the
   gridlines and lifted labels 2.2 gave them, and the Dutch, Spanish and

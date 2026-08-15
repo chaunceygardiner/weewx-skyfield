@@ -985,8 +985,9 @@ class TestFooter:
 class TestPalettes:
     """Every render method takes palette=.  As of 1.5 the default 'night'
     and the 'light' plates bake the traditional astronomy body colors
-    (yellow sun, silver moon, gray Mercury, pearly Venus, blue Earth);
-    'classic-night'/'classic-light' preserve the pre-1.5 values."""
+    (yellow sun, silver moon, gray Mercury, pearly Venus, blue Earth).  As
+    of 2.3 'classic-night'/'classic-light' are aliases of those two rather
+    than plates of their own."""
 
     RENDERERS = ('moon_svg', 'dome_svg', 'ribbons_svg', 'orrery_svg',
                  'analemma_svg', 'eot_svg', 'sunpath_svg', 'daylength_svg',
@@ -1063,19 +1064,83 @@ class TestPalettes:
         assert 'box-shadow' not in page.chips_html(almanac)
         assert 'box-shadow' not in page.table_html(almanac)
 
-    def test_classic_palettes_preserve_pre_15_colors(self, almanac, page):
-        """'classic-night'/'classic-light' bake the pre-1.5 body colors for
-        skins attached to the old look."""
-        assert '#B98C31' in page.chips_html(almanac, palette='classic-night')
-        assert '#7E92DA' in page.ribbons_svg(almanac, palette='classic-night')
-        classic_ribbons = page.ribbons_svg(almanac, palette='classic-light')
-        for hexval in ('#B8860B', '#4A5FB8'):               # old sun, old moon
-            assert hexval in classic_ribbons
-        orrery = page.orrery_svg(almanac, palette='classic-light')
-        for hexval in ('#B8860B', '#2e6e8e'):               # old sun, old earth
-            assert hexval in orrery
-        for name in self.RENDERERS:
-            assert_balanced(getattr(page, name)(almanac, palette='classic-light'))
+    def test_the_classic_names_still_render(self, almanac, page):
+        """As of 2.3 'classic-night' and 'classic-light' are ALIASES of the
+        two current plates, not plates of their own -- the pre-1.5 body
+        colors they froze lasted a very short time and nothing was ever attached
+        to them, while keeping them meant arguing every contrast fix twice,
+        the second time on a plate whose premise was that it could not move.
+
+        The names keep working on purpose: a skin still passing one must go
+        on rendering rather than start raising at report time.  Two-sided,
+        because both halves can break independently -- the name resolves,
+        and it resolves to the CURRENT colors."""
+        for classic, current in wxskyfield_sky.PALETTE_ALIASES.items():
+            for name in self.RENDERERS:
+                got = getattr(page, name)(almanac, palette=classic)
+                assert got == getattr(page, name)(almanac, palette=current)
+                assert_balanced(got)
+        # The pre-1.5 values are gone from the module, not merely unreachable.
+        for old in ('#B98C31', '#7E92DA', '#B8860B', '#4A5FB8', '#2e6e8e'):
+            assert old not in str(wxskyfield_sky.PALETTES), old
+
+    def test_a_classic_theme_option_warns_and_renders(self, almanac, caplog):
+        """The other surface the dropped names can arrive on: the report's
+        own theme option, which takes dark/light/auto rather than palette
+        names.  A classic value there was never legal and used to fail the
+        page outright; from 2.3 it warns and draws the plate that replaced
+        it, so a station that set one gets a working page and a log line
+        telling it what to change."""
+        for value, expected in wxskyfield_sky.THEME_ALIASES.items():
+            wxskyfield_sky._warned_palettes.clear()
+            page = wxskyfield_sky.SkyPage({'theme': value})
+            with caplog.at_level(logging.WARNING):
+                caplog.clear()
+                assert page.theme(almanac) == expected
+                assert page.palette(almanac) == (
+                    'light' if expected == 'light' else 'night')
+            msgs = [r.getMessage() for r in caplog.records if value in r.getMessage()]
+            assert len(msgs) == 1, msgs
+            assert 'theme = %s' % expected in msgs[0]
+        wxskyfield_sky._warned_palettes.clear()
+
+    def test_the_two_surfaces_warn_independently(self, almanac, caplog):
+        """A station can hit both surfaces with the same spelling -- a
+        template passing palette='classic-night' on a report whose theme
+        option says the same.  Through 2.3's first cut one set keyed by the
+        bare name meant it heard about only whichever fired first, fixed
+        that one, and never learned about the other."""
+        wxskyfield_sky._warned_palettes.clear()
+        try:
+            page = wxskyfield_sky.SkyPage({'theme': 'classic-night'})
+            with caplog.at_level(logging.WARNING):
+                caplog.clear()
+                page.ribbons_svg(almanac, palette='classic-night')
+                assert page.theme(almanac) == 'dark'
+            msgs = [r.getMessage() for r in caplog.records]
+            assert sum(m.startswith('palette') for m in msgs) == 1, msgs
+            assert sum(m.startswith('theme') for m in msgs) == 1, msgs
+        finally:
+            wxskyfield_sky._warned_palettes.clear()
+
+    def test_a_classic_name_warns_once(self, almanac, page, caplog):
+        """The rendering is silent about the substitution; the LOG is not --
+        a skin still asking for a dropped name should be told, or the
+        substitution is invisible until someone wonders why their colors
+        moved.  Once per name per process, though: the page resolves its
+        palette a dozen times per cycle and this must not fill the log."""
+        wxskyfield_sky._warned_palettes.clear()
+        try:
+            with caplog.at_level(logging.WARNING):
+                for _ in range(3):
+                    page.ribbons_svg(almanac, palette='classic-night')
+                page.dome_svg(almanac, palette='classic-night')
+            warnings = [r for r in caplog.records
+                        if 'classic-night' in r.getMessage()]
+            assert len(warnings) == 1, [r.getMessage() for r in warnings]
+            assert "'night'" in warnings[0].getMessage()
+        finally:
+            wxskyfield_sky._warned_palettes.clear()
 
     def test_unknown_palette_raises(self, almanac, page):
         for name in self.RENDERERS:
@@ -1241,8 +1306,7 @@ class TestSkyChartContrast:
     def test_rings_and_cross_are_visible(self):
         """The 2.1.3 defect, pinned.  `grid` must never fall back to
         `line`: on both plates that value is ~1.1 against the dome."""
-        for plate in ('night', 'light', 'classic-night', 'classic-light'):
-            pal = wxskyfield_sky.PALETTES[plate]
+        for plate, pal in wxskyfield_sky.PALETTES.items():
             assert pal['grid'] != pal['line'], plate
             for opacity in (wxskyfield_sky.DOME_RING_OPACITY,
                             wxskyfield_sky.DOME_CROSS_OPACITY):
@@ -1313,7 +1377,7 @@ class TestPanelGridContrast:
     RENDERERS = ('ribbons_svg', 'sunpath_svg', 'daylength_svg')
 
     def test_every_plate_holds_the_chrome_floor(self):
-        """Walks PALETTES rather than a hardcoded roster, so a fifth plate
+        """Walks PALETTES rather than a hardcoded roster, so a third plate
         is covered the day it is added, and branches on what the plate
         DECLARES rather than on its name.
 
@@ -1340,12 +1404,11 @@ class TestPanelGridContrast:
                         % (plate, rank, shade, got, self.FLOOR))
 
     def test_the_night_plates_draw_no_casing(self):
-        """The casing is the light plates' answer to a ramp they cannot
-        straddle.  The night plates read against every one of their own
-        bands with a single stroke, so they must not pay for a second
+        """The casing is the light plate's answer to a ramp it cannot
+        straddle.  The night plate reads against every one of its own
+        bands with a single stroke, so it must not pay for a second
         element per gridline."""
-        for plate in ('night', 'classic-night'):
-            assert wxskyfield_sky.PALETTES[plate]['bandcase'] is None, plate
+        assert wxskyfield_sky.PALETTES['night']['bandcase'] is None
 
     def test_every_palette_carries_the_same_keys(self):
         """_band_rule reads `bandgrid` and `bandcase` by subscript, so a
@@ -1384,6 +1447,158 @@ class TestPanelGridContrast:
         assert svg.count('<line') == 2
         assert 'stroke-width="%d"' % wxskyfield_sky.BAND_CASING_WIDTH in casing
         assert 'stroke-width="1"' in rule
+
+
+class TestBandMarkContrast:
+    """The DATA marks on the same twilight bands -- a body's above-horizon
+    bar, its transit tick, the "now" line -- as opposed to the gridlines
+    TestPanelGridContrast measures.
+
+    This is the half 2.2 left behind, and it was the worse half: the
+    gridlines were invisible on the NIGHT plate, where the bars were merely
+    dim, but on the paper plate the bars themselves measured 1.01:1 (Mars
+    on the astro band), 1.04 (Mercury on night), 1.06 (Pluto), with the
+    transit ticks at 1.72 and the "now" line at 1.20.  Nothing caught it
+    because `test_body_dots_hold_3` measures body colors against the DOME
+    GRADIENT -- the surface those colors were chosen for -- and no audit
+    knew the same colors were also being painted over a twilight ramp.
+
+    The floor is the graphics floor, not the chrome floor these panels'
+    gridlines get: a body's bar is the information the panel exists to
+    carry, not chrome that may recede.
+
+    Why this cannot be fixed with a color, and what carries it instead, is
+    in _band_bar's docstring."""
+
+    FLOOR = TestSkyChartContrast.MARK_FLOOR
+
+    @staticmethod
+    def _under(pal, band, curve=False):
+        """What a mark on this band actually sits on: the band itself where
+        the plate declares no casing, else the casing composited over the
+        band -- a near-solid casing over a pale band barely moves it, so
+        the band still sets the answer at that end of the ramp."""
+        if not pal['bandcase']:
+            return band
+        return _composite(pal['bandcase'], band,
+                          wxskyfield_sky.BAND_CURVE_CASING_OPACITY if curve
+                          else wxskyfield_sky.BAND_MARK_CASING_OPACITY)
+
+    def test_every_body_mark_reads_on_every_band(self):
+        """A body mark clears the floor by its own fill or by the layer its
+        plate puts around it -- one of the two, on every band, on every
+        plate.
+
+        Read the guarantee precisely, because an earlier docstring here
+        claimed the opposite of what the assertion does: `bandedge` does
+        not depend on the body, so once a plate declares one this passes
+        for ANY fill, including a fill identical to the band.  That is not
+        a hole, it is the design -- the whole point of an outline is that a
+        body color can then be chosen for identity alone -- but it means
+        this test constrains the PLATE, not the palette's body colors.
+        What would fail: a plate that stops declaring the layers, or
+        declares ones that do not clear the floor.  `test_a_bare_identity
+        _color_fails_this_audit` pins the other direction."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            for name, fill in pal['body'].items():
+                for shade, band in pal['twilight'].items():
+                    under = self._under(pal, band)
+                    best = _contrast(fill, under)
+                    if pal['bandedge']:
+                        best = max(best, _contrast(pal['bandedge'], under))
+                    assert best >= self.FLOOR, (
+                        '%s %s bar (fill %s, edge %s) is %.2f on the %s band,'
+                        ' under %.1f' % (plate, name, fill, pal['bandedge'],
+                                         best, shade, self.FLOOR))
+
+    def test_the_line_marks_read_on_every_band(self):
+        """The marks drawn as lines and curves over the bands -- transit
+        ticks and the "now" line on the ribbons, the sun and moon arcs and
+        the horizon line on the sun path, the rise/set/noon traces and the
+        today line on the solar year -- carry no outline, since an outline
+        on a 1.5px stroke is just a wider stroke.  Each must clear the
+        floor against whatever its plate puts under it.
+
+        `_under` composites the casing, so this measurement is only true of
+        renderers that actually paint one: through 2.3's first cut it
+        reported 10.03 for `ink` while `sunpath_svg` and `daylength_svg`
+        drew the same color bare at 1.72.  That is why
+        `test_every_band_crossing_panel_paints_its_casing` walks the
+        renderers -- these ratios mean nothing without it."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            marks = [('ink', pal['ink']), ('brass', pal['brass'])]
+            marks += [('arc %s' % b, wxskyfield_sky._ring_or_body(pal, b))
+                      for b in ('sun', 'moon')]
+            for name, color in marks:
+                for shade, band in pal['twilight'].items():
+                    got = _contrast(color, self._under(pal, band, curve=True))
+                    assert got >= self.FLOOR, (
+                        '%s %s mark %s is %.2f on the %s band, under %.1f'
+                        % (plate, name, color, got, shade, self.FLOOR))
+
+    def test_every_band_crossing_panel_paints_its_casing(self, almanac, page):
+        """The ratios above assume a casing under every data mark that
+        crosses the bands.  All three panels that plot on that surface must
+        therefore paint one -- checked in the rendered SVG, per renderer,
+        because 2.3 first shipped the mechanism in `ribbons_svg` alone and
+        the audit could not tell."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            for renderer in ('ribbons_svg', 'sunpath_svg', 'daylength_svg'):
+                svg = getattr(page, renderer)(almanac, palette=plate)
+                if pal['bandcase']:
+                    assert ('stroke="%s"' % pal['bandcase'] in svg
+                            or 'fill="%s"' % pal['bandcase'] in svg), (
+                        '%s %s paints no casing' % (plate, renderer))
+                else:
+                    # A night plate needs none and must not pay for one.
+                    assert pal['bandcase'] is None
+                    assert 'stroke="#ffffff"' not in svg, (plate, renderer)
+
+    def test_the_ribbons_panel_draws_the_layers_the_audit_reads(
+            self, almanac, page):
+        """The ratios above are computed from palette keys and the casing
+        opacity; they mean nothing unless the panel really paints those
+        layers.  Checked in the rendered SVG, not in the source."""
+        for plate, pal in wxskyfield_sky.PALETTES.items():
+            svg = page.ribbons_svg(almanac, palette=plate)
+            assert 'stroke="%s" stroke-width="1"' % pal['bandedge'] in svg, plate
+            if pal['bandcase']:
+                assert ('fill="%s" opacity="%s"'
+                        % (pal['bandcase'],
+                           wxskyfield_sky.BAND_MARK_CASING_OPACITY)) in svg, plate
+            else:
+                # A night plate must not pay for a casing it does not need.
+                assert 'opacity="%s"' % (
+                    wxskyfield_sky.BAND_MARK_CASING_OPACITY) not in svg, plate
+
+    def test_a_bare_identity_color_fails_this_audit(self):
+        """Proof the audit trips, by measuring the code as it shipped
+        through 2.2: no casing, no outline, the fill alone.  Without this,
+        an audit that passes says nothing about whether it could ever
+        fail."""
+        pal = dict(wxskyfield_sky.PALETTES['light'],
+                   bandcase=None, bandedge=None)
+        worst = min(_contrast(f, b) for f in pal['body'].values()
+                    for b in pal['twilight'].values())
+        assert worst < 1.1, worst
+
+    def test_the_casing_stands_outside_the_bar_it_carries(self):
+        """Geometry the ratios assume: the casing is painted first and
+        stands proud of the bar on every side.  A casing painted after, or
+        inset, would bury the mark it exists to carry.  The <title> stays
+        on the bar -- the casing must not become a second hover target."""
+        svg = wxskyfield_sky._band_bar(
+            wxskyfield_sky.PALETTES['light'], 100, 50, 200, 10, 4, '#b23a24',
+            inner='<title>x</title>')
+        casing, bar = svg.split('<rect ')[1], svg.split('<rect ')[2]
+        pad = wxskyfield_sky.BAND_MARK_CASING_PAD
+        num = wxskyfield_sky._num
+        assert svg.count('<rect ') == 2
+        assert 'x="%s" y="%s"' % (num(100 - pad), num(50 - pad)) in casing
+        assert ('width="%s" height="%s"'
+                % (num(200 + 2 * pad), num(10 + 2 * pad))) in casing
+        assert '<title>' not in casing.split('/>')[0]
+        assert '<title>x</title>' in bar
 
 
 class TestTheme:

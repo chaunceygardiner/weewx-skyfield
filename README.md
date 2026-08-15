@@ -38,8 +38,9 @@ page drawn entirely from your station's own latitude, longitude and elevation, p
 `<HTML_ROOT>/skyfield/index.html` and regenerated with live values every report cycle.  It is
 a showcase for what the almanac now knows: the sky above you right now, today's rise and set
 times, the year's arc of the sun, the current lunation, the next satellite pass.  Nothing on
-it is fetched from anywhere — the page is self-contained HTML and inline SVG — and every
-panel on it can be dropped into a skin of your own.
+it is fetched from beyond the page's own directory — self-contained HTML and inline SVG,
+with a stylesheet and a few lines of script beside it — and every panel on it can be dropped
+into a skin of your own.
 
 [Tour the Sky page](https://chaunceygardiner.github.io/weewx-skyfield/sky-page.html) ·
 [embed its panels](https://chaunceygardiner.github.io/weewx-skyfield/panels.html)
@@ -82,7 +83,9 @@ panel on it can be dropped into a skin of your own.
 - **The Sky page** (pictured above) — a full-sky-map dome, rise & set ribbons, the sun's
   path, the solar year, the lunar month, an orrery, an analemma, an equation-of-time curve,
   satellite pass predictions and a countdown row for the next equinox, eclipse and meteor
-  shower.  Every panel can be embedded in your own skin.
+  shower — on a night plate or a paper one (`theme = light`, or `auto` to follow the sun;
+  [both are pictured](https://chaunceygardiner.github.io/weewx-skyfield/sky-page.html#the-two-plates)).
+  Every panel can be embedded in your own skin.
   → [Tour the page](https://chaunceygardiner.github.io/weewx-skyfield/sky-page.html) ·
   [embed its panels](https://chaunceygardiner.github.io/weewx-skyfield/panels.html)
 
@@ -136,8 +139,9 @@ The manual has the full steps, including Debian package installs, the
 and what to do when
 [something is not working](https://chaunceygardiner.github.io/weewx-skyfield/troubleshooting.html).
 
-Upgrading from an earlier release?  Two things need attention — the removed `stars` option
-and the one tag whose units changed — both on the
+Upgrading from an earlier release?  Three things need attention — the removed `stars`
+option, the one tag whose units changed, and the `classic-` palettes dropped in 2.3 — and all
+three are on the
 [Upgrading page](https://chaunceygardiner.github.io/weewx-skyfield/upgrading.html).  The
 full history is in
 [changes.txt](https://github.com/chaunceygardiner/weewx-skyfield/blob/main/changes.txt).

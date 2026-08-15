@@ -117,7 +117,7 @@ Every option below can be set there, overriding the bundled `skin.conf`.  Settin
 | Option | Default | Effect |
 |---|---|---|
 | `enable` | `true` | Set `false` to skip generating the page entirely.  The almanac tags keep working — this governs only the bundled page. |
-| `theme` | `dark` | `dark` (the night plate), `light` (a paper-atlas plate), or `auto` — light while the sun is up at generation time, dark otherwise.  Colors are baked in at generation, not switched in the browser, so `auto` follows sunrise and sunset within one archive interval. |
+| `theme` | `dark` | `dark` (the night plate), `light` (a paper-atlas plate — [shown here](sky-page.md#the-two-plates)), or `auto` — light while the sun is up at generation time, dark otherwise.  Colors are baked in at generation, not switched in the browser, so `auto` follows sunrise and sunset within one archive interval.  A `classic-…` value here draws the plate that replaced it and logs a warning saying so. |
 | `star_mag_limit` | `5.0` | Plot stars at least this bright.  Magnitudes run backwards: 6.5 is the naked-eye limit, Sirius is −1.4.  The default is roughly 800 stars. |
 | `star_label_mag` | `2.5` | Label named stars at least this bright. |
 | `constellation_lines` | `true` | Draw the 88 IAU constellations' stick figures under the stars.  `false` gives the plain dome. |

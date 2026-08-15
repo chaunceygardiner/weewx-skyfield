@@ -75,10 +75,17 @@ markup: `'night'` (the default, used in the screenshots below) or `'light'`, a p
 plate for light-themed pages: `$sky_page.analemma_svg($almanac, palette='light')`.  As of 1.5
 both plates draw the bodies in the traditional astronomy colors — yellow sun, silver moon,
 gray Mercury, pearly Venus, blue Earth, red Mars and so on — with pale bodies carrying a thin
-ring on the light plate so they hold their edge on paper; the pre-1.5 *body* colors remain
-available as `palette='classic-night'` and `'classic-light'`.  Those two preserve the body
-scheme only: chart fixes that are not about identity reach them like any other plate, so
-they took 2.2's sky-chart contrast work along with `'night'` and `'light'`.
+ring on the light plate so they hold their edge on paper.  Where those same colors are drawn
+over the twilight bands rather than over a panel — the Ribbons bars, their transit ticks and
+the "now" line — the plate adds a casing beneath the mark, an outline on it, or both, since a
+body's color is chosen to say which body it is and no single value can also hold up against
+every twilight depth (2.3).
+
+`'classic-night'` and `'classic-light'` named the pre-1.5 body colors.  **They were dropped in
+2.3** and now draw as `'night'` and `'light'`; the names still work, and a call that uses one
+logs a warning naming its replacement.  They lasted a very short time before 1.5 shipped, and
+keeping two frozen color schemes meant arguing every contrast fix twice — the second time on a
+plate whose whole premise was that its colors could not move.
 
 ## The sky dome — `dome_svg`
 
@@ -187,9 +194,11 @@ $sky_page.ribbons_svg($almanac)
 
 Today's above-horizon span for the sun, moon and planets — and every configured
 [comet](tags.md#comets) with elements (2.1), as a brass bar — over background bands of tonight's
-civil, nautical and astronomical twilight (the USNO geometric definitions).  The ivory tick on
+civil, nautical and astronomical twilight (the USNO geometric definitions).  The tick across
 each bar is the transit; the vertical brass line is now, and the rise → set times are listed
-at the right.
+at the right.  Bars, ticks and the "now" line are drawn over those bands rather than over the
+panel, so on each plate they carry whatever casing or outline it takes to stay readable there
+(2.3) — nothing for a skin to configure.
 
 ## The sun's path — `sunpath_svg`
 
@@ -411,7 +420,26 @@ and its star catalog are live; if the almanac is not registered, or the star cat
 load, the footer says *that* instead and points at the weewxd log.  A page rendering off the
 built-in almanac's fall-through therefore admits it in print rather than looking correct.
 
-## Helpers — `header_sub` and `sun_is_up`
+## Helpers — `theme`, `palette`, `header_sub` and `sun_is_up`
+
+`$sky_page.theme($almanac)` and `$sky_page.palette($almanac)` are how an embedding skin
+offers the two plates without reimplementing anything.  Both read the option from **your**
+report's stanza, not from the bundled skin's, so adding `theme = dark | light | auto` to your
+own `[[YourReport]]` section is the only step:
+
+```
+#set $theme   = $sky_page.theme($almanac)      ## 'dark' or 'light'
+#set $palette = $sky_page.palette($almanac)    ## 'night' or 'light'
+<html lang="$lang" class="theme-$theme">
+```
+
+`theme()` resolves `auto` itself — light while the sun is up at generation time — so you
+inherit that logic rather than writing it; `palette()` returns the matching palette name to
+hand to every panel call.  Resolve the pair **once** per page and reuse it: each panel call
+is individually guarded, so resolving inside each one would let a typo'd theme value cost
+every chart while the rest of the page rendered.  And because the colors are baked into the
+markup at generation time, this is a generation-time choice — a browser toggle cannot move
+it.
 
 `$sky_page.header_sub($almanac)` returns The Sky page's one-line subtitle — station
 coordinates and the almanac time, e.g. `37.44° N · 122.14° W · Saturday, June 21 2025,

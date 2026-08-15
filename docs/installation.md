@@ -121,9 +121,11 @@ satellite reads "N/A" rather than reporting confidently wrong pass times, a warn
 logged (once at the crossing, not per tag), and the always-live diagnostic tags
 `$almanac.iss.elements_epoch` and `$almanac.iss.elements_age` say why.
 
-**This is the extension's only network access, and it has a switch.**  Set
-`satellite_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
-ever — the behavior every release before 2.0 had unconditionally.  In that mode
+**This is one of the extension's two network accesses — comet elements, below, are the
+other — and it has a switch of its own.**  Set `satellite_downloads = false` in the
+`[Skyfield]` section and no satellite fetch is ever made; with `comet_downloads = false`
+beside it the extension fetches nothing at all, ever — the behavior every release before 2.0
+had unconditionally.  In that mode
 `[[Satellites]]` still works if you maintain the element files yourself: an air-gapped
 station can copy `wxskyfield_sat_<norad>.tle` files in by any means it likes (each file is
 one satellite's CelesTrak TLE — the name line and two element lines); the seven-day age

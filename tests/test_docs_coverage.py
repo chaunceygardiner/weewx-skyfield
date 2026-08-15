@@ -317,9 +317,12 @@ CORE_REPORT_KEYS = {
 NON_PANEL_MEMBERS = {
     'get_extension_list',   # the WeeWX search-list API itself
     'decorate',             # internal: wraps a render in error trapping
-    'palette',              # internal: resolves a palette name to colors
-    'theme',                # internal: reads the report's theme option
 }
+# `theme` and `palette` were on that list until 2.3, called internal.  They
+# are not: they are the pair a skin embedding the panels calls to offer both
+# plates, and exempting them is why the manual went several releases without
+# a word about them while a consuming extension had to be told by hand.
+# Anything genuinely internal belongs above, with the reason.
 
 
 def _documented_table_rows(path: str, after: str, before: str) -> Dict[str, str]:

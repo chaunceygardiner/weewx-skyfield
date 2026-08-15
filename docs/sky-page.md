@@ -103,3 +103,16 @@ It is the busiest single page this extension generates, and
 [Performance](performance.md#what-the-sky-page-costs) explains where the time goes, why the
 [result cache](performance.md#the-result-cache) absorbs most of it, and which options move
 the needle on hardware that is struggling.
+
+### The two plates
+
+Everything above is the default `theme = dark`.  `theme = light` draws the same page on a
+paper-atlas plate — a cream page, a white sky dome with the stars inked on it, and the same
+body colors darkened to hold their own on paper.  It is the whole page that changes, charts
+included, and the colors are baked into the markup at generation time, so nothing switches in
+the browser; `theme = auto` picks per report cycle, light while the sun is up.
+
+![The Sky page on the light theme](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/SkyfieldSampleReport-light.png)
+
+A skin embedding the panels resolves the same option for itself — see
+[`theme` and `palette`](panels.md#helpers--theme-palette-header_sub-and-sun_is_up).

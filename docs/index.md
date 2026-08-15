@@ -32,8 +32,9 @@ page drawn entirely from your station's own latitude, longitude and elevation, p
 `<HTML_ROOT>/skyfield/index.html` and regenerated with live values every report cycle.  It
 is a showcase for what the almanac now knows: the sky above you right now, today's rise and
 set times, the year's arc of the sun, the current lunation, the next satellite pass.
-Nothing on it is fetched from anywhere — the page is self-contained HTML and inline SVG —
-and every panel on it can be dropped into a skin of your own.
+Nothing on it is fetched from beyond the page's own directory — self-contained HTML and
+inline SVG, with a stylesheet and a few lines of script beside it — and every panel on it can
+be dropped into a skin of your own.
 
 [Tour the Sky page](sky-page.md) · [embed its panels](panels.md)
 
@@ -72,7 +73,8 @@ and every panel on it can be dropped into a skin of your own.
 - **The Sky page** (pictured above) — a full-sky-map dome, rise & set ribbons, the sun's
   path, the solar year, the lunar month, an orrery, an analemma, an equation-of-time curve,
   satellite pass predictions and a countdown row for the next equinox, eclipse and meteor
-  shower.  [Tour the page](sky-page.md), or
+  shower — on a night plate or a paper one (`theme = light`, or `auto` to follow the sun).
+  [Tour the page](sky-page.md), see [both plates](sky-page.md#the-two-plates), or
   [embed its panels in your own skin](panels.md).
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are translatable through WeeWX's own lang files, with

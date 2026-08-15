@@ -75,10 +75,21 @@ map.  To restore the sparse pre-2.0 look:
         star_label_mag = 1.1
 ```
 
+## Coming from 2.x
+
+### One thing needs your attention, and only if you embed the panels
+
+**The `classic-night` and `classic-light` palettes are gone (2.3).**  They held the body
+colors used before 1.5.  A skin still passing one to a `$sky_page` panel — or naming one in a
+report's `theme` option — keeps rendering: it draws the current `night` or `light` plate and
+logs one warning naming the replacement.  Change the name to `night` or `light` to silence
+it.  If you have never passed a `palette` argument, there is nothing to do.
+
 ## What each release added
 
 | Release | Worth knowing |
 |---|---|
+| **2.3** | The Ribbons panel's bars, transit ticks and "now" line are readable on the light theme, which the manual now [shows](sky-page.md#the-two-plates).  The `classic-night` and `classic-light` palettes are dropped: a skin that passes one keeps rendering — it draws the current plate and logs a warning — but the pre-1.5 body colors are gone. |
 | **2.2** | The sky charts are easier to read: the altitude rings and meridian/horizon cross were invisible against the dome and now have their own color, and the small labels are lifted to a readable contrast.  Nothing to configure — but a skin that [embeds the panels](panels.md) and copied individual CSS rules should pick up the new `skylab` class. |
 | **2.1** | Comets (`[[Comets]]`, Halley and Hale-Bopp by default), the twelve major meteor showers, moon perigee/apogee and `next_supermoon`, Earth's perihelion/aphelion, solar time and the equation of time.  Unit-aware `distance`/`distance_from_sun` twins and `illumination`. |
 | **2.0** | Satellites (`[[Satellites]]`, ISS and Tiangong by default) with the pass family; the complete Hipparcos catalog bundled; `sky.js` so tooltips answer taps on touch screens. |

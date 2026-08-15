@@ -37,8 +37,12 @@ log = logging.getLogger(__name__)
 # so cannot share line's value -- see 2.2), bandgrid (the gridlines of the
 # three panels that plot over twilight BANDS -- ribbons, sun path, day
 # length -- a third surface again, and the third value), bandcase (the
-# casing under those gridlines, None where the plate does not need one --
-# see _band_rule), halo (the stroke lifting body dots off the plate), body
+# casing under those gridlines and under the DATA marks that cross the
+# same bands, None where the plate does not need one -- see _band_rule and
+# _band_bar), bandedge (the outline that separates a body's own identity
+# color from the band under it, since an identity color is chosen for what
+# the body IS and cannot also be chosen for contrast -- see _band_bar),
+# halo (the stroke lifting body dots off the plate), body
 # (identity colors, colorblind-validated against the plate surface), ring
 # (per-body override of the halo for bodies too pale to hold an edge on the
 # plate; pale ribbon bars also take it as a 1px stroke), twilight (mid-tone
@@ -51,19 +55,17 @@ log = logging.getLogger(__name__)
 # Saturn, Uranus and Neptune were traditional already).  Two values bend
 # tradition for legibility, the same compromise printed atlases make:
 # Mercury keeps the gray FAMILY at two weights (dark on paper, light on
-# navy), and Neptune stays a readable mid-blue on the night plate.  The
-# pre-1.5 colors survive as 'classic-night' / 'classic-light'.
+# navy), and Neptune stays a readable mid-blue on the night plate.
 #
 # 2.2 audited every mark against the surface it actually sits on and moved
-# what fell short: `grid` on all four plates, and night Mars, the one body
-# dot under 3:1 on its own dome (2.34, now 3.02).  The classic plates take
-# the chrome fix but keep their body colors -- preserving those is the whole
-# reason they exist.
+# what fell short: `grid` on both plates, and night Mars, the one body dot
+# under 3:1 on its own dome (2.34, now 3.02).  2.3 did the same for the
+# marks that cross the twilight BANDS -- see _band_bar.
 PALETTES: Dict[str, Dict[str, Any]] = {
     'night': {
         'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
         'line': '#2A3358', 'grid': '#6E7DBA', 'bandgrid': '#6E7DBA',
-        'bandcase': None, 'halo': '#0A0F22',
+        'bandcase': None, 'bandedge': '#8B93B8', 'halo': '#0A0F22',
         'body': {'sun': '#FFD75E', 'moon': '#C9D0DA', 'mercury': '#9CA0AC',
                  'venus': '#F0E3BE', 'mars': '#CE6750', 'jupiter': '#D89A56',
                  'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
@@ -80,7 +82,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
     'light': {
         'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
         'line': '#c9cfd8', 'grid': '#7A899F', 'bandgrid': '#1d2c4e',
-        'bandcase': '#ffffff', 'halo': '#ffffff',
+        'bandcase': '#ffffff', 'bandedge': '#1d2c4e', 'halo': '#ffffff',
         'body': {'sun': '#FACC15', 'moon': '#D6DAE0', 'mercury': '#52525B',
                  'venus': '#F0E4BE', 'mars': '#b23a24', 'jupiter': '#b06f2e',
                  'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
@@ -95,43 +97,29 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'orrery_sun': '#FACC15',
         'earth_fill': '#2E7DBE', 'earth_stroke': '#1B5C8F',
     },
-    # The pre-1.5 palettes, kept for skins attached to the old colors.
-    'classic-night': {
-        'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
-        'line': '#2A3358', 'grid': '#6E7DBA', 'bandgrid': '#6E7DBA',
-        'bandcase': None, 'halo': '#0A0F22',
-        'body': {'sun': '#B98C31', 'moon': '#7E92DA', 'mercury': '#AB763B',
-                 'venus': '#D2B458', 'mars': '#C04F36', 'jupiter': '#D89A56',
-                 'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
-        'ring': {},
-        'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
-                     'civil': '#233153', 'day': '#2E3D5C'},
-        'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
-        'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
-        'dome_rim': '#D3A94C',
-        'conline': '#5F7BB8',
-        'orrery_sun': '#D3A94C',
-        'earth_fill': '#E9E4D4', 'earth_stroke': '#D3A94C',
-    },
-    'classic-light': {
-        'ink': '#1d2c4e', 'muted': '#5c6672', 'brass': '#B45309',
-        'line': '#c9cfd8', 'grid': '#7A899F', 'bandgrid': '#1d2c4e',
-        'bandcase': '#ffffff', 'halo': '#ffffff',
-        'body': {'sun': '#B8860B', 'moon': '#4A5FB8', 'mercury': '#8a5a24',
-                 'venus': '#a8862c', 'mars': '#b23a24', 'jupiter': '#b06f2e',
-                 'saturn': '#8f7524', 'uranus': '#20808f', 'neptune': '#3a63c4',
-                 'pluto': '#6a5f96'},
-        'ring': {},
-        'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
-                     'civil': '#9FBCDE', 'day': '#D7E6F5'},
-        'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
-        'dome_stops': (('0%', '#ffffff'), ('100%', '#efece2')),
-        'dome_rim': '#8a94a6',
-        'conline': '#93A5C4',
-        'orrery_sun': '#B8860B',
-        'earth_fill': '#2e6e8e', 'earth_stroke': '#ffffff',
-    },
 }
+
+# 'classic-night' and 'classic-light' named the pre-1.5 body colors, kept
+# for skins that had attached to them.  They lasted a very short time
+# before 1.5 shipped, nothing was ever attached to them, and carrying two frozen
+# color schemes meant every contrast fix afterwards had to be argued twice
+# -- the second time on a plate whose whole premise was that its colors
+# could not move.  As of 2.3 both names resolve to the current plates.
+# They stay ACCEPTED rather than removed: a skin passing one must keep
+# rendering, not start raising SkyPageUsageError at report time.
+PALETTE_ALIASES = {'classic-night': 'night', 'classic-light': 'light'}
+# The same names as a THEME option value, which takes dark/light/auto
+# rather than palette names.  'classic-dark' was never a name this
+# extension used, but it is what someone writing a theme line from memory
+# would reach for, so it resolves too rather than failing the page.
+THEME_ALIASES = {'classic-night': 'dark', 'classic-dark': 'dark',
+                 'classic-light': 'light'}
+# What has already been warned about in this process -- see _palette and
+# .theme.  Keyed by (surface, name), not by name alone: a station can hit
+# BOTH surfaces with the same spelling (a template passing
+# palette='classic-night' on a report whose theme option says the same),
+# and a bare-name key would tell it about only whichever fired first.
+_warned_palettes: set = set()
 
 
 def _ring(pal: Dict[str, Any], name: str) -> str:
@@ -144,6 +132,27 @@ def _ring(pal: Dict[str, Any], name: str) -> str:
 # twilight bands of any depth.  See _band_rule.
 BAND_CASING_OPACITY = 0.55
 BAND_CASING_WIDTH = 3
+
+# The DATA marks that cross the same bands -- a body's above-horizon bar,
+# its transit tick, the "now" line -- need a more opaque casing than a
+# gridline does, and for a reason worth writing down: a gridline's color is
+# chosen for contrast, where a body's is chosen for identity (Mars is red
+# because Mars is red) and cannot also be chosen to clear a floor against
+# five twilight depths.  The casing has to do all the work, so it is nearly
+# solid.  0.55 leaves the "now" line at 2.31:1 on the paper plate's night
+# band; 0.8 brings it to 3.65.
+BAND_MARK_CASING_OPACITY = 0.8
+# A bar carries two layers -- a casing under it AND an outline on it -- so
+# its casing may be translucent.  A CURVE cannot take an outline (an
+# outline on a 2px stroke is just a wider stroke), so its casing is the
+# only thing between it and the band and has to be opaque: at 0.8 the
+# sun-path arc drawn in the paper plate's dark gold still measured 2.62:1
+# over the night band, at 1.0 it reads 3.61.
+BAND_CURVE_CASING_OPACITY = 1.0
+# How far a bar's casing stands out past the bar on every side, and the
+# stroke width of a line mark's casing.
+BAND_MARK_CASING_PAD = 1.5
+BAND_MARK_CASING_WIDTH = 4
 
 # The only two weights a band gridline may take.  A rank rather than a
 # number at each call site, so a panel cannot quietly invent a third
@@ -184,9 +193,9 @@ def _band_rule(pal: Dict[str, Any], x1: float, y1: float, x2: float,
     """One gridline drawn over the TWILIGHT BANDS -- the surface the ribbons,
     sun-path and day-length panels plot on.
 
-    On the night plates the bands are all dark, so `bandgrid` alone reads
+    On the night plate the bands are all dark, so `bandgrid` alone reads
     against every one of them (1.97-3.17:1) and the rule is a single stroke.
-    The light plates cannot work that way: their ramp runs #3A5175 to
+    The light plate cannot work that way: its ramp runs #3A5175 to
     #D7E6F5, a wider luminance span than any single stroke color can
     straddle -- the best candidate measured bottoms out at 1.72.  So they
     give `bandcase`, and the rule is drawn twice: a wide pale casing, then
@@ -206,6 +215,129 @@ def _band_rule(pal: Dict[str, Any], x1: float, y1: float, x2: float,
                    % ((coords,) + s) for s in strokes)
 
 
+def _band_bar(pal: Dict[str, Any], x: float, y: float, w: float, h: float,
+              rx: float, fill: str, inner: str = '') -> str:
+    """A filled DATA mark drawn over the twilight bands: a body's
+    above-horizon bar on the ribbons panel.
+
+    Same surface as _band_rule, same problem, one extra twist.  A gridline
+    may be any color that reads; a body's bar may not -- it carries the
+    body's identity color, which is the whole point of the panel, so the
+    contrast has to come from around it rather than from it.  Two layers do
+    that between them, and which one carries a given band is decided by the
+    band, not by us:
+
+      * `bandcase`, a near-solid casing standing BAND_MARK_CASING_PAD past
+        the bar, reads on the dark end of the ramp (3.65-4.9:1 on the paper
+        plate's night and astro bands) and vanishes into the pale end --
+      * where `bandedge`, a one-pixel outline on the bar itself, reads
+        instead (4.2-10.9:1 on naut, civil and day).
+
+    So every band is covered by one layer or the other, which no single
+    color can do: the paper plate's ramp runs #3A5175 to #D7E6F5.  On the
+    night plate the bands are all dark and the bar's own fill nearly
+    carries it alone -- that plate declares no casing and pays for a single
+    outline.  Be honest about what that outline buys there: exactly one body
+    (Mars, 2.93:1 on the day band) misses the floor, by 0.07.  The outline
+    itself is not invisible -- it measures 3.59 to 6.18:1 against the
+    bands, which is the point -- but at page scale it reads as a hairline
+    rim rather than a restyle, and the regenerated screenshot is the place
+    to judge that.  It costs one attribute on a rect already being drawn, and it means the audit holds for whatever body
+    color changes next without an exemption to argue about.
+
+    `inner` is markup nested inside the bar itself -- the <title> that makes
+    the tooltip -- and deliberately does NOT go on the casing: the casing is
+    decoration and should not be a second hover target."""
+    out = []
+    if pal['bandcase']:
+        out.append('<rect x="%s" y="%s" width="%s" height="%s" rx="%s" '
+                   'fill="%s" opacity="%s"/>'
+                   % (_num(x - BAND_MARK_CASING_PAD),
+                      _num(y - BAND_MARK_CASING_PAD),
+                      _num(w + 2 * BAND_MARK_CASING_PAD),
+                      _num(h + 2 * BAND_MARK_CASING_PAD),
+                      _num(rx + BAND_MARK_CASING_PAD), pal['bandcase'],
+                      BAND_MARK_CASING_OPACITY))
+    edge = (' stroke="%s" stroke-width="1"' % pal['bandedge']
+            if pal['bandedge'] else '')
+    out.append('<rect x="%s" y="%s" width="%s" height="%s" rx="%s" fill="%s"%s>'
+               '%s</rect>'
+               % (_num(x), _num(y), _num(w), _num(h), _num(rx), fill, edge,
+                  inner))
+    return ''.join(out)
+
+
+def _ring_or_body(pal: Dict[str, Any], name: str) -> str:
+    """The color to STROKE a body with: its ring where the plate gives it
+    one (the paper plate's dark edges for pale bodies), else its own fill.
+    Distinct from _ring, which falls back to the plate's halo -- a halo is
+    right behind a dot and wrong as the color of a line."""
+    return pal.get('ring', {}).get(name, pal['body'][name])
+
+
+def _band_curve(pal: Dict[str, Any], d: str, stroke: str, width: float,
+                dash: str = '', opacity: str = '') -> str:
+    """A plotted CURVE over the twilight bands: the sun's and moon's arcs on
+    the sun-path panel, the sunrise/sunset/solar-noon traces on the solar
+    year.  Same problem and same answer as _band_bar -- these carry body and
+    ink colors chosen for a panel surface, and cross a ramp of bands they
+    were never measured against -- but a curve cannot take an outline the
+    way a bar can (an outline on a 2px stroke is just a wider stroke), so
+    the casing carries it alone: one pale stroke, wider, painted first.  A
+    dashed curve's casing takes the same dash, or a solid casing would
+    quietly fill the gaps and turn the moon's track solid.
+
+    Night plates declare no casing and pay nothing: every one of these
+    marks already clears the floor there by its own color (4.93:1 worst)."""
+    geom = 'd="M%s" fill="none"' % d
+    out = []
+    if pal['bandcase']:
+        out.append('<path %s stroke="%s" stroke-width="%s" opacity="%s"%s/>'
+                   % (geom, pal['bandcase'],
+                      _num(width + 2 * BAND_MARK_CASING_PAD),
+                      BAND_CURVE_CASING_OPACITY, dash))
+    out.append('<path %s stroke="%s" stroke-width="%s"%s%s/>'
+               % (geom, stroke, _num(width), dash,
+                  ' opacity="%s"' % opacity if opacity else ''))
+    return ''.join(out)
+
+
+def _band_dot(pal: Dict[str, Any], cx: float, cy: float, r: float, fill: str,
+              inner: str = '', opacity: str = '') -> str:
+    """A small filled mark over the bands -- the sun-path panel's hour dots
+    and the moon track's endpoint dots.  A dot is too small to carry a
+    casing as a second element underneath, so the casing is its own edge:
+    one pale ring, which is what lifts it off a band its fill matches."""
+    edge = (' stroke="%s" stroke-width="%s" stroke-opacity="%s"'
+            % (pal['bandcase'], _num(BAND_MARK_CASING_PAD),
+               BAND_CURVE_CASING_OPACITY) if pal['bandcase'] else '')
+    return ('<circle cx="%s" cy="%s" r="%s" fill="%s"%s%s>%s</circle>'
+            % (_num(cx), _num(cy), _num(r), fill, edge,
+               ' opacity="%s"' % opacity if opacity else '', inner))
+
+
+def _band_tick(pal: Dict[str, Any], x1: float, y1: float, x2: float,
+               y2: float, stroke: str, width: float, attrs: str = '',
+               inner: str = '') -> str:
+    """A line DATA mark over the same bands: the transit tick, the "now"
+    line.  The casing half of _band_bar, without the outline -- an outline
+    on a 1.5px line would just be a wider line, and these marks read
+    against their casing directly (3.65-10.9:1 on the paper plate).  The
+    night plate declares no casing and these already clear the floor on
+    every band by their own color (4.93:1 worst), so they get one stroke,
+    exactly as before 2.3."""
+    coords = ('x1="%s" y1="%s" x2="%s" y2="%s"'
+              % (_num(x1), _num(y1), _num(x2), _num(y2)))
+    out = []
+    if pal['bandcase']:
+        out.append('<line %s stroke="%s" stroke-width="%s" opacity="%s"/>'
+                   % (coords, pal['bandcase'], BAND_MARK_CASING_WIDTH,
+                      BAND_MARK_CASING_OPACITY))
+    out.append('<line %s stroke="%s" stroke-width="%s"%s>%s</line>'
+               % (coords, stroke, _num(width), attrs, inner))
+    return ''.join(out)
+
+
 class SkyPageUsageError(ValueError):
     """A template-author error (e.g. an unknown palette name).  Re-raised
     through the panel guard: it should fail loudly at development time,
@@ -213,6 +345,16 @@ class SkyPageUsageError(ValueError):
 
 
 def _palette(name: str) -> Dict[str, Any]:
+    if name in PALETTE_ALIASES:
+        # Once per name per process, not per call: a page asks for its
+        # palette a dozen times per report cycle, and this must not turn
+        # into a dozen lines in the log every five minutes.
+        if ('palette', name) not in _warned_palettes:
+            _warned_palettes.add(('palette', name))
+            log.warning("palette %r was dropped in 2.3 and is being drawn as "
+                        "%r; update the skin to say %r.",
+                        name, PALETTE_ALIASES[name], PALETTE_ALIASES[name])
+        name = PALETTE_ALIASES[name]
     if name not in PALETTES:
         raise SkyPageUsageError('unknown palette %r; valid palettes: %s'
                                 % (name, ', '.join(sorted(PALETTES))))
@@ -778,7 +920,26 @@ class SkyPage:
         sun at generation time: light while it is up, dark otherwise.  The
         page regenerates each report cycle, so the auto flip lags
         sunrise/sunset by at most one archive interval -- the palette is
-        baked into the page; nothing shifts in the browser."""
+        baked into the page; nothing shifts in the browser.
+
+        A classic-* value is accepted here and drawn as the plate that
+        replaced it (2.3).  Strictly it never WAS a legal theme -- the
+        classic names were palette arguments a template passed to a panel,
+        never a report option -- but a station that reached for one after
+        reading about the palettes deserves the same warning-and-carry-on
+        the palette argument gets, not a page that fails to render."""
+        if self._theme_conf in THEME_ALIASES:
+            if ('theme', self._theme_conf) not in _warned_palettes:
+                _warned_palettes.add(('theme', self._theme_conf))
+                # NOT necessarily [[SkyfieldReport]]: the option comes from
+                # whichever report built this SkyPage, which for an
+                # embedding skin is that skin's own stanza.
+                log.warning("theme %r was dropped in 2.3 and is being drawn "
+                            "as %r; set theme = %s in the report stanza that "
+                            "sets it.", self._theme_conf,
+                            THEME_ALIASES[self._theme_conf],
+                            THEME_ALIASES[self._theme_conf])
+            return THEME_ALIASES[self._theme_conf]
         if self._theme_conf not in ('auto', 'dark', 'light'):
             raise SkyPageUsageError('unknown theme %r; valid themes: auto, dark, light'
                                     % self._theme_conf)
@@ -1429,22 +1590,28 @@ class SkyPage:
                 xa, xz = X(a), X(z)
                 if xz - xa < 0.5:
                     continue
-                p.append('<rect x="%.1f" y="%.1f" width="%.1f" height="10" rx="4" fill="%s"%s>'
-                         '<title>%s</title></rect>'
-                         % (xa, cy - 5, xz - xa, color, edge,
-                            self._t('{name} above the horizon ({duration})',
-                                    name=_esc(label), duration=self._dur(b['visible']))))
+                # The bar crosses the twilight bands, not the panel
+                # surface, so its contrast comes from _band_bar's casing
+                # and outline rather than from the identity color it
+                # carries -- through 2.2 it was the fill alone, which on
+                # the paper plate measured 1.01:1 for Mars.
+                p.append(_band_bar(
+                    pal, xa, cy - 5, xz - xa, 10, 4, color,
+                    inner='<title>%s</title>'
+                    % self._t('{name} above the horizon ({duration})',
+                              name=_esc(label),
+                              duration=self._dur(b['visible']))))
             if b['transit'] is not None and sod <= b['transit'] <= eod:
                 xt = X(b['transit'])
-                p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="2">'
-                         '<title>%s</title></line>'
-                         % (xt, cy - 8, xt, cy + 8, ink,
-                            self._t('{name} transit {time}', name=_esc(label),
-                                    time=_t_hm(b['transit']))))
+                p.append(_band_tick(
+                    pal, xt, cy - 8, xt, cy + 8, ink, 2,
+                    inner='<title>%s</title>'
+                    % self._t('{name} transit {time}', name=_esc(label),
+                              time=_t_hm(b['transit']))))
             p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>' % (X1 + 12, cy + 4, right))
         xn = X(alm.time_ts)
-        p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5" '
-                 'class="nowpulse"/>' % (xn, TOP - 8, xn, TOP + plot_h, brass))
+        p.append(_band_tick(pal, xn, TOP - 8, xn, TOP + plot_h, brass, 1.5,
+                            attrs=' class="nowpulse"'))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">%s</text>'
                  % (xn, TOP - 14, self._t('now {time}', time=_t_hm(alm.time_ts))))
         p.append('</svg>')
@@ -1791,8 +1958,8 @@ class SkyPage:
             p.append(_band_rule(pal, PX0, Y(alt), PX1, Y(alt), 'primary'))
             p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%d&#176;</text>'
                      % (PX0 - 6, Y(alt) + 4, alt))
-        p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" '
-                 'stroke-width="1" opacity="0.8"/>' % (PX0, Y(0), PX1, Y(0), ink))
+        p.append(_band_tick(pal, PX0, Y(0), PX1, Y(0), ink, 1,
+                            attrs=' opacity="0.8"'))
         p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">0&#176;</text>'
                  % (PX0 - 6, Y(0) + 4, ))
         for az in range(45, 360, 45):
@@ -1802,30 +1969,42 @@ class SkyPage:
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono cardinal" '
                      'style="font-size:12px">%s</text>' % (X(az), PY1 + 20, _esc(label)))
 
-        def _paths(pts: List[Tuple[int, float, float]], style: str) -> None:
+        # Both arcs cross the twilight bands, not the panel, so they go
+        # through _band_curve: on the paper plate the sun's own yellow is
+        # 1.21:1 against the daytime band and the moon's silver 1.10, which
+        # is the panel's subject drawn invisibly.
+        def _paths(pts: List[Tuple[int, float, float]], stroke: str,
+                   width: float, dash: str = '', opacity: str = '') -> None:
             seg: List[str] = []
             prev_az: Optional[float] = None
+
+            def flush() -> None:
+                if len(seg) > 1:
+                    p.append(_band_curve(pal, ' L'.join(seg), stroke, width,
+                                         dash, opacity))
             for _i, alt, az in pts:
                 if alt < FLOOR or (prev_az is not None and abs(az - prev_az) > 180):
-                    if len(seg) > 1:
-                        p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+                    flush()
                     seg = []
                     prev_az = None
                 if alt >= FLOOR:
                     seg.append('%.1f %.1f' % (X(az), Y(alt)))
                     prev_az = az
-            if len(seg) > 1:
-                p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+            flush()
 
-        _paths(moon_pts, 'stroke="%s" stroke-width="1.3" stroke-dasharray="4 4" '
-               'opacity="0.85"' % body_color['moon'])
-        _paths(sun_pts, 'stroke="%s" stroke-width="2.2" opacity="0.95"' % body_color['sun'])
+        # On the paper plate a body's own fill is the wrong color for a
+        # LINE -- the sun's yellow reads 1.11:1 against the casing under
+        # it -- so an arc takes the plate's `ring` value where it has one,
+        # the same dark edge the pale bodies' dots wear there.  The night
+        # plate defines no rings and the arcs stay body-colored.
+        _paths(moon_pts, _ring_or_body(pal, 'moon'), 1.3,
+               dash=' stroke-dasharray="4 4"', opacity='0.85')
+        _paths(sun_pts, _ring_or_body(pal, 'sun'), 2.2, opacity='0.95')
         sun_labels: List[Tuple[float, float]] = []
         for i, alt, az in sun_pts[:-1]:
             if i % 4 or alt < FLOOR:
                 continue
-            p.append('<circle cx="%.1f" cy="%.1f" r="1.9" fill="%s" opacity="0.9"/>'
-                     % (X(az), Y(alt), ink))
+            p.append(_band_dot(pal, X(az), Y(alt), 1.9, ink, opacity='0.9'))
             if i % 12 == 0 and alt > FLOOR + 4:
                 sun_labels.append((X(az), Y(alt) - 7))
                 p.append('<text x="%.1f" y="%.1f" text-anchor="middle" '
@@ -1840,7 +2019,7 @@ class SkyPage:
         # transit are ticked and labeled with skin-formatted times.  Labels
         # dodge the sun's hour labels; the transit label yields to a nearby
         # endpoint label rather than crowd it.
-        moon_ink = pal.get('ring', {}).get('moon', body_color['moon'])
+        moon_ink = _ring_or_body(pal, 'moon')
 
         def _dodge(x: float, y: float, dy: float) -> float:
             for lx, ly in sun_labels:
@@ -1852,13 +2031,12 @@ class SkyPage:
                 if alt >= FLOOR]
         for i, alt, az in ends:
             x, y = X(az), Y(alt)
-            p.append('<g><title>%s</title>'
-                     '<circle cx="%.1f" cy="%.1f" r="2.2" fill="%s"/>'
+            p.append('<g><title>%s</title>%s'
                      '<text x="%.1f" y="%.1f" text-anchor="%s" '
                      'class="mono moonlab">%s</text></g>'
                      % (self._t('Moon at {time} — the day’s track is open here: a lunar day runs about 50 minutes longer than a calendar day',
                                 time='00:00' if i == 0 else '24:00'),
-                        x, y, moon_ink,
+                        _band_dot(pal, x, y, 2.2, moon_ink),
                         x + (5 if i == 0 else -5), y - 5,
                         'start' if i == 0 else 'end', '00' if i == 0 else '24'))
         for kind, glyph in (('rise', '&#8599;'), ('set', '&#8600;'), ('transit', '')):
@@ -1874,14 +2052,12 @@ class SkyPage:
             if kind == 'transit':
                 if any(abs(x - X(eaz)) < 34 for _i, _a, eaz in ends):
                     continue
-                p.append('<g><title>%s</title>'
-                         '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
-                         'stroke="%s" stroke-width="1.3"/>'
+                p.append('<g><title>%s</title>%s'
                          '<text x="%.1f" y="%.1f" text-anchor="middle" '
                          'class="mono moonlab">%s</text></g>'
                          % (self._t('Moon transit {time} — altitude {alt}°',
                                     time=str(vh), alt='%.1f' % alt),
-                            x, y - 3, x, y - 8, moon_ink,
+                            _band_tick(pal, x, y - 3, x, y - 8, moon_ink, 1.3),
                             x, _dodge(x, y - 12, -12), vh))
             else:
                 title = (self._t('Moonrise {time}', time=str(vh)) if kind == 'rise'
@@ -2016,24 +2192,32 @@ class SkyPage:
                      % (min(XW(wf + 2.2), X1 - 10.0), TOP + PH + 20,
                         time.strftime('%b', time.localtime(ts_m))))
 
-        def _curve(hours: List[Optional[float]], style: str) -> None:
+        # The three traces and the "today" line are drawn over the twilight
+        # COLUMNS, not the panel, so they go through the band helpers: on
+        # the paper plate ink measured 1.72:1 against the night column and
+        # the brass line 1.20 against the astronomical one.
+        def _curve(hours: List[Optional[float]], width: float, dash: str = '',
+                   opacity: str = '') -> None:
             seg: List[str] = []
+
+            def flush() -> None:
+                if len(seg) > 1:
+                    p.append(_band_curve(pal, ' L'.join(seg), ink, width,
+                                         dash, opacity))
             for w, h in enumerate(hours):
                 if h is None:
-                    if len(seg) > 1:
-                        p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+                    flush()
                     seg = []
                     continue
                 seg.append('%.1f %.1f' % (XW(w + 0.5), Y(h)))
-            if len(seg) > 1:
-                p.append('<path d="M%s" fill="none" %s/>' % (' L'.join(seg), style))
+            flush()
 
-        _curve(noon_h, 'stroke="%s" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"' % ink)
-        _curve(rise_h, 'stroke="%s" stroke-width="1.5" opacity="0.95"' % ink)
-        _curve(set_h, 'stroke="%s" stroke-width="1.5" opacity="0.95"' % ink)
+        _curve(noon_h, 1, dash=' stroke-dasharray="3 4"', opacity='0.7')
+        _curve(rise_h, 1.5, opacity='0.95')
+        _curve(set_h, 1.5, opacity='0.95')
         wf_now = min(max((alm.time_ts - noon0) / (7 * 86400.0) + 0.5, 0.0), float(WEEKS))
-        p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1.5"/>'
-                 % (XW(wf_now), TOP - 8, XW(wf_now), TOP + PH, brass))
+        p.append(_band_tick(pal, XW(wf_now), TOP - 8, XW(wf_now), TOP + PH,
+                            brass, 1.5))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">%s</text>'
                  % (XW(wf_now), TOP - 12, self._t('today')))
         p.append('</svg>')

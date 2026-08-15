@@ -119,6 +119,17 @@ while keeping every tag.
 | `Ignoring [Skyfield] [[Satellites]] entry …` | The tag name shadows a planet, star, `hip_` or `sat_` name, or the NORAD number is not a number. |
 | `Ignoring [Skyfield] [[Comets]] entry …` | Same, for a comet's name or designation. |
 
+## Report messages
+
+Logged while a page renders, once per name per weewxd process rather than per call — so
+the line appears on the first report cycle after a restart and not again.  Restart WeeWX to
+see whether a fix took.
+
+| Message | Meaning |
+|---|---|
+| `palette 'classic-…' was dropped in 2.3 and is being drawn as …` | A template still passes a `classic-` palette to a `$sky_page` panel.  It renders as the plate that replaced it; change the name to `night` or `light` — see [Panels in your own skin](panels.md). |
+| `theme 'classic-…' was dropped in 2.3 and is being drawn as …` | The same name in a report's `theme` option, which takes `dark`, `light` or `auto`.  It renders as `dark` or `light`; set one of those instead. |
+
 ## Element messages
 
 | Message | Meaning |
