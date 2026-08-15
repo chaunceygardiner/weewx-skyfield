@@ -32,9 +32,11 @@ log = logging.getLogger(__name__)
 # attributes come from the palette; typography stays class-based, styled by
 # the consuming skin's CSS.  Keys: ink (star dots, curves, transit ticks),
 # muted, brass (accents, now-markers), line (gridlines and orbit circles on
-# the PANEL surface), grid (the sky charts' altitude rings and
-# meridian/horizon cross, which read against the dome gradient instead and
-# so cannot share line's value -- see 2.2), bandgrid (the gridlines of the
+# the PANEL surface), grid (the sky charts' altitude rings and the cross
+# through the zenith -- the meridian and the prime vertical -- which read
+# against the dome gradient instead and so cannot share line's value; see
+# 2.2.  The HORIZON is the rim, drawn in dome_rim, not either of those
+# lines), bandgrid (the gridlines of the
 # three panels that plot over twilight BANDS -- ribbons, sun path, day
 # length -- a third surface again, and the third value), bandcase (the
 # casing under those gridlines and under the DATA marks that cross the
@@ -1184,8 +1186,10 @@ class SkyPage:
                     ''.join('<stop offset="%s" stop-color="%s"/>' % s
                             for s in pal['dome_stops']), clip_id, cx, cy, R))
         p.append('<circle cx="%d" cy="%d" r="%d" fill="url(#%s)"/>' % (cx, cy, R, grad_id))
-        # The altitude rings and the meridian/horizon cross read against the
-        # dome gradient, not against a panel edge, so they take the palette's
+        # The altitude rings and the two diameters through the zenith -- the
+        # meridian north to south, the prime vertical east to west; the
+        # horizon is the rim, not either of these -- read against the dome
+        # gradient, not against a panel edge, so they take the palette's
         # own `grid` rather than `line` (the section-border color, which on
         # both plates is within a hair of the dome's own luminance -- 1.07:1
         # on the night plate, invisible).  Fixed in 2.2.

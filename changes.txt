@@ -1,6 +1,14 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3.1 (2026/08/15)
+------------------
+- Two French phrases on the satellites panel read idiomatically: a pass's
+  highest point is a verb phrase, "culmine à 19°", where the file had the
+  bare noun "culmination 19°".  Both strings are shared verbatim with
+  weewx-celestial, and Jacques Terrettaz caught them there in a full
+  re-read of that skin's French.
+
 2.3 (2026/08/14)
 ----------------
 - ACTION REQUIRED, only if a skin of yours passes palette='classic-night'
@@ -63,7 +71,7 @@ weewx-skyfield change history
 2.2 (2026/08/14)
 ----------------
 - The Sky Dome and Next Visible Pass charts are easier to read on both
-  plates.  The altitude rings and the meridian/horizon cross were drawn
+  plates.  The altitude rings and the cross through the zenith were drawn
   in the panel border color, invisible against the dome (1.07:1); they
   have their own color now.  Star names, the 30/60 degree marks and the
   constellation names are lifted to 4.5:1 on the dark-sky dome -- while

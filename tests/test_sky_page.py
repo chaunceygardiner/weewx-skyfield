@@ -1186,8 +1186,10 @@ class TestSkyChartContrast:
     chart -- one _sky_chart, so one audit) must hold its floor against the
     dome gradient it is drawn on, on BOTH plates.
 
-    This exists because the altitude rings and the meridian/horizon cross
-    shipped through 2.1.3 at 1.07:1 -- they took `line`, the panel-border
+    This exists because the altitude rings and the cross through the zenith
+    (the meridian and the prime vertical -- the horizon is the rim, and is
+    drawn separately) shipped through 2.1.3 at 1.07:1 -- they took `line`,
+    the panel-border
     color, whose luminance is within a hair of the dome's own.  Nothing
     caught it: the rings were present, correct and invisible.  A golden-hex
     test cannot see that; only the ratio can.
