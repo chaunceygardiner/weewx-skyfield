@@ -61,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.3.2'
+WXSKYFIELD_VERSION = '2.3.3'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -822,6 +822,58 @@ class CometRow(NamedTuple):
     g: Optional[float]          # absolute total magnitude (blank in some rows)
     k: Optional[float]          # magnitude slope parameter
     epoch_ts: Optional[float]   # perturbed-epoch column, or None when blank
+
+
+# The base class is looked up defensively because CometOrbit is defined at
+# IMPORT time, where nothing can catch a failure: weewx re-raises whatever
+# loadServices hits, so an AttributeError here would stop weewxd on every
+# install, comets configured or not.  The name is private and Skyfield has
+# renamed it before (KeplerOrbit through 1.20, _KeplerOrbit from 1.30), so
+# if it moves again this falls back to a base that costs the comet tags and
+# nothing else: CometOrbit still imports, and _comet_vector then raises on
+# _from_periapsis exactly where the pre-2.3.3 code did, inside the report
+# thread's guard.  The suite's Horizons pin fails long before any of that
+# reaches a station.  The miss is announced once per start: without it the
+# only symptom is a bare AttributeError on _from_periapsis, once per comet
+# tag per report cycle, naming nothing that would lead anyone here.
+_KEPLER_ORBIT: Any = getattr(skyfield.keplerlib, '_KeplerOrbit', object)
+
+if _KEPLER_ORBIT is object:
+    log.warning('This Skyfield (%d.%d) no longer provides'
+                ' keplerlib._KeplerOrbit; comet tags will not work.'
+                ' Nothing else is affected.'
+                % (skyfield.VERSION[0], skyfield.VERSION[1]))
+
+
+class CometOrbit(_KEPLER_ORBIT):
+    """A comet's two-body orbit, with the one-time-array shape repaired.
+
+    Through Skyfield 1.50, keplerlib.propagate() ended in squeeze(), which
+    drops EVERY length-one axis -- so a position asked for at a time array
+    of length one came back shaped (3,) instead of (3, 1).  The comet body
+    is `sun + orbit`, and skyfield sums a VectorSum's terms IN PLACE, so
+    (3, 1) += (3,) broadcasts to (3, 3) and numpy refuses:
+
+        ValueError: non-broadcastable output operand with shape (3,1)
+        doesn't match the broadcast shape (3,3)
+
+    A scalar time was never affected, which is why positions were right
+    and only rise/set/transit broke: find_risings and find_settings
+    re-evaluate the body at exactly the times they found, so any search
+    window holding ONE event tripped it.  Reported from the field on
+    Skyfield 1.48 (issue #7, 2026-08-16), where it emptied three Sky page
+    panels.  Skyfield 1.51 fixed propagate() to assign an explicit output
+    shape; on 1.51 and later the shape already matches and this override
+    changes nothing.
+    """
+
+    def _at(self, t: skyfield.timelib.Time) -> Tuple[Any, Any, Any, Any]:
+        position, velocity, gcrs_position, message = super()._at(t)
+        shape = (3,) + numpy.shape(t.tt)
+        if position.shape != shape:
+            position = position.reshape(shape)
+            velocity = velocity.reshape(shape)
+        return position, velocity, gcrs_position, message
 
 
 def normalize_comet_designation(text: Any) -> str:
@@ -1874,13 +1926,15 @@ class Sky():
         module level, and pandas is deliberately not a dependency).
         _KeplerOrbit._from_periapsis is private Skyfield API -- the
         JPL-Horizons regression test pins its behavior, so a future
-        Skyfield change fails loudly in the suite, not in the field."""
+        Skyfield change fails loudly in the suite, not in the field.  The
+        orbit is a CometOrbit, whose only difference from the Skyfield
+        class is the pre-1.51 shape repair documented there."""
         if row.e == 1.0:
             p = row.q * 2.0
         else:
             a = row.q / (1.0 - row.e)
             p = a * (1.0 - row.e * row.e)
-        orbit = skyfield.keplerlib._KeplerOrbit._from_periapsis(
+        orbit = CometOrbit._from_periapsis(
             p, row.e, row.incl, row.node, row.argp,
             self.ts.tt(row.peri_year, row.peri_month, row.peri_day),
             skyfield.constants.GM_SUN_Pitjeva_2005_km3_s2, 10,

@@ -26,6 +26,7 @@ import time
 
 from typing import List
 
+import numpy
 import pytest
 
 import skyfield.api
@@ -1884,6 +1885,31 @@ class TestCometElements:
             assert delta.au == pytest.approx(p_delta, abs=0.01)
             _, _, r = comet_sky.sun.at(t).observe(vector).radec()
             assert r.au == pytest.approx(p_r, abs=0.01)
+
+    def test_one_element_time_array_keeps_its_axis(self, comet_sky):
+        """CometOrbit's whole reason for existing, in shapes rather than
+        values so it holds on every supported Skyfield.  Through 1.50,
+        propagate() ended in squeeze(), which threw away the time axis of
+        a LENGTH-ONE time array; the (3,) result then broke the in-place
+        sum inside `sun + orbit`.  Scalar times were fine, so positions
+        were right and only rise/set/transit broke -- the rise finders
+        re-evaluate the body at exactly the times they found, so a window
+        holding one event was enough (issue #7, Skyfield 1.48)."""
+        elements = comet_sky.comet_elements('halley')
+        assert elements is not None
+        vector = elements[0]
+        orbit = vector.vector_functions[-1]
+        assert isinstance(orbit, wxskyfield.CometOrbit)
+        ts = comet_sky.ts
+        assert orbit._at(ts.tt_jd(2460000.5))[0].shape == (3,)
+        for n in (1, 2, 3):
+            t = ts.tt_jd(numpy.linspace(2460000.5, 2460000.5 + 0.1 * n, n))
+            position, velocity = orbit._at(t)[:2]
+            assert position.shape == (3, n)
+            assert velocity.shape == (3, n)
+            # The sum that actually raised: (3, 1) += (3,) broadcasts to
+            # (3, 3), which will not fit back into the sun's (3, 1).
+            assert comet_sky.earth.at(t).observe(vector).position.au.shape == (3, n)
 
     def test_mtime_change_reparses(self, tmp_path):
         shutil.copy(os.path.join(SAT_DATA_DIR, wxskyfield.COMET_FILE),

@@ -1,6 +1,23 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3.3 (2026/08/16)
+------------------
+- Comets work on Skyfield 1.47 through 1.50 again.  On those versions a
+  configured comet's rise, set and transit tags raised "non-broadcastable
+  output operand with shape (3,1) doesn't match the broadcast shape
+  (3,3)", and on the Sky page that emptied Rise & Set, the body table and
+  the body chips -- three panels blank, three errors per report cycle.
+  The cause was upstream: through Skyfield 1.50 the two-body propagator
+  discarded the time axis when asked for a position at a time array of
+  length one, and the rise finders re-evaluate a body at exactly the
+  times they found, so any search window holding a single event tripped
+  it.  Positions were never affected, which is why the dome and the sky
+  charts drew their comets correctly throughout.  Skyfield 1.51 fixed it;
+  this release repairs the shape itself, so the comet tags no longer
+  depend on which Skyfield is installed.  Reported by hathawaydave
+  (issue #7) on Skyfield 1.48.
+
 2.3.2 (2026/08/15)
 ------------------
 - The pass chart's arc states the pass's own window: the
