@@ -108,7 +108,7 @@ If you run the author's other extensions, these are the floors that matter:
 | Extension | Version | Why |
 |---|---|---|
 | [weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) | 6.9 or later | Earlier versions could cache a temporarily-unavailable satellite field's `N/A` until the day rolled over, instead of recovering the moment fresh elements arrive. |
-| [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) | 8.1 or later | Its live dome and pass chart consume this extension's `data-body` / `data-sunlit` / `data-bright` hooks and the `satellite_names()` / `comet_names()` contract. |
+| [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) | 8.1 or later | Its live dome and pass chart consume this extension's `data-body` / `data-sunlit` / `data-bright` hooks and the `satellite_names()` / `comet_names()` contract.  celestial 8.3.3's pass chart reads the `data-rise` / `data-set` window this release adds; on an older weewx-skyfield it falls back to the loop feed's window, i.e. its pre-8.3.3 behavior. |
 
 Only the historical celestial 3.x — which embedded this same almanac engine — needs
 `replace_builtin_almanac = false` when run alongside weewx-skyfield.  Since celestial 6.0 it

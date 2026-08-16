@@ -96,7 +96,7 @@ these are a stable contract:
 | `<g class="dome-body" data-body="mars">` | dome, pass chart | The sun's, moon's and each planet's mark; name labels carry the same `data-body`. |
 | `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
 | `data-bright="1"`/`"0"` | dome, orrery | A comet's diamond, and whether it is plausibly naked-eye. |
-| `<g class="dome-track" data-body="iss">` | pass chart | The pass arc's group. |
+| `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one the moment this one sets. |
 | `$sky_page.satellite_names()` | template | The configured satellite tag names, in config order. |
 | `$sky_page.comet_names()` | template | The configured comet tag names, in config order. |
 | `$sky_page.theme($almanac)` / `.palette($almanac)` | template | The consuming report's own theme, resolved — see [Helpers](panels.md#helpers--theme-palette-header_sub-and-sun_is_up).  Resolve once per page: the palette is baked into each fragment, so a page that re-renders fragments must hand every one the same value or the chart flips plate on a refresh. |

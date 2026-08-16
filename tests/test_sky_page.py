@@ -775,6 +775,26 @@ class TestSatellitePanel:
         assert '<g class="dome-track" data-body="iss" ' in chart
         assert re.search(r'<text[^>]*class="satlab"[^>]*data-body="iss"', chart)
 
+    def test_pass_track_carries_its_own_window(self, almanac, page):
+        """2.3.2: the pass arc's group states the pass's OWN rise and set
+        as epoch seconds (data-rise/data-set) -- the chart saying when the
+        pass it depicts begins and ends, as the dome fragment declares its
+        epoch.  weewx-celestial's live sweep judges the chart against this
+        instead of the loop feed's next_visible_pass, which rolls to the
+        following pass moments after this one sets and left the mark
+        parked at the culmination under a finished-pass header (celestial
+        8.3.3).  Pinned to the almanac's own numbers, integers, in
+        rise-before-set order, on the same element as data-body."""
+        chart = page.pass_chart_html(almanac)
+        m = re.search(r'<g class="dome-track" data-body="iss" '
+                      r'data-rise="(\d+)" data-set="(\d+)" ', chart)
+        assert m, 'the track has no data-rise/data-set'
+        rise, sset = int(m.group(1)), int(m.group(2))
+        nvp = almanac.iss.next_visible_pass
+        assert rise == int(round(nvp.rise.raw))
+        assert sset == int(round(nvp.set.raw))
+        assert rise < sset
+
     def test_dome_marker_only_when_overhead(self, sky):
         """At mid-pass the dome gets a position marker (the dome's 'sky
         at time T' contract); the pass chart meanwhile still shows the

@@ -1438,11 +1438,25 @@ class SkyPage:
                        body=shower.key)
         if track is not None:
             xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
+            # data-rise/data-set: the pass's own window, epoch seconds, on
+            # the consumer-contract element -- the chart saying when the
+            # pass it depicts begins and ends, the way the dome fragment
+            # declares its own epoch (data-dome-ts).  weewx-celestial's
+            # live sweep judges the chart against this rather than against
+            # the loop feed's next_visible_pass, which rolls to the
+            # FOLLOWING pass moments after this one sets: without the
+            # chart's own times, a mark that had just ridden the arc to its
+            # end was put back at the culmination -- mid-arc, under a header
+            # naming the finished pass -- for up to the refetch interval
+            # (celestial 8.3.3, from NOAA-21's 2026-08-15 capture).
             p.append('<g class="dome-track" data-body="%s" '
+                     'data-rise="%d" data-set="%d" '
                      'clip-path="url(#%s)"><path d="M%s" fill="none" stroke="%s" '
                      'stroke-width="1.6" stroke-dasharray="6 4" opacity="0.9"/>'
                      '<title>%s</title></g>'
-                     % (_esc(track['name']), clip_id,
+                     % (_esc(track['name']),
+                        int(round(track['rise'])), int(round(track['set'])),
+                        clip_id,
                         ' L'.join('%.1f %.1f' % pt for pt in xy), brass,
                         self._t('{name} pass — {rise} → {set}, peak {alt}°',
                                 name=_esc(track['label']), rise=_t_hm(track['rise']),

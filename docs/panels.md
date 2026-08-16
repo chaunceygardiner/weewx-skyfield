@@ -140,7 +140,11 @@ translated): the sun's, moon's and each planet's marks are wrapped in
 attribute, and a satellite's position dot gets its tag name the same way plus
 `data-sunlit="1"` or `"0"`, so a live layer can flip the dot between solid and hollow as
 the satellite crosses the shadow line.  A comet's diamond carries `data-bright="1"` or
-`"0"` the same way.  These hooks are a
+`"0"` the same way.  On the pass chart the arc's own group,
+`<g class="dome-track" data-body="iss">`, states the pass's rise and set as epoch seconds
+(`data-rise`/`data-set`, 2.3.2 and later), so a live layer can tell whether the pass this
+chart depicts is ahead, in progress or over without consulting a feed whose *next* pass
+has already rolled on.  These hooks are a
 stable contract, and so are `$sky_page.satellite_names()` and `$sky_page.comet_names()`,
 through which an embedding skin enumerates the configured satellites and comets — the tag
 names in config order, empty when none are configured or the almanac is not registered.

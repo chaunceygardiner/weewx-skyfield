@@ -1,6 +1,23 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3.2 (2026/08/15)
+------------------
+- The pass chart's arc states the pass's own window: the
+  `<g class="dome-track" data-body="…">` element the consumer contract
+  already names now carries `data-rise` and `data-set`, the pass's rise
+  and set as epoch seconds -- the chart saying when the pass it depicts
+  begins and ends, the way the dome fragment declares its own epoch.
+  weewx-celestial's live sweep needed it: it judged the chart against
+  the loop feed's next_visible_pass, which rolls on to the FOLLOWING
+  pass moments after this one sets, so a mark that had just ridden the
+  arc to its end was put back at the culmination -- mid-arc, under a
+  header naming the finished pass -- for up to the refetch interval.
+  With the chart's own times in hand that page (8.3.3) hides the mark
+  the moment the pass is over, whether or not it was watching when it
+  ended.  Nothing on this extension's own pages changes; the Sky page
+  renders exactly as before.
+
 2.3.1 (2026/08/15)
 ------------------
 - Two French phrases on the satellites panel read idiomatically: a pass's
