@@ -17,31 +17,84 @@
 import os
 import sys
 import urllib.request
+from io import StringIO
+
+import configobj
 
 import weewx
 from setup import ExtensionInstaller
 
-# The default satellite set: naked-eye space stations whose inclinations
-# make them visible from essentially all inhabited latitudes.  This map is
-# both the injected [Skyfield] [[Satellites]] config and the install-time
-# first-fetch list; weewxd keeps the elements fresh afterwards.
-DEFAULT_SATELLITES = {
-    'iss'     : '25544',
-    'tiangong': '48274',
-}
+# The stanza a fresh install writes into weewx.conf, as text rather than a
+# dict so that ConfigObj carries its comments into the user's file.
+# Which options are live and which are commented out is a convention with
+# reasons behind it; those live in CLAUDE.md, not here.
+CONFIG = """
+[Skyfield]
+    # This section configures weewx-skyfield, the Skyfield almanac
+    # engine.  See the README for details.
+    #
+    # An option shown commented out is one the extension supplies itself.
+    # Leave it commented and the extension's own value governs, including
+    # a better one a later release might bring.  Uncomment it to pin this
+    # station to the value written here.
 
-# The default comets: the two names everybody knows.  Halley tells the
-# it-returns story (telescope-faint until the 2061 apparition -- the
-# dome marks it with the honest hollow ring); Hale-Bopp the
-# it-left-forever story (the 1997 great comet, now ~49 AU out and
-# receding, dec -85 so it never rises from northern stations -- a
-# table-and-orrery resident whose distance creeps outward year over
-# year).  Both entries are the pattern users copy when the next
-# naked-eye comet makes the news.
-DEFAULT_COMETS = {
-    'halley': '1P',
-    'hale_bopp': 'C/1995 O1',
-}
+    # Fetch satellite orbital elements from CelesTrak, at install and
+    # then 3-hourly from weewxd.  Set false on an isolated network;
+    # [[Satellites]] still works if you maintain the element files
+    # yourself (see the README).
+    #satellite_downloads = true
+
+    # Fetch comet orbital elements (one MPC CometEls.txt for all the
+    # comets below), at install and then every couple of days from
+    # weewxd.  Same isolated-network story as the satellites.
+    #comet_downloads = true
+
+    # Set false to leave the extension installed but idle: reports go
+    # back to WeeWX's built-in almanac.
+    enable = true
+
+    # The satellites to track: tag name = NORAD catalog number.  This one
+    # list drives both the tags ($almanac.iss.next_pass) and the fetch
+    # list.  The two shipped are the naked-eye space stations, whose
+    # inclinations make them visible from essentially all inhabited
+    # latitudes.
+    [[Satellites]]
+        iss = 25544
+        tiangong = 48274
+
+    # The comets to track: tag name = MPC designation.  The two shipped
+    # tell the two comet stories.  Halley returns (telescope-faint until
+    # the 2061 apparition -- the dome marks it with the honest hollow
+    # ring); Hale-Bopp left forever (the 1997 great comet, now ~49 AU out
+    # and receding, dec -85 so it never rises from northern stations -- a
+    # table-and-orrery resident whose distance creeps outward year over
+    # year).  Both are the pattern to copy when the next naked-eye comet
+    # makes the news: tsuchinshan_atlas = C/2023 A3.
+    [[Comets]]
+        halley = 1P
+        hale_bopp = C/1995 O1
+
+[StdReport]
+    [[SkyfieldReport]]
+        # The Sky page, a showcase of what the almanac computes,
+        # generated once an archive interval.  Its files land in a
+        # subdirectory of your HTML_ROOT.  Everything about how the page
+        # looks is a skin.conf option that can be overridden here; see
+        # the manual's Configuration page.
+        HTML_ROOT = skyfield
+        enable = true
+        skin = Skyfield
+"""
+
+INSTALLER_CONFIG = configobj.ConfigObj(StringIO(CONFIG))
+
+# The default satellite and comet sets, read back out of the stanza above
+# so there is one copy of each: they are both what a fresh install writes
+# and the install-time first-fetch list, used here when the station's
+# weewx.conf does not name its own (configure() runs BEFORE the merge).
+# weewxd keeps the elements fresh afterwards.
+DEFAULT_SATELLITES = dict(INSTALLER_CONFIG['Skyfield']['Satellites'])
+DEFAULT_COMETS = dict(INSTALLER_CONFIG['Skyfield']['Comets'])
 
 CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%s&FORMAT=TLE'
 COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
@@ -74,31 +127,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
             author = "John A Kline",
             author_email = "john@johnkline.com",
             data_services = 'user.wxskyfield.WxSkyfield',
-            config = {
-                'Skyfield': {
-                    'enable': 'true',
-                    # Fetch satellite orbital elements from CelesTrak, at
-                    # install and then 3-hourly from weewxd.  Set false on
-                    # an isolated network; [[Satellites]] still works if
-                    # you maintain the element files yourself (see the
-                    # README).
-                    'satellite_downloads': 'true',
-                    'Satellites': dict(DEFAULT_SATELLITES),
-                    # Fetch comet orbital elements (one MPC CometEls.txt
-                    # for all configured comets), at install and then
-                    # every couple of days from weewxd.  Same isolated-
-                    # network story as the satellites.
-                    'comet_downloads': 'true',
-                    'Comets': dict(DEFAULT_COMETS),
-                },
-                'StdReport': {
-                    'SkyfieldReport': {
-                        'skin': 'Skyfield',
-                        'enable': 'true',
-                        'HTML_ROOT': 'skyfield',
-                    },
-                },
-            },
+            config = INSTALLER_CONFIG,
             files = [
                 ('bin/user', [
                     'bin/user/wxskyfield.py',

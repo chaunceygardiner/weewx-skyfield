@@ -166,6 +166,11 @@ every release before 2.0 had unconditionally:
     comet_downloads = false
 ```
 
+A fresh install already writes both lines into `[Skyfield]`, commented out and showing their
+default of `true`: uncomment them and change the value rather than adding a second copy.  An
+upgrade never rewrites an existing `[Skyfield]`, so on a station installed earlier the lines
+are either live already or not there at all — set them as shown above.
+
 An isolated station can still use both features by maintaining the element files itself.  See
 [Satellites](https://chaunceygardiner.github.io/weewx-skyfield/installation.html#satellites)
 and [Comets](https://chaunceygardiner.github.io/weewx-skyfield/installation.html#comets).

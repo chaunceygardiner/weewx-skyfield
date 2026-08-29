@@ -27,13 +27,14 @@ The installer writes the first two.  The other two are optional.
 
 ## The `[Skyfield]` section
 
-The installer adds this to `weewx.conf` with these defaults:
+The installer adds this to `weewx.conf`, with a comment above every line explaining
+what it does (elided here):
 
 ```ini
 [Skyfield]
+    #satellite_downloads = true
+    #comet_downloads = true
     enable = true
-    satellite_downloads = true
-    comet_downloads = true
     [[Satellites]]
         iss = 25544
         tiangong = 48274
@@ -41,6 +42,13 @@ The installer adds this to `weewx.conf` with these defaults:
         halley = 1P
         hale_bopp = C/1995 O1
 ```
+
+An option that merely selects a default is written **commented out**, with the default
+shown.  Nothing is lost: with the line commented, the value in force is the extension's
+own — so if a later release picks a better default, your station follows it.  Uncomment
+one to pin your station to a value of your own.  `enable` and the two lists are live
+because none of them is a default: the first is the switch you came for, and the other
+two are content to edit.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -106,9 +114,9 @@ adds under `[StdReport]`:
 ```ini
 [StdReport]
     [[SkyfieldReport]]
-        skin = Skyfield
-        enable = true
         HTML_ROOT = skyfield
+        enable = true
+        skin = Skyfield
 ```
 
 Every option below can be set there, overriding the bundled `skin.conf`.  Setting them in

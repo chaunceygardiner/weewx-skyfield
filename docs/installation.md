@@ -123,12 +123,13 @@ logged (once at the crossing, not per tag), and the always-live diagnostic tags
 
 **This is one of the extension's two network accesses — comet elements, below, are the
 other — and it has a switch of its own.**  Set `satellite_downloads = false` in the
-`[Skyfield]` section and no satellite fetch is ever made; with `comet_downloads = false`
-beside it the extension fetches nothing at all, ever — the behavior every release before 2.0
-had unconditionally.  In that mode
-`[[Satellites]]` still works if you maintain the element files yourself: an air-gapped
-station can copy `wxskyfield_sat_<norad>.tle` files in by any means it likes (each file is
-one satellite's CelesTrak TLE — the name line and two element lines); the seven-day age
+`[Skyfield]` section — on a fresh install the line is already there, commented out, so
+uncomment it and change the value — and no satellite fetch is ever made; with
+`comet_downloads = false` beside it the extension fetches nothing at all, ever — the behavior
+every release before 2.0 had unconditionally.  In that mode `[[Satellites]]` still works if
+you maintain the element files yourself: an air-gapped station can copy
+`wxskyfield_sat_<norad>.tle` files in by any means it likes (each file is one satellite's
+CelesTrak TLE — the name line and two element lines); the seven-day age
 cutoff applies all the same, because stale elements cannot predict passes no matter how they
 arrived.  With no `[[Satellites]]` configured, likewise, nothing is ever fetched.  The fetch
 identifies itself as `weewx-skyfield/<version>` with the project URL, and `weectl extension

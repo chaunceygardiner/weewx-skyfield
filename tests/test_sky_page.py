@@ -1777,7 +1777,7 @@ class TestSkinFiles:
         # installer's HTML_ROOT (weecfg/extension.py), so the installer must
         # give a relative path ('skyfield'), never 'public_html/skyfield' --
         # that installs to public_html/public_html/skyfield.
-        assert "'HTML_ROOT': 'skyfield'" in installer
+        assert re.search(r'^\s*HTML_ROOT = skyfield\s*$', installer, re.M)
         assert 'public_html' not in installer
 
     def test_template_guards_satellite_section(self):

@@ -1,6 +1,22 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3.4 (in progress)
+-------------------
+- The `[Skyfield]` stanza a fresh install writes into weewx.conf explains
+  itself.  Every option now arrives with a comment above it saying what it
+  does, where the installer used to write bare `key = value` lines; the
+  `[[SkyfieldReport]]` stanza gains the same.  `satellite_downloads` and
+  `comet_downloads` are written COMMENTED OUT, with their default shown:
+  neither is a setting so much as a choice of default, and a live value
+  freezes that station on today's answer for ever, because an upgrade
+  fills in absent keys only and never rewrites one.  Left commented, the
+  extension's own value governs -- including a better one a later release
+  might bring.  `enable`, `[[Satellites]]` and `[[Comets]]` stay live:
+  the first is the switch you came for, the other two are content to edit.
+  Existing installs are untouched -- this is what a FRESH install writes,
+  and the stanza already in your weewx.conf is never rewritten.
+
 2.3.3 (2026/08/16)
 ------------------
 - Comets work on Skyfield 1.47 through 1.50 again.  On those versions a

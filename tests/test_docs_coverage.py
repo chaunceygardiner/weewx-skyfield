@@ -587,51 +587,62 @@ class TestThemeCreditSuppressed:
 INSTALL_PY = os.path.join(REPO_ROOT, 'install.py')
 
 
-def _installer_config() -> Dict[str, str]:
-    """The flat key=value pairs install.py injects into weewx.conf.
+def _installer_stanza() -> str:
+    """The text of install.py's module-level CONFIG string.
 
-    Nested sections are flattened to their leaf entries: what a reader
-    needs to see in the manual is that `iss = 25544` is what lands in
-    their config, not the shape of the python dict that put it there."""
+    install.py writes its stanza as weewx.conf TEXT rather than a dict so
+    that ConfigObj carries its comments into the user's file, so the
+    stanza is read here as the literal it is.  Scanned as text rather than
+    parsed with configobj, because these audits run on the standard
+    library alone."""
     with open(INSTALL_PY, 'r') as f:
         tree = ast.parse(f.read(), filename=INSTALL_PY)
-
-    # Module-level dicts the config block references as dict(NAME).
-    named: Dict[str, Dict[str, str]] = {}
     for node in tree.body:
         if (isinstance(node, ast.Assign) and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Dict)):
-            pairs = {}
-            for key, value in zip(node.value.keys, node.value.values):
-                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
-                        and isinstance(value, ast.Constant)
-                        and isinstance(value.value, str)):
-                    pairs[key.value] = value.value
-            if pairs:
-                named[node.targets[0].id] = pairs
+                and node.targets[0].id == 'CONFIG'
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            return node.value.value
+    return ''
 
+
+def _installer_config() -> Dict[str, str]:
+    """The flat key=value pairs install.py injects into weewx.conf -- the
+    stanza's LIVE assignments.
+
+    Nested sections are flattened to their leaf entries: what a reader
+    needs to see in the manual is that `iss = 25544` is what lands in
+    their config, not the shape of the stanza that put it there."""
     flat: Dict[str, str] = {}
-
-    def walk(node: ast.AST) -> None:
-        if not isinstance(node, ast.Dict):
-            return
-        for key, value in zip(node.keys, node.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                flat[key.value] = value.value
-            elif isinstance(value, ast.Dict):
-                walk(value)
-            elif (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-                  and value.func.id == 'dict' and value.args
-                  and isinstance(value.args[0], ast.Name)):
-                flat.update(named.get(value.args[0].id, {}))
-
-    for element in ast.walk(tree):
-        if isinstance(element, ast.keyword) and element.arg == 'config':
-            walk(element.value)
+    for line in _installer_stanza().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('['):
+            continue
+        key, _, value = line.partition('=')
+        flat[key.strip()] = value.strip()
     return flat
+
+
+def _installer_commented_config() -> Dict[str, str]:
+    """The stanza's COMMENTED-OUT assignments.
+
+    These never reach weewx.conf as settings -- that is the point of them,
+    since it leaves the extension's own default free to govern and to
+    improve in a later release -- but the user still reads them, as the
+    line the installer wrote showing what the value will be.  So the
+    manual has to show them too, and show them commented: a manual
+    printing a bare `satellite_downloads = true` would be describing a
+    stanza this installer stopped writing.
+
+    A commented ASSIGNMENT only ('#comet_downloads = true'), never a prose
+    comment, which by convention has a space after the '#'."""
+    found: Dict[str, str] = {}
+    for line in _installer_stanza().splitlines():
+        match = re.match(r'^\s*#(\w+)\s*=\s*(.+?)\s*$', line)
+        if match:
+            found[match.group(1)] = match.group(2)
+    return found
 
 
 class TestInstallerDefaultsDocumented:
@@ -643,9 +654,9 @@ class TestInstallerDefaultsDocumented:
 
     def test_every_installed_default_appears_in_the_manual(self):
         config = _installer_config()
-        assert len(config) >= 8, (
+        assert len(config) >= 7, (
             'only extracted %d entries from install.py -- the extractor has '
-            'probably lost the config block' % len(config))
+            'probably lost the CONFIG stanza' % len(config))
         with open(CONFIG_PAGE, 'r') as f:
             page = f.read()
         missing = []
@@ -658,6 +669,37 @@ class TestInstallerDefaultsDocumented:
         assert not missing, (
             'install.py writes these into weewx.conf, but the manual does not '
             'show them (or shows a different value):\n  %s' % '\n  '.join(missing))
+
+    def test_every_commented_out_option_appears_in_the_manual(self):
+        """The other half of the same claim.  An option the installer
+        writes COMMENTED OUT is still a line the user finds in their
+        weewx.conf, so the manual's block has to carry it -- commented, as
+        the installer writes it.  Left out, the manual describes a stanza
+        that no longer exists; printed live, it tells the reader to pin a
+        value the scheme exists to leave unpinned.
+
+        The value is pinned as well as the key, which is the drift this
+        guards: change the default to `#satellite_downloads = false` and
+        nothing else notices.  test_installer.py's drift guard compares the
+        stanza against the CODE, and the live-options test above cannot see
+        a commented line at all."""
+        commented = _installer_commented_config()
+        assert commented, (
+            'no commented-out options found in install.py -- either the '
+            'stanza stopped writing any (in which case delete this test) or '
+            'the extractor has lost them')
+        with open(CONFIG_PAGE, 'r') as f:
+            page = f.read()
+        missing = []
+        for key, value in sorted(commented.items()):
+            if not re.search(r'^\s*#%s\s*=\s*%s\s*$' % (re.escape(key),
+                                                          re.escape(value)),
+                             page, re.M):
+                missing.append('#%s = %s' % (key, value))
+        assert not missing, (
+            'install.py writes these into weewx.conf commented out, but the '
+            'manual does not show them that way (or shows a different '
+            'value):\n  %s' % '\n  '.join(missing))
 
 
 class TestPagesUrlsResolve:
