@@ -25,9 +25,12 @@ import weewx
 from setup import ExtensionInstaller
 
 # The stanza a fresh install writes into weewx.conf, as text rather than a
-# dict so that ConfigObj carries its comments into the user's file.
-# Which options are live and which are commented out is a convention with
-# reasons behind it; those live in CLAUDE.md, not here.
+# dict so that ConfigObj carries its comments into the user's file.  An
+# option that only selects a default is written commented out, so that the
+# extension's own fallback -- and a better one in some later release -- goes
+# on governing; weectl fills in absent keys only and never rewrites a value
+# that is already there, so a value written live here would pin the station
+# to it for ever.
 CONFIG = """
 [Skyfield]
     # This section configures weewx-skyfield, the Skyfield almanac

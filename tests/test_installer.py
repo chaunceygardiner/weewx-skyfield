@@ -12,8 +12,11 @@ silently and stays for the life of the station.
 Two of those failures have their own guard below -- an option written live
 whose value drifts from the default the code applies, and a commented-out
 option that merges outside the section it documents.  The convention they
-enforce (why the stanza is text, which options stay live, and why a
-commented option needs a live key after it) is written up in CLAUDE.md.
+enforce: the stanza is text rather than a dict so ConfigObj carries its
+comments into the user's file; an option the code can answer for itself is
+written commented out so its fallback goes on governing; and a commented
+option needs a live key after it in the same section, because ConfigObj
+attaches a comment block to the NEXT key.
 """
 
 import ast
