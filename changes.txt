@@ -1,8 +1,8 @@
 weewx-skyfield change history
 -----------------------------
 
-2.3.4 (in progress)
--------------------
+2.3.4 (2026/08/30)
+------------------
 - The `[Skyfield]` stanza a fresh install writes into weewx.conf explains
   itself.  Every option now arrives with a comment above it saying what it
   does, where the installer used to write bare `key = value` lines; the
