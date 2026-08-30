@@ -53,8 +53,8 @@ two are content to edit.
 | Option | Default | Effect |
 |---|---|---|
 | `enable` | `true` | Register the Skyfield almanac.  Set `false` and reports fall back to WeeWX's built-in PyEphem/weeutil almanac — the extension stays installed and does nothing. |
-| `satellite_downloads` | `true` | Fetch satellite orbital elements from CelesTrak: at install, at any startup finding them missing or stale, then about every three hours.  See [Satellites](installation.md#satellites). |
-| `comet_downloads` | `true` | Fetch the MPC's CometEls.txt: at install, at any startup finding it missing or stale, then about every two days.  See [Comets](installation.md#comets). |
+| `satellite_downloads` | `true` | Fetch satellite orbital elements from CelesTrak: at install (unless the cached elements are still current), at any startup finding them missing or stale, then about every three hours.  See [Satellites](installation.md#satellites). |
+| `comet_downloads` | `true` | Fetch the MPC's CometEls.txt: at install (unless the cached file is still current), at any startup finding it missing or stale, then about every two days.  See [Comets](installation.md#comets). |
 | `[[Satellites]]` | ISS, Tiangong | `tag name = NORAD catalog number`, one line each.  This one list drives both the [satellite tags](tag-index.md#satellite-tags) and the fetch list. |
 | `[[Comets]]` | Halley, Hale-Bopp | `tag name = MPC designation`, one line each — `tsuchinshan_atlas = C/2023 A3`. |
 

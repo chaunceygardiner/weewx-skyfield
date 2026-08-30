@@ -52,6 +52,16 @@ later — see [Translations](i18n.md#how-it-works).
    weectl extension install weewx-skyfield.zip
    ```
 
+   The install pauses here to fetch the first satellite and comet orbital elements, so the
+   tags work from the first report cycle rather than the next refresh.  It says what it is
+   downloading before each one — the comet file is the slow one — and elements the station
+   already has, still current, are not fetched again, so a reinstall or an upgrade over a
+   running station usually goes straight through.  A download that fails is not fatal: on a
+   network or CelesTrak hiccup the message says weewxd will fetch them itself, and it will.
+   A message naming a satellite and its NORAD number is the other case — CelesTrak has no
+   current elements for it, so check that number in `[[Satellites]]`, because retrying will
+   not fix it.
+
 4. Restart WeeWX.
 
 5. Confirm it took.  The extension announces itself in the log; this is the line that says
@@ -109,7 +119,8 @@ all.
 Satellite positions are computed (by Skyfield's SGP4 implementation) from published orbital
 elements, which age quickly — a reboost or maneuver makes week-old elements minutes wrong —
 so, unlike the ephemeris and the star catalog, they cannot ship in a release.  They are
-fetched from [CelesTrak](https://celestrak.org): once at install time, then by weewxd, which
+fetched from [CelesTrak](https://celestrak.org): once at install time — skipped when the
+station already has elements less than three hours old — then by weewxd, which
 checks for missing or stale elements at every startup — a satellite just added to the
 configuration is live seconds after the restart — and refreshes about every three hours
 thereafter, on a worker thread that never blocks reports; on a failed fetch the old file is
@@ -151,9 +162,10 @@ Comet orbital elements are the MPC's published
 [CometEls.txt](https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt) — one ~160 KB
 file carrying every comet with a current orbit, cached as `wxskyfield_comets.txt` in the
 same `wxskyfield` directory as the satellite TLEs.  It follows the satellites' fetch shape
-at a gentler cadence: fetched at install, at any weewxd startup that finds it missing or
-stale, then about every two days, on a worker thread that never blocks reports — written
-atomically, the old file kept on any failure, backoff on retry.  Set
+at a gentler cadence: fetched at install unless the cached file is less than two days old, at
+any weewxd startup that finds it missing or stale, then about every two days, on a worker
+thread that never blocks reports — written atomically, the old file kept on any failure,
+backoff on retry.  Set
 `comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
 ever: an air-gapped station maintains the one `wxskyfield_comets.txt` file by any means it
 likes (it is the MPC file verbatim).  Unlike satellite elements there is no age cutoff —

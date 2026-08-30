@@ -1,6 +1,26 @@
 weewx-skyfield change history
 -----------------------------
 
+2.3.5 (2026/08/30)
+------------------
+- The install no longer looks hung while it downloads orbital elements.  It
+  now says what it is fetching -- satellite elements from CelesTrak, comet
+  elements from the Minor Planet Center -- before each download rather than
+  after it, so the wait explains itself.
+- An install no longer refetches elements the station already has and that
+  are still current: a cached file younger than the interval weewxd itself
+  refreshes on (three hours for satellites, two days for comets) is left
+  alone.  A reinstall, or an upgrade over a running station, therefore
+  usually makes no network request at all and finishes as quickly as any
+  other extension install.
+- A satellite CelesTrak does not know is now reported as something to fix
+  rather than as something weewxd will retry: the message names the
+  satellite and its NORAD number and points at `[[Satellites]]`, because a
+  mistyped catalog number fails identically for ever.  Genuine network
+  failures still say weewxd will fetch the elements itself, which is true.
+- One satellite's failed fetch no longer skips the satellites after it in
+  the list.
+
 2.3.4 (2026/08/30)
 ------------------
 - The `[Skyfield]` stanza a fresh install writes into weewx.conf explains

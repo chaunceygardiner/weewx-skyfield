@@ -151,8 +151,9 @@ full history is in
 Everything this extension needs to compute is bundled — the DE421 ephemeris, the complete
 Hipparcos catalog, the constellation figures.  Two things cannot be, because they go stale:
 
-- **satellite orbital elements**, fetched from [CelesTrak](https://celestrak.org) at install,
-  at any startup that finds them missing or stale, then about every three hours;
+- **satellite orbital elements**, fetched from [CelesTrak](https://celestrak.org) at install
+  (unless what is cached is still current), at any startup that finds them missing or stale,
+  then about every three hours;
 - **comet orbital elements**, one Minor Planet Center file, on the same shape at a gentler
   cadence — about every two days.
 

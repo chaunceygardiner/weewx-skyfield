@@ -103,6 +103,20 @@ slow *every* cycle, the Sky page is the busiest page here, and
 `star_mag_limit`, `constellation_lines`, `report_timing`, or `enable = false` on the page
 while keeping every tag.
 
+## Install messages
+
+Printed by `weectl extension install`, not logged.  The install fetches the first satellite
+and comet orbital elements so their tags work from the first report cycle, which is what it
+is doing when it pauses.
+
+| Message | Meaning |
+|---|---|
+| `Fetching satellite orbital elements for … from CelesTrak…` / `Fetching comet orbital elements from the Minor Planet Center…` | Normal, and why the install pauses.  The comet file is the slower one. |
+| `Satellite elements for … are current; not fetching.` / `Comet elements in … are current; not fetching.` | Nothing to do: what is cached is younger than the interval weewxd refreshes on.  Usual on an upgrade. |
+| `CelesTrak has no current elements for X (N) -- check the NORAD number…` | A typo in `[[Satellites]]`, or an object that has decayed.  Retrying cannot fix it: correct or remove the entry.  See [Satellites](installation.md#satellites). |
+| `Could not fetch elements for X now (…); weewxd will fetch them itself.` | A network or CelesTrak problem, and true as stated: weewxd fetches missing elements at startup and about every three hours after. |
+| `Skipping satellite X: '…' is not a NORAD catalog number.` | The value in `[[Satellites]]` is not a number.  weewxd logs its own version of this at startup. |
+
 ## Startup messages
 
 | Message | Meaning |
