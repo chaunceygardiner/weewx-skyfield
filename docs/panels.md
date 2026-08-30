@@ -147,7 +147,12 @@ chart depicts is ahead, in progress or over without consulting a feed whose *nex
 has already rolled on.  These hooks are a
 stable contract, and so are `$sky_page.satellite_names()` and `$sky_page.comet_names()`,
 through which an embedding skin enumerates the configured satellites and comets — the tag
-names in config order, empty when none are configured or the almanac is not registered.
+names in config order, empty when none are configured or the almanac is not registered —
+and `$sky_page.can_draw()` (2.3.4 and later), True when the Skyfield almanac is registered
+and the page can draw the sky, False on a lesser tier, where `dome_svg` comes back empty.
+It is the same test the dome stands on, without drawing anything, so a page that places
+only a satellite roster or the pass chart beside someone else's dome can gate those panels
+without rendering a dome to learn whether it could.
 
 ## The next visible pass chart — `pass_chart_html`
 

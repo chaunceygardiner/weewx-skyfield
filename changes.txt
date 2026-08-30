@@ -16,6 +16,13 @@ weewx-skyfield change history
   the first is the switch you came for, the other two are content to edit.
   Existing installs are untouched -- this is what a FRESH install writes,
   and the stanza already in your weewx.conf is never rewritten.
+- New for embedding skins: $sky_page.can_draw(), True when the Skyfield
+  almanac is registered and the page can draw the sky, False on a lesser
+  tier -- the same test dome_svg stands on, without drawing anything.
+  weewx-celestial 9.0 gates the panels it places beside the dome on it,
+  so a page showing only a satellite roster or the pass chart no longer
+  has to draw a dome to learn whether it could.  Public contract, like
+  satellite_names().
 
 2.3.3 (2026/08/16)
 ------------------

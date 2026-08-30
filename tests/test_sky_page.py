@@ -691,6 +691,18 @@ class TestSatellitePanel:
     def test_has_satellites(self, almanac, page):
         assert page.has_satellites() is True
 
+    def test_can_draw_public(self, almanac, page):
+        """can_draw() is PUBLIC contract: an embedding skin gates the
+        panels it places beside the dome on it (weewx-celestial 9.0), so
+        a page without a dome need not draw one to learn whether it
+        could.  True with the Skyfield almanac registered, False with
+        none -- the tier where dome_svg comes back empty -- and never a
+        raise."""
+        assert page.can_draw() is True
+        with saved_almanacs():
+            weewx.almanac.almanacs[:] = []
+            assert page.can_draw() is False
+
     def test_satellite_names_public(self, almanac, page):
         """satellite_names() is PUBLIC contract: embedding skins enumerate
         the configured satellites through it (weewx-celestial 8.0 builds

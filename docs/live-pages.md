@@ -99,6 +99,7 @@ these are a stable contract:
 | `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one the moment this one sets. |
 | `$sky_page.satellite_names()` | template | The configured satellite tag names, in config order. |
 | `$sky_page.comet_names()` | template | The configured comet tag names, in config order. |
+| `$sky_page.can_draw()` | template | Whether the page can draw the sky at all — True with the Skyfield almanac registered, False on a lesser tier, where `dome_svg` comes back empty (2.3.4 and later).  Gate panels placed beside the dome on this rather than on a dome render. |
 | `$sky_page.theme($almanac)` / `.palette($almanac)` | template | The consuming report's own theme, resolved — see [Helpers](panels.md#helpers--theme-palette-header_sub-and-sun_is_up).  Resolve once per page: the palette is baked into each fragment, so a page that re-renders fragments must hand every one the same value or the chart flips plate on a refresh. |
 
 Locate marks by these names, never by tooltip text — tooltips are translated.

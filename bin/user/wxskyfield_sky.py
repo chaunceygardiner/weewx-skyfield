@@ -826,6 +826,18 @@ class SkyPage:
         guard: a station with no [[Satellites]] hides the section."""
         return bool(self.satellite_names())
 
+    @_panel_guard(fallback=False)
+    def can_draw(self) -> bool:
+        """Whether this page can draw the sky at all: the Skyfield almanac
+        is registered, so the dome, the pass chart and every body tag
+        draw from it; False on a lesser tier (PyEphem, the built-in
+        almanac), where dome_svg comes back empty.  PUBLIC CONTRACT like
+        satellite_names: weewx-celestial 9.0 gates the panels it places
+        beside the dome on this, so a page showing only a satellite
+        roster or the pass chart need not draw a dome to learn whether
+        it could."""
+        return _find_sky() is not None
+
     def comet_names(self) -> List[str]:
         """The configured comets' tag names ([Skyfield] [[Comets]]), in
         config order, from the registered engine.  Empty when none are
