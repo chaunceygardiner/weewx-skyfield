@@ -46,11 +46,27 @@ later — see [Translations](i18n.md#how-it-works).
    star catalog (15 MB gzipped) are most of it, with the documentation's screenshots
    accounting for nearly all the rest.
 
-3. Install the extension:
+3. Install the extension.
+
+   On a pip install `weectl` lives in the virtual environment, so
+   activate it first (yours may sit elsewhere; `~/weewx-venv` is the usual
+   place):
+
+   ```
+   source ~/weewx-venv/bin/activate
+   weectl extension install weewx-skyfield.zip
+   ```
+
+   On a Debian or Red Hat package install there is no environment to
+   activate and `weectl` is already on the path:
 
    ```
    weectl extension install weewx-skyfield.zip
    ```
+
+   No `sudo`: that install put your account in the `weewx` group, which
+   owns the files.  If you installed WeeWX in this same login session, log
+   out and back in first so the group membership takes effect.
 
    The install pauses here to fetch the first satellite and comet orbital elements, so the
    tags work from the first report cycle rather than the next refresh.  It says what it is
