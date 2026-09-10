@@ -73,12 +73,12 @@ PyEphem's 0–1 fraction.  All three are different things; the
 ## Tonight's ISS pass
 
 ```
-#set $pass = $almanac.iss.next_visible_pass
-#if $pass.visible
-  The ISS appears $pass.rise ($pass.rise_azimuth.ordinal_compass),
-  peaks at $pass.max_altitude ($pass.culmination_azimuth.ordinal_compass),
-  and disappears $pass.set ($pass.set_azimuth.ordinal_compass).
-  Visible for $pass.duration.
+#set $iss_pass = $almanac.iss.next_visible_pass
+#if $iss_pass.visible
+  The ISS appears $iss_pass.rise ($iss_pass.rise_azimuth.ordinal_compass),
+  peaks at $iss_pass.max_altitude ($iss_pass.culmination_azimuth.ordinal_compass),
+  and disappears $iss_pass.set ($iss_pass.set_azimuth.ordinal_compass).
+  Visible for $iss_pass.duration.
 #else
   No visible ISS pass in the coming week.
 #end if
@@ -88,6 +88,12 @@ Guard on `.visible` rather than on a time: with no qualifying pass every attribu
 empty ValueHelper that renders `N/A`, and `.visible` is the flag that says so.
 `next_visible_pass` is deliberately strict — sunlit, sky dark, peaking at least 10° up — so
 use `next_pass` when you want every pass regardless of whether you could see it.
+
+The three times print with their date — `06/22/2025 03:11:25 AM` — because the pass being
+reported is anywhere in the coming week, which is what the `#else` branch above admits.
+Restyle them with a [`[Units]` `[[TimeFormats]]` `ephem_year`
+override](values-and-units.md#how-far-away-a-time-can-be), or drop the date on one tag with
+`$iss_pass.rise.format(format_string="%X")`.
 
 If a satellite's elements have gone stale, everything reads `N/A` and these two say why:
 

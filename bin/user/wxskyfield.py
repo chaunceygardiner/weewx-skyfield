@@ -61,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.4'
+WXSKYFIELD_VERSION = '2.4.1'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -2900,9 +2900,17 @@ class SatellitePass:
                  data: Optional[Dict[str, Any]]):
         almanac_type, a = binder.almanac_type, binder.almanac
         d: Dict[str, Any] = data or {}
-        self.rise = almanac_type.time_value(a, d.get('rise'), 'ephem_day')
-        self.culmination = almanac_type.time_value(a, d.get('culmination'), 'ephem_day')
-        self.set = almanac_type.time_value(a, d.get('set'), 'ephem_day')
+        # 'ephem_year', not 'ephem_day': a pass is searched across the
+        # elements' seven-day validity window, so these three routinely
+        # name an instant days out, and ephem_day's default format (%X)
+        # would render one as a bare clock time reading as tonight.  The
+        # resemblance to next_rising -- which IS ephem_day in WeeWX's own
+        # almanac -- is in the name, not the range: a planet's next rising
+        # is at most about a day away.  The rule both follow is simply how
+        # far from now the instant can be.
+        self.rise = almanac_type.time_value(a, d.get('rise'), 'ephem_year')
+        self.culmination = almanac_type.time_value(a, d.get('culmination'), 'ephem_year')
+        self.set = almanac_type.time_value(a, d.get('set'), 'ephem_year')
         max_altitude = d.get('max_altitude')
         self.max_altitude = ValueHelper(
             ValueTuple(math.radians(max_altitude) if max_altitude is not None else None,
@@ -3776,14 +3784,18 @@ class SkyfieldAlmanacBinder:
             # For a satellite these are the NEXT occurrence from the
             # almanac's time (transit meaning culmination), not the
             # planets' anytime-today verbs: passes are minutes long and
-            # "today's" is rarely the interesting one.
+            # "today's" is rarely the interesting one.  Which is also why
+            # they are 'ephem_year' where a planet's rise/set is
+            # 'ephem_day': they come off the same seven-day pass list as
+            # SatellitePass, so they too can name an instant days out and
+            # must render with their date.
             event_ts = None
             if elements is not None:
                 event_key = {'rise': 'rise', 'transit': 'culmination', 'set': 'set'}[attr]
                 passes = self._sat_passes(elements[0], elements[1])
                 event_ts = next((p[event_key] for p in passes
                                  if p[event_key] > a.time_ts), None)
-            return almanac_type.time_value(a, event_ts, 'ephem_day')
+            return almanac_type.time_value(a, event_ts, 'ephem_year')
         if attr == 'sunlit':
             if elements is None:
                 return None

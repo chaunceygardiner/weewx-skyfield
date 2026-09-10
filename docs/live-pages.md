@@ -39,6 +39,12 @@ One computation engine serves both, so the live values and the report values can
 disagree.  There is no second implementation to keep in step — which is exactly why this
 extension is the engine's only home.
 
+A field written without `.raw`, like the one above, reaches your page already formatted, in
+the tag's own [time context](values-and-units.md#how-far-away-a-time-can-be) — for a
+satellite pass that means a dated instant, because the pass can be a week out.  Write
+`almanac.iss.next_pass.rise.unix_epoch.raw` and format it yourself if your page wants the
+number.
+
 ## Writing fields
 
 Three rules cover almost everything.

@@ -106,6 +106,45 @@ A satellite's `.distance` is the exception, and deliberately so: it is the slant
 you to the satellite, in ordinary `group_distance`, because nobody measures an overhead pass
 in AU.
 
+## How far away a time can be
+
+A time ValueHelper renders itself through one of WeeWX's `[Units]` `[[TimeFormats]]`
+entries, chosen by the *context* the tag was built with.  Two contexts matter here, and the
+rule is simply how far from now the instant can be:
+
+| Context | Default format | Renders | Used for |
+|---|---|---|---|
+| `ephem_day` | `%X` | `03:11:25 AM` | Instants at most about a day away: `$almanac.sunrise`, a body's `rise`, `set` and `transit`, the `next_rising` family. |
+| `ephem_year` | `%x %X` | `06/22/2025 03:11:25 AM` | Instants days or months out: equinoxes and solstices, the moon-phase and apsis finders, meteor-shower peaks, a comet's perihelion — and everything about a satellite pass. |
+
+`ephem_day` does not promise the almanac's own date.  A body's `rise`, `set` and
+`transit` mean *the event occurring on the almanac's day*, searched forward from local
+midnight, so one can land just past midnight and carry the next day's date while still
+rendering as a bare clock time: at Palo Alto on 15 June 2025, `$almanac.moon.rise` is
+00:08 the following morning.  WeeWX's built-in almanac computes and formats these the
+same way, and this extension matches it deliberately — a template ported from PyEphem
+keeps rendering what it always rendered.  (One difference worth knowing: in the built-in
+almanac `$almanac.sunrise` is a separate calendar-day computation, while here it is
+exactly `$almanac.sun.rise`.)
+
+Satellite times are `ephem_year` because passes are searched across the orbital elements'
+seven-day validity window, so `$almanac.iss.next_visible_pass.rise` routinely names an
+instant one to seven days out.  A bare clock time for a pass three days away does not merely
+lose the date — it reads as tonight.  That covers the three
+[pass attributes](tag-index.md#pass-attributes) `rise`, `culmination` and `set`, and the
+satellite's own `rise`, `transit` and `set`, which come off the same pass list.
+
+To restyle a family, override its context in your skin:
+
+```
+[Units]
+    [[TimeFormats]]
+        ephem_year = %b %d %H:%M
+```
+
+That reaches every `ephem_year` tag.  To change one tag only, format it in place:
+`$almanac.iss.next_pass.rise.format(format_string="%X")`.
+
 ## Radians that know they are radians
 
 The PyEphem-shaped tags — `libration_lat`, `libration_long`, `colong`, `subsolar_lat`,

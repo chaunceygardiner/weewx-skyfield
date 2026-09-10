@@ -1,6 +1,39 @@
 weewx-skyfield change history
 -----------------------------
 
+2.4.1 (2026/09/10)
+------------------
+- ACTION REQUIRED only if you print a satellite time and want it to keep
+  reading as a bare clock time: satellite times now render with their date.
+  `$almanac.iss.next_visible_pass.rise` printed `03:11:25 AM`, which reads
+  as tonight; it now prints `06/22/2025 03:11:25 AM`.  To get the old look
+  back on one tag, format it in place --
+  `$pass.rise.format(format_string="%X")` -- rather than overriding
+  `[Units] [[TimeFormats]] ephem_year`, which would also restyle the
+  equinoxes, the moon-phase finders, meteor-shower peaks and a comet's
+  perihelion.  Values are unchanged, and any tag read through `.raw` --
+  which is how every live page here reads them -- is untouched.
+- Fixed: the times a satellite reports were built in the wrong units
+  context.  A pass is searched across the orbital elements' seven-day
+  validity window, so the pass times routinely name an instant one to seven
+  days out; they were built as `ephem_day`, "an instant within the current
+  day", whose default format is time only.  A pass three days away did not
+  merely lose its date -- it read as tonight.  They are now `ephem_year`,
+  which is what every other multi-day instant this extension reports
+  already used.  Six tags: `rise`, `culmination` and `set` on both
+  `next_pass` and `next_visible_pass`, and the satellite's own `rise`,
+  `transit` and `set`, which come off the same pass list.
+- Fixed: the ISS pass recipe in the manual could not be used.  It opened
+  `#set $pass = ...`, and `pass` is a Python keyword, so Cheetah refused to
+  compile the template: a reader who pasted the recipe got a report that
+  generated nothing and said why only in the log.  The snippet now uses
+  `$iss_pass`.  A new audit compiles every Cheetah block the manual
+  publishes, which is a different question from the existing audit that
+  evaluates their tag chains -- every chain in that recipe resolved.
+- New in the manual: "How far away a time can be" in Values, units and
+  types, which says which contexts these tags use and how to restyle them.
+  The ISS recipe and the tag index say so at the point of use.
+
 2.4 (2026/09/08)
 ----------------
 - ACTION REQUIRED, and only on a station that uses the `$sky_page` panels

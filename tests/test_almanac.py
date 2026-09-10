@@ -24,7 +24,7 @@ import shutil
 import sys
 import time
 
-from typing import List
+from typing import List, Tuple
 
 import numpy
 import pytest
@@ -2658,6 +2658,49 @@ class TestSatellitePasses:
             assert raw(p.rise, 'unix_epoch') < mid.time_ts < raw(p.set, 'unix_epoch')
             assert mid.iss.alt == pytest.approx(35.56, abs=ANGLE_TOL)
 
+    def test_pass_times_render_with_their_date(self, almanac):
+        """Pass times are 'ephem_year', not 'ephem_day': a pass is
+        searched across the elements' seven-day validity window, so
+        rise/culmination/set routinely name an instant days out.  Rendered
+        in the day context they would come out as a bare clock time
+        (ephem_day's default format is %X) and read as tonight.  The
+        satellite's own rise/transit/set tags come off the same pass list
+        and carry the same context."""
+        v = almanac.iss.next_visible_pass
+        rise_ts = raw(v.rise, 'unix_epoch')
+        # The pinned visible pass is on the day AFTER the almanac's time:
+        # exactly the case a bare clock time would misreport.
+        assert time.strftime('%x', time.localtime(rise_ts)) \
+            != time.strftime('%x', time.localtime(almanac.time_ts))
+        for vh in (v.rise, v.culmination, v.set,
+                   almanac.iss.rise, almanac.iss.transit, almanac.iss.set):
+            ts = raw(vh, 'unix_epoch')
+            rendered = str(vh)
+            assert rendered == time.strftime('%x %X', time.localtime(ts))
+            assert time.strftime('%x', time.localtime(ts)) in rendered
+            assert rendered != time.strftime('%X', time.localtime(ts))
+            # The documented escape hatch for anyone who wants the bare
+            # clock time back, one tag at a time.
+            assert vh.format(format_string='%X') \
+                == time.strftime('%X', time.localtime(ts))
+
+    def test_time_formats_override_reaches_pass_times(self, sky):
+        """A skin restyling these times does it with [Units][[TimeFormats]]
+        ephem_year, so the override must reach all six tags."""
+        formatter = weewx.units.get_default_formatter()
+        formatter.time_format_dict = dict(formatter.time_format_dict)
+        formatter.time_format_dict['ephem_year'] = '%Y-%m-%d %H:%M'
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=formatter)
+            v = alm.iss.next_visible_pass
+            for vh in (v.rise, v.culmination, v.set,
+                       alm.iss.rise, alm.iss.transit, alm.iss.set):
+                ts = raw(vh, 'unix_epoch')
+                assert ts is not None
+                assert str(vh) == time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))
+
     def test_rise_transit_set_are_next_occurrence(self, almanac):
         """For a satellite these are the NEXT events from the almanac's
         time (transit meaning culmination), not the planets' anytime-
@@ -3165,8 +3208,11 @@ def _recipe_expressions() -> List[str]:
 
     The recipes page tells readers its snippets are checked against a real
     almanac; this is that check.  Cheetah control flow and the snippets'
-    local variables ($pass, $comet) are skipped -- what is verified is that
-    every chain rooted at $almanac resolves and produces a value."""
+    local variables ($iss_pass, $comet) are skipped -- what is verified is
+    that every chain rooted at $almanac resolves and produces a value.
+    Skipping the locals is also this audit's blind spot, which is why
+    TestManualTemplatesCompile exists: a snippet whose chains all resolve
+    can still be a template Cheetah refuses to compile."""
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'docs', 'recipes.md')
     with open(path, 'r') as f:
@@ -3189,6 +3235,76 @@ def _recipe_expressions() -> List[str]:
             continue
         found.append(expr[1:])          # drop the leading $
     return sorted(set(found))
+
+
+def _manual_cheetah_blocks() -> List[Tuple[str, int, str]]:
+    """Every fenced block in the manual that is Cheetah, as
+    (page, line, source).
+
+    A block counts as Cheetah when it carries a Cheetah DIRECTIVE -- a
+    weewx.conf stanza or a shell transcript has none, and a bare `$tag`
+    line is legal Cheetah text either way, so the directive is what makes
+    the block a template with something to compile.
+
+    A block that will not compile because it is deliberately a fragment
+    (an `#end if` with its `#if` in the prose above) is the manual's bug,
+    not this audit's: publish the whole snippet.  A reader pastes what is
+    on the page."""
+    docs_dir = os.path.join(REPO_ROOT, 'docs')
+    pages = [os.path.join(docs_dir, n) for n in sorted(os.listdir(docs_dir))
+             if n.endswith('.md')]
+    pages.append(os.path.join(REPO_ROOT, 'README.md'))
+    directive = re.compile(r'^\s*#(set|if|else|elif|end|for|echo|include|attr|def|block|silent)\b',
+                           re.MULTILINE)
+    fence = re.compile(r'^```[a-zA-Z]*\n(.*?)^```', re.MULTILINE | re.DOTALL)
+    blocks = []
+    for path in pages:
+        with open(path, 'r') as f:
+            text = f.read()
+        for m in fence.finditer(text):
+            body = m.group(1)
+            if directive.search(body):
+                line = text[:m.start()].count('\n') + 2
+                blocks.append((os.path.basename(path), line, body))
+    return blocks
+
+
+_MANUAL_CHEETAH_BLOCKS = _manual_cheetah_blocks()
+
+
+class TestManualTemplatesCompile:
+    """Every Cheetah snippet the manual publishes must COMPILE.
+
+    Evaluating a snippet's tag chains (TestManualRecipes, above) proves
+    the tags exist; it says nothing about whether a reader who pastes the
+    block gets a working report.  The two are genuinely different
+    failures: docs/recipes.md's ISS recipe opened `#set $pass = ...` for
+    several releases, and since `pass` is a Python keyword Cheetah raised
+    a ParseError -- the report generated 0 files and said so only in the
+    log -- while every chain in it evaluated perfectly here.  Compiling is
+    parse-only: no almanac, no fixtures, no rendering."""
+
+    def test_found_the_blocks(self):
+        assert len(_MANUAL_CHEETAH_BLOCKS) >= 8, \
+            ('only found %d Cheetah blocks -- did the manual move?'
+             % len(_MANUAL_CHEETAH_BLOCKS))
+
+    @pytest.mark.parametrize('page,line,source', _MANUAL_CHEETAH_BLOCKS,
+                             ids=['%s:%d' % (page, line)
+                                  for page, line, _ in _MANUAL_CHEETAH_BLOCKS])
+    def test_manual_block_compiles(self, page, line, source):
+        Template = pytest.importorskip('Cheetah.Template').Template
+        try:
+            Template(source=source)
+        except Exception as e:
+            # Cheetah's ParseError str() STARTS with a newline, so a bare
+            # splitlines()[0] is the empty string and the failure names the
+            # block without saying what is wrong with it.  Strip first, and
+            # carry enough lines to reach the offending source line.
+            detail = '\n    '.join(str(e).strip().splitlines()[:12])
+            raise AssertionError(
+                '%s:%d publishes a Cheetah block that will not compile (%s):\n    %s'
+                % (page, line, type(e).__name__, detail)) from None
 
 
 class TestManualRecipes:
