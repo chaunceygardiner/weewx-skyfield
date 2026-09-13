@@ -93,8 +93,8 @@ direct measure of its distance.  A star without a measured parallax has no known
 which is why this extension reports `N/A` rather than a fictitious number.
 
 **Plate** — this manual's word for one of the Sky page's two color schemes, borrowed from
-printed star atlases: the **night plate** (the default dark theme) and the **paper plate**
-(the light one).  A plate is chosen at generation time by the `theme`
+printed star atlases: the **night plate** (`night`, the default dark theme) and the **light
+plate** (`light`, a paper-atlas look).  A plate is chosen at generation time by the `theme`
 [option](configuration.md#the-sky-pages-report-stanza) and sets the page's colors; an
 embedding skin can override them from its own stylesheet (see
 [the role classes](panels.md#restyling-the-marks--the-role-classes)).  See also

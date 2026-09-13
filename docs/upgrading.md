@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 4
-description: What changed for existing weewx-skyfield users — the removed options, the one tag whose units changed, the new download switches, and the companion-extension version floors.
+description: What changed for existing weewx-skyfield users — removed options, the one tag whose units changed, satellite times that now carry their date, markup changes for skins that embed the panels, the download switches, and the companion-extension version floors.
 ---
 
 # Upgrading
@@ -28,6 +28,8 @@ else is additive: new tags, new panels, nothing to change.  The full record is i
 [changes.txt](https://github.com/chaunceygardiner/weewx-skyfield/blob/main/changes.txt).
 
 ## Coming from 1.x
+
+Read [Coming from 2.x](#coming-from-2x) as well: everything there applies to you too.
 
 ### Two things need your attention
 
@@ -77,13 +79,43 @@ map.  To restore the sparse pre-2.0 look:
 
 ## Coming from 2.x
 
-### If you embed the panels, three things need your attention
+### If you print satellite times, one thing needs your attention
+
+**Satellite times carry their date now (2.5).**  A pass's `rise`, `culmination` and `set` — on
+`next_pass` and `next_visible_pass` — and a satellite's own `rise`, `transit` and `set`
+printed a bare clock time, `03:11:25 AM`; they now print `06/22/2025 03:11:25 AM`.  A pass is
+searched up to a week ahead, so a bare time made a pass three days out read as tonight.  To
+keep the old look on one tag, format it in place —
+`$almanac.iss.next_visible_pass.rise.format(format_string="%X")` — rather than overriding
+`ephem_year` in `[Units]` `[[TimeFormats]]`, which would also restyle the equinoxes, the
+moon-phase finders, meteor-shower peaks and a comet's perihelion.  Values are unchanged, and a
+tag read through `.raw` is untouched.  See [How far away a time can
+be](values-and-units.md#how-far-away-a-time-can-be).
+
+### If you embed the panels, six things need your attention
+
+**The charts' labels sit together in one group now (2.5).**  Every `<text>` a sky dome or pass
+chart carries — cardinals, ring figures, a pass's clocks, every name — is inside
+`<g class="dome-labels" data-label-scale="…">` at the end of the SVG, where the cardinals,
+ring figures and clocks used to be written beside the marks they annotate.  Positions and
+sizes are unchanged; a stylesheet or a `querySelector` still finds the same elements.  Two
+things this can break: *tests that assert on the markup's order*, and *live JavaScript that
+moves a label by its `data-body`* on a chart asked for [label
+layers](panels.md#the-sky-dome--dome_svg), which has one copy per layer — use
+`querySelectorAll` and move them all.  A chart asked for no layers has exactly one.
+
+**`label_scale` is checked (2.5).**  A value that is not a positive number now raises a
+template error naming the argument, where it used to render 0px labels or blank the panel —
+and a template error skips the whole page, leaving the previous copy on disk (see
+[Troubleshooting](troubleshooting.md#a-page-stopped-updating-after-i-changed-a-sky_page-call)).
+Numeric text such as `label_scale='0.8'` is still accepted.
 
 **The dome declines to draw without this extension's almanac (2.4).**  On a station that
 uses the `$sky_page` panels while the almanac service is *not* running — `enable = false`,
 or the service missing from `data_services` — the sky dome now renders empty rather than
 drawing a partial chart from PyEphem.  `$sky_page.can_draw()` is a published contract
-meaning those five panels come back empty, and a skin that gates on it has to be able to
+meaning the dome, the pass chart, the satellite rows, the equation of time and the moon's
+apsides come back empty, and a skin that gates on it has to be able to
 trust it.  Register the almanac and the full dome returns.  A station running the almanac —
 which is every normal install — is unaffected.
 
@@ -96,9 +128,8 @@ can break in a skin of your own, neither of them the rendering:
   picture of this markup is written down.
 - *Live JavaScript that reads a mark's drawn paint,* which fails silently.
   `el.getAttribute('fill')` returns `null` now; use `getComputedStyle(el).fill`, or read the
-  role classes, whose two states are one pair exchanged.  The `data-body`, `data-sunlit`,
-  `data-bright` and `data-dome-ts` hooks are untouched and remain the durable way to find a
-  mark.
+  role classes, whose two states are one pair exchanged.  The `data-body`, `data-sunlit` and
+  `data-bright` hooks are untouched and remain the durable way to find a mark.
 
 **Two CSS rules to pick up if you copied rules piecemeal (2.4).**  `.bandlab`, for the labels
 that sit on the twilight bands, and `.dot`, which paints the chip and table swatches from the
@@ -116,6 +147,7 @@ it.  If you have never passed a `palette` argument, there is nothing to do.
 
 | Release | Worth knowing |
 |---|---|
+| **2.5** | Label layers on the sky dome and the pass chart: a page that serves a phone layout and a desktop layout from one URL asks for both label sizes at once, and the browser shows the one its viewport matches — nothing fetched, nothing scripted.  Every chart's labels now sit in one group at the end of the SVG (see the item above).  `label_scale` is checked.  Satellite times carry their date (see above).  The dome's 30° and 60° ring figures now draw above the stars, so a star no longer prints over one.  The manual's ISS pass recipe, which could not compile, is fixed. |
 | **2.4** | Every mark in an SVG panel carries a class naming its role, and each panel brings its palette as CSS defaults of zero specificity — so an embedding skin can repaint the charts, including for a reader who switches themes in the browser.  See the three items above.  Three label colors changed to clear their contrast floors: on the dark theme, The Sun's Path's hour numbers are lighter, which is the release's only visible change to the default look. |
 | **2.3** | Rise & Set, The Sun's Path and The Solar Year are readable on the light theme — their bars, ticks, arcs and traces are drawn over twilight bands and had taken colors chosen for a panel surface.  The manual now [shows](sky-page.md#the-two-plates) that theme.  The `classic-night` and `classic-light` palettes are dropped: a skin that passes one keeps rendering — it draws the current plate and logs a warning — but the pre-1.5 body colors are gone. |
 | **2.2** | The sky charts are easier to read: the altitude rings and the cross through the zenith were invisible against the dome and now have their own color, and the small labels are lifted to a readable contrast.  Nothing to configure — but a skin that [embeds the panels](panels.md) and copied individual CSS rules should pick up the new `skylab` class. |
@@ -136,7 +168,7 @@ If you run the author's other extensions, these are the floors that matter:
 | Extension | Version | Why |
 |---|---|---|
 | [weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) | 6.9 or later | Earlier versions could cache a temporarily-unavailable satellite field's `N/A` until the day rolled over, instead of recovering the moment fresh elements arrive. |
-| [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) | **9.1 or later** with weewx-skyfield 2.4 | Its live dome and pass chart consume this extension's `data-body` / `data-sunlit` / `data-bright` hooks and the `satellite_names()` / `comet_names()` contract, all of which are unchanged.  But its dome also reads how the station *drew* the pass marker in order to flip it between sunlit and in-shadow, and before 9.1 it read that from the marker's `fill` and `stroke` attributes, which 2.4 replaces with classes.  Under an older celestial the marker stops flipping — silently, with nothing logged; nothing else on either page is affected.  Install both and restart.  (celestial 8.3.3 and later read the `data-rise` / `data-set` window 2.3 added; older ones fall back to the loop feed's.) |
+| [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) | **9.1 or later** with weewx-skyfield 2.4; **9.3 or later** to use label layers, which need weewx-skyfield 2.5 | Its live dome and pass chart consume this extension's `data-body` / `data-sunlit` / `data-bright` hooks and the `satellite_names()` / `comet_names()` contract, all of which are unchanged.  But its dome also reads how the station *drew* the pass marker in order to flip it between sunlit and in-shadow, and before 9.1 it read that from the marker's `fill` and `stroke` attributes, which 2.4 replaces with classes.  Under an older celestial the marker stops flipping — silently, with nothing logged; nothing else on either page is affected.  Install both and restart.  (celestial 8.3.3 and later read the `data-rise` / `data-set` window 2.3 added; older ones fall back to the loop feed's.) |
 
 Only the historical celestial 3.x — which embedded this same almanac engine — needs
 `replace_builtin_almanac = false` when run alongside weewx-skyfield.  Since celestial 6.0 it

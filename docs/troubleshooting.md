@@ -66,6 +66,18 @@ a real difference: a twilight tag with a custom horizon
 minutes, because this extension follows the USNO's geometric definition.  See
 [Accuracy and conventions](accuracy.md).
 
+### Satellite times now show a date
+
+Intended, as of 2.5.  A pass is searched up to a week ahead, so a bare clock time for a pass
+three days out read as tonight.  The six satellite times — `rise`, `culmination` and `set` on
+`next_pass` and `next_visible_pass`, and the satellite's own `rise`, `transit` and `set` — now
+render in the `ephem_year` context, with their date, rather than `ephem_day`.  For the old look
+on one tag, format it in place:
+`$almanac.iss.next_visible_pass.rise.format(format_string="%X")`.  Overriding `ephem_year`
+itself would also restyle the equinoxes, the moon-phase finders, meteor-shower peaks and a
+comet's perihelion.  Values and `.raw` are unchanged.  See
+[How far away a time can be](values-and-units.md#how-far-away-a-time-can-be).
+
 ### One body reads `N/A` for everything
 
 Expected, and the diagnosis is built in.  A satellite whose elements are missing or more
@@ -100,9 +112,27 @@ A units problem, not an astronomy problem, and
 [Values, units and types](values-and-units.md#the-raw-trap) diagnoses it — most often an
 unpinned `.raw` read on a duration.
 
+### A page stopped updating after I changed a `$sky_page` call
+
+A mistake in a `$sky_page` argument is a template error, not a blank panel, so it is caught
+while you are editing rather than months later.  WeeWX skips the whole page and leaves the
+previous copy on disk, which is why it looks stale rather than broken, and logs
+`Evaluation of template … failed with exception '<class 'user.wxskyfield_sky.SkyPageUsageError'>'`
+followed by a `**** Reason:` line naming what is wrong.  The usual causes: a `label_scale`
+that is not a positive number, or a `label_layers` entry that is not a `(scale, media_query)`
+pair, repeats a scale, or has a query using anything but letters, digits, spaces and
+`: ( ) , . -` with its parentheses balanced — for example
+`label_layers media query '(width < 600px)' is not usable: … for example '(max-width: 600px)'`.
+The range syntax `(width < 600px)` is always refused, because the query is written inside
+inline SVG, where `<` is markup.  An unknown `palette` or `theme` name fails the same way.
+See [Panels in your own skin](panels.md).
+
 ### A tag reports an error instead of a value
 
-Per-tag errors are by design: they appear in place without taking down the page.  The usual
+Per-tag errors are by design: they appear in place without taking down the page.  The
+exception is a mistake in a `$sky_page` argument, which fails the whole page so you notice
+it — see [A page stopped updating after I changed a `$sky_page`
+call](#a-page-stopped-updating-after-i-changed-a-sky_page-call).  The usual
 causes are asking a body for something outside its surface (a satellite has no `.phase`;
 Mars has no `.next_pass`), or an almanac time outside the bundled ephemeris's span
 (mid-1899 to 2053).  Satellite and comet tags never fall through to PyEphem, so an
@@ -122,7 +152,8 @@ uncached cost while the day's entries repopulate; the cycles after them run warm
 slow *every* cycle, the Sky page is the busiest page here, and
 [Performance](performance.md) explains what costs what and which options move the needle —
 `star_mag_limit`, `constellation_lines`, `report_timing`, or `enable = false` on the page
-while keeping every tag.
+while keeping every tag.  In your own skin, each extra `label_layers` entry adds one more
+label layout per chart per cycle.
 
 ## Install messages
 
@@ -156,9 +187,9 @@ is doing when it pauses.
 
 ## Report messages
 
-Logged while a page renders, once per name per weewxd process rather than per call — so
-the line appears on the first report cycle after a restart and not again.  Restart WeeWX to
-see whether a fix took.
+Logged while a page renders.  All but the last are logged once per name per weewxd process
+rather than per call — so the line appears on the first report cycle after a restart and not
+again.  Restart WeeWX to see whether a fix took.
 
 | Message | Meaning |
 |---|---|
@@ -166,6 +197,7 @@ see whether a fix took.
 | `theme 'classic-…' was dropped in 2.3 and is being drawn as …` | The same name in a report's `theme` option, which takes `dark`, `light` or `auto`.  It renders as `dark` or `light`; set one of those instead. |
 | `the Skyfield almanac is not registered, so $sky_page cannot draw the sky…` | A skin uses the `$sky_page` panels on a station where the almanac service is not running, so the five panels that need it render empty.  See [Some `$sky_page` panels are empty](#some-sky_page-panels-are-empty). |
 | `WeeWX is computing $almanac with its own sunrise/sunset formulas…` | The same, on a station without PyEphem either, so almost every panel renders empty.  Same section. |
+| `sky_page.<panel> failed (<Error>: …); rendering that panel blank.` | A panel hit an unexpected error while computing.  Only that panel is blank; the rest of the page renders.  Logged every time it happens — please report it with the lines around it. |
 
 ## Element messages
 

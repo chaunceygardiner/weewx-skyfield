@@ -201,6 +201,14 @@ can restyle the whole family:
 Individual tags still convert on ask without any of this: `$almanac.moon.distance.km`,
 `$almanac.mars.distance.mile`.
 
+A satellite's `rise`, `transit` and `set`, and a pass's `rise`, `culmination` and `set`, print
+in the `ephem_year` context, with their date, because a pass can be days away.  To show one as
+a bare clock time, format that tag in place —
+`$almanac.iss.next_visible_pass.rise.format(format_string="%X")` — rather than overriding
+`[[TimeFormats]]` `ephem_year`, which also restyles the equinoxes, the moon-phase finders,
+meteor-shower peaks and a comet's perihelion.  See
+[How far away a time can be](values-and-units.md#how-far-away-a-time-can-be).
+
 {: .note }
 If you override `group_deltatime` or `group_time` for a report that weewx-loopdata reads,
 pin the unit when a template consumes a `.raw` value — an unpinned `.raw` follows the

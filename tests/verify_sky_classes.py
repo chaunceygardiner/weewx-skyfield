@@ -29,6 +29,12 @@ Five claims, each of which was a live risk while 2.4 was being written:
      consumer to invert a mark without naming a color -- exchanges the two
      paints, rather than dropping one to the SVG initial because the partner
      class had no default.
+  8. A chart with label layers DISPLAYS exactly one of them, chosen by the
+     viewport width, on both charts; and a consumer's one-class display
+     reset does not show both, because the layer rules are the one thing
+     in the style block that is not zero-specificity.  8b: two charts on
+     one page with the same plate and scales but different queries each
+     follow their own query, not the other's.
 
 Run it with the WeeWX venv python (it renders the panels); it re-invokes
 itself under tools/pwenv for the browser half, and does nothing where no
@@ -87,7 +93,15 @@ def render(out_dir):
              # happens to draw both a solid and a hollow marker defines
              # both channels by accident and proves nothing.
              'pass_night': page.pass_chart_html(alm),
-             'pass_light': page.pass_chart_html(alm, palette='light')}
+             'pass_light': page.pass_chart_html(alm, palette='light'),
+             # Claim 8: two layers, the phone's under a width query.
+             'dome_layered': page.dome_svg(
+                 alm, label_scale=0.8, label_layers=[(2.2, '(max-width: 600px)')]),
+             'pass_layered': page.pass_chart_html(
+                 alm, label_scale=0.8, label_layers=[(2.2, '(max-width: 600px)')]),
+             # Claim 8b: same plate, same scales, a different query.
+             'pass_portrait': page.pass_chart_html(
+                 alm, label_scale=0.8, label_layers=[(2.2, '(orientation: portrait)')])}
     pal = wxskyfield_sky.PALETTES
     want = {'night_ink': pal['night']['ink'], 'light_ink': pal['light']['ink'],
             'light_bandcase': pal['light']['bandcase'],
@@ -274,6 +288,66 @@ def check(work_dir):
                         '7. %s swapped %s fell back to the SVG initial (%s)'
                         ' -- the partner class has no default'
                         % (plate, side, swapped['after'][side]))
+
+        # 8. Label layers: the browser picks exactly one by its viewport.
+        #    Which layer shows is a media-query and specificity question
+        #    the markup cannot answer; the base and phone groups are both
+        #    in the document, and only computed `display` says which one
+        #    a reader sees.  Then the specificity claim: a consumer's
+        #    `.dome-labels{display:block}` -- a one-class reset, which
+        #    beats every :where() default in the block -- must NOT show
+        #    both layers, because the layer rules are written at plain
+        #    specificity for exactly this reason.
+        def displays():
+            return page.evaluate("""
+                () => Object.fromEntries(
+                  [...document.querySelectorAll('g.dome-labels')].map(
+                    g => [g.getAttribute('data-label-scale'),
+                          getComputedStyle(g).display]))""")
+
+        for name in ('dome_layered', 'pass_layered'):
+            for width, shown, hidden in ((1200, '0.8', '2.2'), (500, '2.2', '0.8')):
+                page.set_viewport_size({'width': width, 'height': 900})
+                page.set_content(page_html(frags[name]))
+                got = displays()
+                expect('8. %s at %dpx shows layer %s' % (name, width, shown),
+                       got.get(shown), 'inline')
+                expect('8. %s at %dpx hides layer %s' % (name, width, hidden),
+                       got.get(hidden), 'none')
+                page.set_content(page_html(frags[name],
+                                           extra_css='.dome-labels{display:block}'))
+                expect('8. %s at %dpx, consumer reset, still hides layer %s'
+                       % (name, width, hidden), displays().get(hidden), 'none')
+        # 8b. Each chart obeys its own query.  Every <style> on a page
+        #     reaches every element, so a key that named the plate and the
+        #     scales but not the queries let the dome's width rule switch
+        #     the pass chart and the pass chart's portrait rule switch the
+        #     dome.  A wide portrait viewport trips only the pass chart's
+        #     query; a narrow landscape one only the dome's.
+        def per_chart():
+            return page.evaluate("""
+                () => [...document.querySelectorAll('svg.sky')].map(svg =>
+                  Object.fromEntries(
+                    [...svg.querySelectorAll('g.dome-labels')].map(
+                      g => [g.getAttribute('data-label-scale'),
+                            getComputedStyle(g).display])))""")
+
+        for width, height, dome_shows, pass_shows in ((800, 1200, '0.8', '2.2'),
+                                                      (500, 300, '2.2', '0.8')):
+            page.set_viewport_size({'width': width, 'height': height})
+            page.set_content(page_html(frags['dome_layered'] + frags['pass_portrait']))
+            charts = per_chart()
+            if len(charts) != 2:
+                failures.append('8b. expected two charts, found %d' % len(charts))
+                continue
+            for label, got, shows in (('dome (width query)', charts[0], dome_shows),
+                                      ('pass chart (portrait query)', charts[1], pass_shows)):
+                hides = '2.2' if shows == '0.8' else '0.8'
+                expect('8b. %dx%d %s shows layer %s' % (width, height, label, shows),
+                       got.get(shows), 'inline')
+                expect('8b. %dx%d %s hides layer %s' % (width, height, label, hides),
+                       got.get(hides), 'none')
+        page.set_viewport_size({'width': 1280, 'height': 720})
 
         browser.close()
 

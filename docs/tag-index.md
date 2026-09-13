@@ -30,7 +30,7 @@ story; the short version:
 
 | Type in this page | What you get |
 |---|---|
-| **time** | A time ValueHelper.  Renders as a formatted time; `.raw` is a unix timestamp.  Empty (`N/A`) when there is no answer. |
+| **time** | A time ValueHelper.  Renders as a formatted time, with or without its date depending on [how far away it can be](values-and-units.md#how-far-away-a-time-can-be); `.raw` is a unix timestamp.  Empty (`N/A`) when there is no answer. |
 | **duration** | A `group_deltatime` ValueHelper.  Pin the unit when reading `.raw` — see [the .raw trap](values-and-units.md#the-raw-trap). |
 | **angle** | A `group_angle` ValueHelper, carried internally in radians and rendered per the report's settings. |
 | **compass** | A `degree_compass` ValueHelper, so `.ordinal_compass` renders `WSW`. |

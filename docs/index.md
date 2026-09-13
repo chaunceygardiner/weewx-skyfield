@@ -77,7 +77,9 @@ be dropped into a skin of your own.
   [Tour the page](sky-page.md), see [both plates](sky-page.md#the-two-plates), or
   [embed its panels in your own skin](panels.md) — and, since 2.4,
   [restyle them](panels.md#restyling-the-marks--the-role-classes) from that skin's own
-  stylesheet, including for a reader who switches themes in the browser.
+  stylesheet, including for a reader who switches themes in the browser.  Since 2.5 the dome
+  and the pass chart can carry [label layers](panels.md#the-sky-dome--dome_svg) — phone-sized
+  and desktop-sized labels in one chart, the browser choosing by viewport.
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are translatable through WeeWX's own lang files, with
   per-string English fallback; complete German, French and Danish (all from native
@@ -105,7 +107,7 @@ be dropped into a skin of your own.
 |---|---|
 | [Almanac tags](tags.md) | What the tag families mean |
 | [Tag index](tag-index.md) | Every tag A–Z: type, units, and the release it arrived in |
-| [Values, units and types](values-and-units.md) | Degrees vs radians, ValueHelpers, and the `.raw` trap |
+| [Values, units and types](values-and-units.md) | Degrees vs radians, ValueHelpers, the `.raw` trap, and which times carry a date |
 | [Recipes](recipes.md) | Paste-able template snippets |
 | [Accuracy and conventions](accuracy.md) | Where this differs from PyEphem, and why |
 
@@ -158,10 +160,10 @@ later): its *almanac fields* — report almanac tags with the `$` removed — ar
 against the registered almanac (this extension's, once installed) on every loop packet and
 published in `loop-data.txt` for the page's JavaScript to pick up.  One computation engine
 serves the report tags and the live values, so they always agree.
-[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (9.1 or later with
-weewx-skyfield 2.4) is a
-complete worked example — a live Geocentric panel built entirely from loopdata almanac fields — and the
-paloaltoweather.com pages above update the same way.
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (9.1 or later; 9.3 or
+later to use label layers) is a complete worked example — a live Geocentric dial, sky dome and
+pass chart moved entirely by loopdata almanac fields — and the paloaltoweather.com pages above
+update the same way.
 
 ![weewx-skyfield's sky dome during a Tiangong zenith pass, animated live on the weewx-celestial page](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/live_dome_tiangong.gif)
 
@@ -179,13 +181,14 @@ July 15.*
 
 ## Relationship to other extensions
 
-- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 8.1 or
-  later) ships a live celestial page driven by weewx-loopdata almanac fields (see
-  [Live-updating pages](#live-updating-pages) above).  Since celestial 6.0 it runs no service
-  and computes nothing itself, so the two extensions coexist with no configuration —
-  weewx-skyfield is the atlas, weewx-celestial the live instrument.  (Only the historical
-  celestial 3.x, which embedded this same almanac engine, needs `replace_builtin_almanac =
-  false` in the `[Celestial]` section of `weewx.conf` when run alongside weewx-skyfield.)
+- [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 9.1 or
+  later; 9.3 or later to use label layers) ships a live celestial page driven by
+  weewx-loopdata almanac fields (see [Live-updating pages](#live-updating-pages) above).  Since
+  celestial 6.0 it runs no service and computes nothing itself, so the two extensions coexist
+  with no configuration — weewx-skyfield is the atlas, weewx-celestial the live instrument.
+  (Only the historical celestial 3.x, which embedded this same almanac engine, needs
+  `replace_builtin_almanac = false` in the `[Celestial]` section of `weewx.conf` when run
+  alongside weewx-skyfield.)
 - weewx-skyfield-almanac (by a different author) is an independent Skyfield almanac extension
   with a different design (it downloads its ephemerides and catalogs at runtime).  Choose one
   or the other; installing both would leave reports using whichever registered last.

@@ -190,7 +190,10 @@ distance units; and `.sunlit` — whether the satellite is in sunlight.  `$alman
 is an alternate spelling for a *listed* satellite, mirroring `hip_<number>`; it never fetches
 an unlisted one.  `.rise`, `.transit` and `.set` are the *next* occurrence from the almanac's
 time — transit meaning culmination — because passes are minutes long and "today's" is rarely
-the interesting one.  The heart of the surface is the pass:
+the interesting one.  Because a pass can be up to a week out, all six satellite times — these
+three and a pass's `.rise`, `.culmination` and `.set` — render with their date (see [how far
+away a time can be](values-and-units.md#how-far-away-a-time-can-be)).  The heart of the
+surface is the pass:
 
 - `$almanac.iss.next_pass` — the next pass, or the one in progress: once the satellite is
   up, `next_pass` is the current pass until it sets.  Its attributes: `.rise`,
@@ -290,7 +293,8 @@ Three topics that used to live on this page now have their own, because they are
 *why* the numbers are what they are rather than *which tag returns them*:
 
 - **[Values, units and types](values-and-units.md)** — degrees versus radians, the
-  ValueHelper twins, and the `.raw` trap that silently rescales a duration.
+  ValueHelper twins, which time tags render with a date, and the `.raw` trap that silently
+  rescales a duration.
 - **[Accuracy and conventions](accuracy.md)** — every difference from PyEphem, why DE421
   is the bundled ephemeris, what comet and satellite predictions can honestly promise, and
   how fallback to PyEphem works.

@@ -88,7 +88,9 @@ into a skin of your own.
   Every panel can be embedded in your own skin — and, since 2.4, restyled from
   its stylesheet: every mark carries a class naming its role, so an embedding
   skin can repaint the charts, including for a reader who switches between
-  light and dark in the browser.
+  light and dark in the browser.  Since 2.5 the dome and the pass chart can
+  also carry a phone-sized and a desktop-sized set of labels at once, and the
+  browser shows the one that fits its viewport.
   → [Tour the page](https://chaunceygardiner.github.io/weewx-skyfield/sky-page.html) ·
   [embed its panels](https://chaunceygardiner.github.io/weewx-skyfield/panels.html)
 
@@ -159,8 +161,9 @@ and what to do when
 [something is not working](https://chaunceygardiner.github.io/weewx-skyfield/troubleshooting.html).
 
 Upgrading from an earlier release?  A handful of things need attention — the removed
-`stars` option, the one tag whose units changed, the `classic-` palettes dropped in 2.3, and
-what 2.4 changed for skins that embed the panels — and all of them are on the
+`stars` option, the one tag whose units changed, the `classic-` palettes dropped in 2.3,
+satellite times that now print with their date (2.5), and what 2.4 and 2.5 changed for skins
+that embed the panels — and all of them are on the
 [Upgrading page](https://chaunceygardiner.github.io/weewx-skyfield/upgrading.html).  The
 full history is in
 [changes.txt](https://github.com/chaunceygardiner/weewx-skyfield/blob/main/changes.txt).
@@ -223,8 +226,8 @@ shadow — and it goes on to cross the exact center of the dome dark, no longer 
 ## Relationship to other extensions
 
 - [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (same author, 9.1 or
-  later with weewx-skyfield 2.4) ships a live celestial page driven by weewx-loopdata almanac
-  fields.  Since celestial
+  later; 9.3 or later to use the label layers 2.5 adds) ships a live celestial page driven by
+  weewx-loopdata almanac fields.  Since celestial
   6.0 it runs no service and computes nothing itself, so the two extensions coexist with no
   configuration — weewx-skyfield is the atlas, weewx-celestial the live instrument.  (Only the
   historical celestial 3.x, which embedded this same almanac engine, needs
@@ -243,8 +246,9 @@ can do still works with PyEphem installed, and every supported tag works without
 further set keeps the manual and the code in lockstep: every served tag appears in the tag
 index, every documented option and default is one the code actually reads, every internal
 link and anchor resolves, the translation dictionary matches the skin's `en.conf` verbatim,
-the thresholds the manual quotes match the constants they came from, and every tag chain
-printed on the recipes page is evaluated against a real almanac.  Run it with the Python from your WeeWX virtual
+the thresholds the manual quotes match the constants they came from, every `$almanac` tag
+chain printed on the recipes page is evaluated against a real almanac, and every Cheetah
+snippet the manual publishes is compiled.  Run it with the Python from your WeeWX virtual
 environment:
 
 ```

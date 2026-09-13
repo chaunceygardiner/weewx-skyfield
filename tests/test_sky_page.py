@@ -923,6 +923,205 @@ class TestSatellitePanel:
         assert 'satlab' not in svg
 
 
+class TestLabelLayers:
+    """A sky chart can carry its labels laid out at more than one scale,
+    for a page that serves a phone and a desktop layout from one URL: the
+    marks drawn once, one `<g class="dome-labels" data-label-scale=...>`
+    per scale, and the chart's own <style> picking the layer by media
+    query.  Asked for by weewx-celestial 9.3, which had been fetching a
+    second fragment set per scale to get the same effect.  The browser
+    half of this
+    (which layer actually DISPLAYS at a given viewport width) is claim 8
+    of verify_sky_classes.py."""
+
+    GROUP = re.compile(r'<g class="dome-labels" data-label-scale="([^"]*)">(.*?)</g>')
+    TEXT = re.compile(r'<text[^>]*>.*?</text>')
+    Q = '(max-width: 600px)'
+
+    def _groups(self, markup):
+        return {scale: body for scale, body in self.GROUP.findall(markup)}
+
+    @staticmethod
+    def _marks(markup):
+        """The chart with its label groups, its style and the layer
+        attributes removed: what the layers must share."""
+        markup = re.sub(r'<g class="dome-labels"[^>]*>.*?</g>', '', markup)
+        markup = re.sub(r'<style>.*?</style>', '', markup)
+        return re.sub(r' data-label-(layers|media)="[^"]*"', '', markup)
+
+    @staticmethod
+    def _media_key(markup):
+        keys = set(re.findall(r'<svg [^>]*data-label-media="([0-9a-f]{8})"', markup))
+        assert len(keys) == 1, keys
+        return keys.pop()
+
+    def test_base_layer_is_always_wrapped(self, almanac, page):
+        """One code path: with no extra layers the chart still carries its
+        one layer in the group, every <text> inside it -- the cardinals,
+        ring figures and pass times that used to sit beside their marks
+        included -- and no media rule."""
+        for meth in ('dome_svg', 'pass_chart_html'):
+            markup = getattr(page, meth)(almanac)
+            groups = self._groups(markup)
+            assert list(groups) == ['1']
+            assert 'data-label-layers="1"' in markup
+            assert 'data-label-media' not in markup
+            assert '@media' not in markup
+            assert set(self.TEXT.findall(markup)) == set(self.TEXT.findall(groups['1']))
+            assert '>N</text>' in groups['1'] and '30&#176;' in groups['1']
+        assert 'class="mono nowlab"' in self._groups(page.pass_chart_html(almanac))['1']
+        assert list(self._groups(page.dome_svg(almanac, label_scale=2.20))) == ['2.2']
+
+    def test_each_layer_is_that_scale_s_own_layout(self, almanac, page):
+        """The property the design rests on: a layer is EXACTLY what a
+        plain render at that scale lays out (its own collision list, so
+        bigger names and fewer of them fit), the marks are drawn once, and
+        every layer's body and satellite names carry data-body."""
+        for meth in ('dome_svg', 'pass_chart_html'):
+            m = getattr(page, meth)
+            layered = m(almanac, label_scale=0.8, label_layers=[(2.2, self.Q)])
+            groups = self._groups(layered)
+            assert list(groups) == ['0.8', '2.2']            # base first
+            assert 'data-label-layers="0.8 2.2"' in layered
+            for scale in ('0.8', '2.2'):
+                assert groups[scale] == self._groups(m(almanac, label_scale=float(scale)))[scale]
+            assert self._marks(layered) == self._marks(m(almanac, label_scale=0.8))
+            assert 'font-size:11.2px' in groups['0.8']        # a cardinal, 14 * 0.8
+            assert 'font-size:30.8px' in groups['2.2']
+            assert (0 < groups['2.2'].count('class="starlab"')
+                    < groups['0.8'].count('class="starlab"'))
+            for scale in groups:
+                assert re.search(r'<text[^>]*class="(bodylab|satlab)"[^>]*data-body=',
+                                 groups[scale]), (meth, scale)
+            assert_balanced(layered)
+
+    def test_rules_pick_the_layer(self, almanac, page):
+        """Each extra layer hidden; under its query the base hidden and it
+        shown.  In the chart's own <style>, after the paint defaults, at
+        plain specificity (a consumer's `.dome-labels{display:block}`
+        must not show both layers), and scoped to the plate."""
+        svg = page.dome_svg(almanac, label_scale=0.8, label_layers=[(2.2, self.Q)])
+        key = self._media_key(svg)
+
+        def sel(scale):
+            return ('svg.sky-night[data-label-layers="0.8 2.2"][data-label-media="%s"] '
+                    '.dome-labels[data-label-scale="%s"]' % (key, scale))
+        assert (sel('2.2') + '{display:none}@media (max-width: 600px){'
+                + sel('0.8') + '{display:none}' + sel('2.2') + '{display:inline}}') in svg
+        assert svg.count('@media') == 1
+        style = re.search(r'<style>(.*?)</style>', svg).group(1)
+        assert style.startswith(':where(') and style.endswith('{display:inline}}')
+        assert ':where(svg.sky-night) .dome-labels' not in svg
+        light = page.dome_svg(almanac, palette='light', label_scale=0.8,
+                              label_layers=[(2.2, self.Q)])
+        assert ('svg.sky-light[data-label-layers="0.8 2.2"][data-label-media="%s"]'
+                % self._media_key(light)) in light
+        assert 'sky-night' not in light
+        two = page.dome_svg(almanac, label_layers=[(1.6, '(max-width: 900px)'),
+                                                   (2.2, self.Q)])
+        assert list(self._groups(two)) == ['1', '1.6', '2.2']
+        assert two.count('@media') == 2
+
+    SCOPE = re.compile(r'svg\.sky-night\[data-label-layers="([^"]*)"\]'
+                       r'\[data-label-media="([0-9a-f]{8})"\]')
+
+    def test_rules_are_scoped_to_the_layer_set(self, almanac, page):
+        """The plate alone is not enough scope: a layered dome beside an
+        unlayered chart on the same plate, both at 0.8, would otherwise
+        hide the other chart's only labels on the phone.  The rules name
+        the layer set, and a chart with a different set cannot match."""
+        layered = page.dome_svg(almanac, label_scale=0.8, label_layers=[(2.2, self.Q)])
+        plain = page.pass_chart_html(almanac, label_scale=0.8)
+        scopes = self.SCOPE.findall(layered)
+        assert scopes and set(scopes) == {('0.8 2.2', self._media_key(layered))}
+        assert 'data-label-layers="0.8"' in plain
+        assert 'data-label-layers="0.8 2.2"' not in plain
+        assert 'data-label-media' not in plain
+        assert '@media' not in plain
+
+    def test_rules_are_scoped_to_the_queries(self, almanac, page):
+        """Same plate, same scales, different queries -- a width query on
+        the dome, a portrait query on the pass chart -- must not switch
+        each other's labels: every <style> reaches the whole page, so the
+        key has to cover the queries as well as the scales.  Found by the
+        2.5 code review.  The browser half is claim 8b of
+        verify_sky_classes.py.  Charts with the same queries share a key,
+        and their rules are then identical, which is harmless."""
+        wide = page.dome_svg(almanac, label_scale=0.8, label_layers=[(2.2, self.Q)])
+        tall = page.pass_chart_html(almanac, label_scale=0.8,
+                                    label_layers=[(2.2, '(orientation: portrait)')])
+        wide_key, tall_key = self._media_key(wide), self._media_key(tall)
+        assert wide_key != tall_key
+        assert {k for _s, k in self.SCOPE.findall(wide)} == {wide_key}
+        assert {k for _s, k in self.SCOPE.findall(tall)} == {tall_key}
+        same = page.pass_chart_html(almanac, label_scale=0.8, label_layers=[(2.2, self.Q)])
+        assert self._media_key(same) == wide_key
+        rules = re.compile(r'svg\.sky-night\[data-label-layers[^{]*\{display:none\}@media.*?\}\}')
+        assert rules.findall(same) == rules.findall(wide)
+        # Two extra layers: the key follows the query ORDER, which pairs
+        # each query with its scale.
+        ab = page.dome_svg(almanac, label_layers=[(1.6, '(max-width: 900px)'), (2.2, self.Q)])
+        ba = page.dome_svg(almanac, label_layers=[(1.6, self.Q), (2.2, '(max-width: 900px)')])
+        assert self._media_key(ab) != self._media_key(ba)
+
+    def test_pass_head_takes_no_part(self, almanac, page):
+        """The dated head line is HTML outside the SVG, sized by the page's
+        CSS: layers leave it byte-identical."""
+        plain = page.pass_chart_html(almanac)
+        layered = page.pass_chart_html(almanac, label_layers=[(2.2, self.Q)])
+        assert plain.startswith('<div class="passhead">')
+        assert plain[:plain.index('<svg')] == layered[:layered.index('<svg')]
+
+    def test_query_is_held_to_the_whitelist(self, almanac, page):
+        """The query is written inside <style> inside inline SVG, where the
+        HTML parser treats `<` and `&` as markup: the range syntax and
+        anything that could close the block are refused, loudly and
+        naming what is allowed; a bad query on a chart with no pass to
+        draw is still refused."""
+        for bad in ('(width < 600px)', '(max-width: 600px)} svg{display:none', '',
+                    '   ', 'a&b', None, 600,
+                    # Unbalanced: an unclosed ( would swallow every later
+                    # rule in the block, a stray ) is never a valid query.
+                    '(max-width: 600px', 'max-width: 600px)', ')(max-width: 600px('):
+            with pytest.raises(wxskyfield_sky.SkyPageUsageError) as e:
+                page.dome_svg(almanac, label_layers=[(2.2, bad)])
+            msg = str(e.value)
+            assert msg.startswith('label_layers media query %r is not usable' % (bad,))
+            assert "for example '(max-width: 600px)'" in msg
+        for ok in ('screen and (max-width: 600px)', '(orientation: portrait)',
+                   '(min-width: 400px) and (max-width: 600px)',
+                   'not print', '(max-width: 37.5em)', '  (max-width: 600px) '):
+            svg = page.dome_svg(almanac, label_layers=[(2.2, ok)])
+            assert '@media %s{' % ok.strip() in svg
+        with pytest.raises(wxskyfield_sky.SkyPageUsageError):
+            page.pass_chart_html(almanac, label_layers=[(2.2, 'a&b')])
+
+    def test_scales_are_checked(self, almanac, page):
+        """A scale is a positive finite number, distinct from every other
+        layer's as formatted; a layer is a pair.  Text that reads as a
+        number is fine -- skin.conf values arrive as text."""
+        for bad in ([(0, self.Q)], [(-1, self.Q)], [(float('nan'), self.Q)],
+                    [(float('inf'), self.Q)], [('big', self.Q)], [(None, self.Q)],
+                    [(1.0, self.Q)],                        # repeats the base
+                    [(2.2, self.Q), (2.2, '(max-width: 400px)')],
+                    [(2.2, self.Q), (2.2000001, '(max-width: 400px)')],   # same as formatted
+                    'nonsense', 7, [2.2], [(2.2,)], [(2.2, self.Q, 'extra')]):
+            with pytest.raises(wxskyfield_sky.SkyPageUsageError):
+                page.dome_svg(almanac, label_layers=bad)
+        for bad_scale in (0, -2, 'x', None, float('nan')):
+            with pytest.raises(wxskyfield_sky.SkyPageUsageError):
+                page.dome_svg(almanac, label_scale=bad_scale)
+        with pytest.raises(wxskyfield_sky.SkyPageUsageError) as e:
+            page.dome_svg(almanac, label_layers=[(1, self.Q)])
+        assert str(e.value) == ('label_layers scale 1 repeats a scale the chart already '
+                                'draws; each layer needs its own')
+        svg = page.dome_svg(almanac, label_scale='0.8', label_layers=[('2.2', self.Q)])
+        assert list(self._groups(svg)) == ['0.8', '2.2']
+        assert page.dome_svg(almanac, label_layers=[]) == page.dome_svg(almanac)
+        assert page.dome_svg(almanac, label_layers=((2.2, self.Q),)) == \
+            page.dome_svg(almanac, label_layers=[(2.2, self.Q)])
+
+
 class TestStarOptions:
     """star_mag_limit/star_label_mag skin options: parsed, clamped, and
     a bad value must fall back to the default, never blank the page."""

@@ -69,9 +69,14 @@ not in English:
    later; on 5.2 those stay English and Latin while everything in `[Texts]` still translates.
 
 The bundled template, `skins/Skyfield/index.html.tmpl`, shows every panel in use and is the
-reference for the wrapper markup mentioned below.  A failing panel never takes down report
-generation: the error is logged and that one panel renders blank.  Body evaluations are
-memoized, so several panels on one page do not repeat the expensive rise/set searches.
+reference for the wrapper markup mentioned below.  A panel that fails while computing never
+takes down report generation: the error is logged and that one panel renders blank.  A mistake
+in the call itself — an unknown palette, or a `label_scale` or `label_layers` value that is not
+usable — is different: it raises a template error, so it shows up while you are writing the
+template rather than shipping as a quietly empty panel (see
+[Troubleshooting](troubleshooting.md#a-page-stopped-updating-after-i-changed-a-sky_page-call)).
+Body evaluations are memoized, so several panels on one page do not repeat the expensive
+rise/set searches.
 
 Every render method takes an optional `palette` argument choosing the panel's colors:
 `'night'` (the default, used in the screenshots below) or `'light'`, a paper-atlas
@@ -171,8 +176,17 @@ Two places that can bite, and the second one bites silently:
   guarantee holds for role pairs, not for any two classes on a mark — a planet dot's fill and
   stroke are *different* roles (`body` and `ring`), and exchanging those means nothing.
 
-The consumer hooks are untouched and are the durable thing to match on: `data-body`,
-`data-sunlit`, `data-bright`, `data-dome-ts`, and the `dome-body`/`dome-track` classes.
+As of 2.5 the sky charts' labels no longer sit beside their marks.  Every label — the
+cardinals, the 30° and 60° ring figures, a pass's rise and set times, and the body, star and
+constellation names — is written inside `<g class="dome-labels" data-label-scale="1">` at the
+end of the SVG, one group per [label layer](#the-sky-dome--dome_svg), and the `<svg>` root
+carries `data-label-layers` (plus `data-label-media` when there is an extra layer).  Positions
+and sizes are unchanged, but the ring figures now draw above the stars, and a test that expects
+a label next to its mark, or exactly one element per `data-body`, needs loosening.
+
+The consumer hooks are the durable thing to match on: `data-body`, `data-sunlit`,
+`data-bright`, `data-rise`/`data-set`, the `dome-body`/`dome-track` classes, and (2.5 and
+later) the `dome-labels` groups with their `data-label-scale`.
 
 ### How the defaults are scoped
 
@@ -261,7 +275,32 @@ mark.  When the sun is up the stars are shown dimmed, standing where they are be
 daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally takes
 `label_scale` (default 1.0), which grows every label by that factor with the collision layout
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
-smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.
+smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.  It must
+be a positive number — numeric text such as `'0.8'` is accepted — and anything else raises a
+template error naming the argument (2.5 and later; before 2.5 a zero rendered 0px labels and
+text blanked the panel).
+
+A page that serves more than one layout from a single URL — a desktop layout and, below some
+width, a phone layout — asks for both label sizes at once with `label_layers` (2.5 and later), a
+list of `(scale, media_query)` pairs:
+
+```
+$sky_page.dome_svg($almanac, label_scale=0.8, label_layers=[(2.2, '(max-width: 600px)')])
+```
+
+The marks are drawn once.  The labels are laid out once per scale, each layout in its own
+`<g class="dome-labels" data-label-scale="…">` (the base layer is wrapped the same way, always,
+layers or not), and the chart's own `<style>` shows the layer whose media query the reader's
+viewport matches and hides the rest — nothing is fetched and nothing scripted.  The rules are
+scoped to the chart's plate, its scales and its queries (`data-label-layers="0.8 2.2"` and a
+`data-label-media` key on the `<svg>` root), so any mix of charts shares a page without one
+chart's rules reaching another's labels; within one chart, give two extra layers queries that
+cannot both match.  A query may contain only letters, digits, spaces and `: ( ) , . -`, with
+its parentheses balanced — it is written inside inline SVG, where `<` and `&` are markup — so
+`(max-width: 600px)` and `screen and (orientation: portrait)` are fine and the range syntax
+`(width < 600px)` is refused.  A bad query, scale or pair raises a template error at render
+time rather than blanking the panel.  A live page that moves a mark's label by
+its `data-body` must move *every* layer's copy (`querySelectorAll`, not `querySelector`).
 
 The dome plots *every* star of the bundled Hipparcos catalog down to the magnitude limit — a
 true sky map.  Labels stay on named stars; an unnamed star's hover tooltip gives its
@@ -291,7 +330,8 @@ An embedding skin that repositions dome marks between report cycles — weewx-ce
 dome is the consumer — locates them by machine name, never by tooltip text (which is
 translated): the sun's, moon's and each planet's marks are wrapped in
 `<g class="dome-body" data-body="mars">`, their name labels carry the same `data-body`
-attribute, and a satellite's position dot gets its tag name the same way plus
+attribute (one copy per label layer, all of them inside `<g class="dome-labels">` groups —
+move every copy), and a satellite's position dot gets its tag name the same way plus
 `data-sunlit="1"` or `"0"`, so a live layer can flip the dot between solid and hollow as
 the satellite crosses the shadow line.  A comet's diamond carries `data-bright="1"` or
 `"0"` the same way.  On the pass chart the arc's own group,
@@ -349,8 +389,10 @@ out) — wrap it in a guard as the bundled template does:
 #end if
 ```
 
-Like `dome_svg` it takes `palette` and `label_scale`.  Its SVG ids (`skygp`, `domecp`) stay
-distinct from the dome's, so both charts share a page cleanly, and the `data-body` /
+Like `dome_svg` it takes `palette`, `label_scale` and `label_layers` (the head line is HTML
+outside the SVG, sized by the page's own CSS, and takes no part in the layers).  Its SVG ids
+(`skygp-night`, `domecp-night`, ending in the plate name like the dome's) stay distinct from
+the dome's, so both charts share a page cleanly, and the `data-body` /
 `dome-track` hooks appear here exactly as on the dome — the pass arc's group,
 `<g class="dome-track" data-body="iss">`, lives on this chart.  New CSS classes: `passhead`,
 `passname` and `passwhen` style the head line (see `sky.css`); the arc and its labels reuse

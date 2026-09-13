@@ -13,12 +13,13 @@ JavaScript libraries and nothing fetched at run time.
 
 import datetime
 import functools
+import hashlib
 import logging
 import math
 import re
 import time
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import weewx.almanac
 
@@ -529,10 +530,13 @@ def _partner(cls: str) -> Optional[str]:
     return None
 
 
-def _style_block(markup: str, pal_name: str) -> str:
+def _style_block(markup: str, pal_name: str, extra: str = '') -> str:
     """The <style> an SVG carries: a zero-specificity default for every
     role class the markup actually used -- AND for each of those roles in
-    the other paint channel -- scoped to this plate.
+    the other paint channel -- scoped to this plate.  `extra` is appended
+    inside the same block: the sky charts' label-layer rules
+    (_layer_rules), which are the one thing here that is NOT
+    zero-specificity, for a reason given there.
 
     Driven by the markup rather than by a per-panel list of roles, so it
     cannot go stale -- a mark whose class nobody declared would render
@@ -562,19 +566,176 @@ def _style_block(markup: str, pal_name: str) -> str:
     partners = {p for p in (_partner(c) for c in used_now)
                 if p is not None and p in defs}
     used = sorted(used_now | partners)
-    return '<style>%s</style>' % ''.join(
+    return '<style>%s%s</style>' % (''.join(
         ':where(svg.sky-%s) :where(.%s){%s:%s}'
-        % (pal_name, cls, defs[cls][0], defs[cls][1]) for cls in used)
+        % (pal_name, cls, defs[cls][0], defs[cls][1]) for cls in used), extra)
 
 
-def _svg_out(p: List[str], pal_name: str) -> str:
+def _svg_out(p: List[str], pal_name: str, extra_css: str = '') -> str:
     """Assemble an SVG built as [open tag, ...body..., '</svg>'].
 
     The style block is spliced in after the open tag, which is p[0] by
     construction -- never by searching the markup for the first '>', which
     a translated aria-label could carry."""
     body = ''.join(p[1:])
-    return p[0] + _style_block(p[0] + body, pal_name) + body
+    return p[0] + _style_block(p[0] + body, pal_name, extra_css) + body
+
+
+# ── label layers ─────────────────────────────────────────────────────────
+# A media query is written into the chart's own <style>, which sits inside
+# inline SVG inside an HTML document -- and in foreign content the HTML
+# parser does NOT treat <style> as raw text, so a `<` or `&` in the query
+# would be parsed as markup.  The whitelist admits `(max-width: 600px)`
+# and its kin and refuses the Level 4 range syntax `(width < 600px)`,
+# along with anything that could close the block or the element.  The
+# parentheses must also balance: an unclosed `(` is a CSS block that runs to
+# the end of the stylesheet, so it would swallow every rule written after
+# it -- a later layer's hide rule among them, and that layer would then
+# show on top of the base.
+_MEDIA_QUERY_RE = re.compile(r'^[A-Za-z0-9 :(),.-]+$')
+
+
+def _parens_balance(text: str) -> bool:
+    depth = 0
+    for ch in text:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+MEDIA_QUERY_CHARS = "letters, digits, spaces and : ( ) , . -"
+
+
+def _fmt_scale(scale: float) -> str:
+    """A label scale as it appears in markup and in the rules that select
+    it: `%g`, so 1.0 reads `1` and 2.2 reads `2.2`, and the attribute and
+    the selector cannot disagree by a trailing zero."""
+    return '%g' % scale
+
+
+def _scale_or_raise(value: Any, what: str) -> float:
+    try:
+        scale = float(value)
+    except (TypeError, ValueError):
+        raise SkyPageUsageError('%s must be a number, not %r' % (what, value)) from None
+    if not math.isfinite(scale) or scale <= 0:
+        raise SkyPageUsageError('%s must be a positive number, not %r' % (what, value))
+    return scale
+
+
+def _label_layers(label_scale: Any, label_layers: Any
+                  ) -> List[Tuple[float, Optional[str]]]:
+    """The label layers a sky chart draws, base first: [(scale, None),
+    (scale, media_query), ...].  Every input is checked here, and a bad
+    one is a SkyPageUsageError -- the template author's mistake, raised
+    through the panel guard rather than swallowed into a blank panel.
+
+    Scales must be distinct as FORMATTED (_fmt_scale): two layers that
+    format alike would carry the same data-label-scale, and the rules
+    that pick a layer by it could not tell them apart."""
+    layers: List[Tuple[float, Optional[str]]] = [
+        (_scale_or_raise(label_scale, 'label_scale'), None)]
+    if label_layers is None:
+        return layers
+    try:
+        pairs = list(label_layers)
+    except TypeError:
+        raise SkyPageUsageError(
+            'label_layers must be a list of (scale, media_query) pairs, not %r'
+            % (label_layers,)) from None
+    for pair in pairs:
+        try:
+            scale_in, query = pair
+        except (TypeError, ValueError):
+            raise SkyPageUsageError(
+                'each label_layers entry must be a (scale, media_query) pair, not %r'
+                % (pair,)) from None
+        scale = _scale_or_raise(scale_in, 'label_layers scale')
+        if any(_fmt_scale(scale) == _fmt_scale(s) for s, _q in layers):
+            raise SkyPageUsageError(
+                'label_layers scale %s repeats a scale the chart already draws; '
+                'each layer needs its own' % _fmt_scale(scale))
+        clean = query.strip() if isinstance(query, str) else ''
+        if not clean or not _MEDIA_QUERY_RE.match(clean) or not _parens_balance(clean):
+            raise SkyPageUsageError(
+                "label_layers media query %r is not usable: it is written into the "
+                "chart's own <style>, so it may contain only %s, with its "
+                "parentheses balanced -- for example '(max-width: 600px)'"
+                % (query, MEDIA_QUERY_CHARS))
+        layers.append((scale, clean))
+    return layers
+
+
+def _layer_set(layers: List[Tuple[float, Optional[str]]]) -> str:
+    """The chart's scales, base first, as `data-label-layers` spells them
+    on the svg root.  One function, because the rules select on this
+    exact string: were the attribute and the selector built separately, a
+    change to either would silently unscope every rule."""
+    return ' '.join(_fmt_scale(s) for s, _q in layers)
+
+
+def _layer_media_key(layers: List[Tuple[float, Optional[str]]]) -> str:
+    """A short key naming the chart's extra layers' media queries, in layer
+    order -- the `data-label-media` value.  Empty with no extra layer: a
+    chart with no rules has nothing to scope.  A hash rather than the
+    queries themselves, since a query's spaces, colons and parentheses
+    would have to survive an attribute value AND a quoted CSS attribute
+    selector; the whitelist forbids a newline, so the joined text is
+    unambiguous."""
+    queries = [q for _s, q in layers[1:] if q is not None]
+    if not queries:
+        return ''
+    return hashlib.sha1('\n'.join(queries).encode('utf-8')).hexdigest()[:8]
+
+
+def _layer_attrs(layers: List[Tuple[float, Optional[str]]]) -> str:
+    """The svg root's layer attributes: `data-label-layers` always, and
+    `data-label-media` when the chart has an extra layer."""
+    key = _layer_media_key(layers)
+    return (' data-label-layers="%s"' % _layer_set(layers)
+            + (' data-label-media="%s"' % key if key else ''))
+
+
+def _layer_rules(pal_name: str, layers: List[Tuple[float, Optional[str]]]) -> str:
+    """The rules that pick ONE label layer for the reader's viewport: each
+    extra layer hidden, and under its media query the base layer hidden
+    and that one shown.  Empty with no extra layers, so a chart that asked
+    for none carries no rule.
+
+    Scoped to EVERYTHING the rules depend on -- the plate, the scales and
+    the queries: `svg.sky-night[data-label-layers="0.8 2.2"][data-label-
+    media="3f9a0c1e"]` -- because a <style> in an HTML page reaches every
+    element on it, so any chart whose root matched the selector would obey
+    this chart's queries.  The plate alone let a layered dome hide an
+    unlayered pass chart's only labels; plate and scales alone let two
+    charts with the same scales but different queries -- a width query on
+    one, a portrait query on the other -- each switch the other's labels.
+    This is the 2.4 rule for gradient ids applied to rules: charts whose
+    key matches emit identical rules, which is harmless, and a chart whose
+    key differs can never match.
+
+    Plain specificity, NOT :where.  The zero specificity of the paint
+    defaults exists so an embedding skin wins with any rule; the layer is
+    the caller's own request, and a consumer's `.dome-labels{display:
+    block}` or a generic `svg g{...}` reset must not silently show both
+    layers.  A consumer that wants to force a layer can still out-specify
+    these.  With two extra layers whose queries both match, both show and
+    the base hides: keeping the queries disjoint is the caller's business."""
+    if len(layers) == 1:
+        return ''
+    scope = ('svg.sky-%s[data-label-layers="%s"][data-label-media="%s"]'
+             % (pal_name, _layer_set(layers), _layer_media_key(layers)))
+
+    def sel(scale: float) -> str:
+        return '%s .dome-labels[data-label-scale="%s"]' % (scope, _fmt_scale(scale))
+
+    base = sel(layers[0][0])
+    return ''.join(
+        '%s{display:none}@media %s{%s{display:none}%s{display:inline}}'
+        % (sel(scale), query, base, sel(scale))
+        for scale, query in layers[1:])
 
 
 def _svg_open(attrs: str, pal_name: str) -> str:
@@ -1585,20 +1746,31 @@ class SkyPage:
         return cx - r * math.sin(a), cy - r * math.cos(a)
 
     @_panel_guard(needs=TIER_ENGINE)
-    def dome_svg(self, alm, palette: str = 'night', label_scale: float = 1.0) -> str:
+    def dome_svg(self, alm, palette: str = 'night', label_scale: float = 1.0,
+                 label_layers: Optional[Sequence[Tuple[Any, Any]]] = None) -> str:
         """label_scale grows every dome label (stars, bodies, cardinals, ring
         degrees) by that factor -- font sizes are emitted inline so the
         collision layout always matches the rendered size.  Useful for skins
-        whose pages are scaled down (fixed-canvas smartphone layouts)."""
+        whose pages are scaled down (fixed-canvas smartphone layouts).
+
+        label_layers adds further label layers, [(scale, media_query),
+        ...], for a page that serves more than one layout from one URL:
+        the marks are drawn once and the labels laid out once per scale,
+        each layout in its own `<g class="dome-labels" data-label-scale=
+        ...>`, and the chart's own <style> shows the layer whose media
+        query the reader's viewport matches (the base layer otherwise).
+        Nothing fetches and nothing scripts.  See _label_layers for what
+        a query may contain and _layer_rules for how a layer is picked."""
         pal_name, pal = _resolve_palette(palette)
-        return self._sky_chart(alm, pal, pal_name, label_scale,
+        return self._sky_chart(alm, pal, pal_name,
+                               _label_layers(label_scale, label_layers),
                                self._star_mag_limit, self._star_label_mag,
                                track=None, grad_id='skyg-%s' % pal_name,
                                clip_id='domec-%s' % pal_name,
                                aria=self._t('Sky dome chart'))
 
     def _sky_chart(self, alm, pal: Dict[str, Any], pal_name: str,
-                   label_scale: float,
+                   layers: List[Tuple[float, Optional[str]]],
                    star_limit: float, star_label_mag: float,
                    track: Optional[Dict[str, Any]], grad_id: str, clip_id: str,
                    aria: str) -> str:
@@ -1620,17 +1792,25 @@ class SkyPage:
         two charts of the SAME plate may share an id precisely because they
         would define identical gradients.  A `<style>` block has the same
         document-wide reach and is handled the same way, by scoping every
-        rule to the plate class (see _style_block)."""
+        rule to the plate class (see _style_block).
+
+        `layers` is the label layers to lay out (_label_layers), base
+        first.  Every label the chart carries -- cardinals, ring figures,
+        body, satellite, comet and radiant names, the pass arc's times and
+        name, star names, constellation names -- is REQUESTED into
+        `labels` in placement order as the marks are drawn, and placed by
+        _place_labels once per layer, each layout with its own collision
+        list, because where a label fits depends on how big it is.  The
+        marks are drawn once and shared by every layer.  The order of the
+        requests is the layout: a must-place label is nudged clear of the
+        ones before it, and a star or constellation name is dropped when
+        anything placed earlier is in the way."""
         S, cx, cy, R = 680, 340, 348, 296
-        star_px = 10.0 * label_scale
-        body_px = 11.0 * label_scale
-        card_px = 14.0 * label_scale
-        grid_px = 10.0 * label_scale
         sun = self._body(alm, 'sun')
         star_op = (STAR_OPACITY_SUN_UP if sun['alt'] > 0
                    else STAR_OPACITY_DARK)
-        p = [_svg_open('viewBox="0 0 %d 706" role="img" aria-label="%s"'
-                       % (S, aria), pal_name)]
+        p = [_svg_open('viewBox="0 0 %d 706" role="img" aria-label="%s"%s'
+                       % (S, aria, _layer_attrs(layers)), pal_name)]
         p.append('<defs><radialGradient id="%s">%s</radialGradient>'
                  '<clipPath id="%s"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
                  % (grad_id,
@@ -1658,22 +1838,15 @@ class SkyPage:
         p.append('<circle cx="%d" cy="%d" r="%d" fill="none" '
                  'class="sky-stroke-dome-rim" stroke-width="1.5"/>'
                  % (cx, cy, R))
+        # The chrome labels go first: they are always placed, and seed the
+        # collision list so every later label dodges them.
+        labels: List[Tuple[Any, ...]] = []
         c_n, c_e, c_s, c_w = self._cardinals(alm)
         for label, dx, dy, anch in ((c_n, 0, -R - 12, 'middle'), (c_s, 0, R + 22, 'middle'),
                                     (c_e, -R - 14, 5, 'end'), (c_w, R + 14, 5, 'start')):
-            p.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal" '
-                     'style="font-size:%.1fpx">%s</text>'
-                     % (cx + dx, cy + dy, anch, card_px, _esc(label)))
-        # skylab, not plain gridlab: these two sit on the dome gradient,
-        # where the axis-label gray every other panel uses reaches only
-        # 3.70:1.  The other panels' labels are on the panel surface and
-        # keep it (2.2).
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab skylab" '
-                 'style="font-size:%.1fpx">30&#176;</text>'
-                 % (int(cx + 6 + R / 3), cy - 6, grid_px))
-        p.append('<text x="%d" y="%d" text-anchor="middle" class="mono gridlab skylab" '
-                 'style="font-size:%.1fpx">60&#176;</text>'
-                 % (int(cx + 8 + R * 2 / 3), cy - 6, grid_px))
+            labels.append(('cardinal', cx + dx, cy + dy, anch, _esc(label)))
+        labels.append(('ring', cx + 6 + R / 3.0, cy - 6, '30&#176;'))
+        labels.append(('ring', cx + 8 + R * 2 / 3.0, cy - 6, '60&#176;'))
         con_labels: List[Tuple[float, float, str]] = []
         if self._constellation_lines:
             segs, con_labels = self._constellation_layer(alm, cx, cy, R)
@@ -1689,44 +1862,12 @@ class SkyPage:
         # nudged vertically until it clears the ones already placed), then
         # star labels, which are simply dropped on a collision -- their dots
         # keep the hover title.  Bunched-up bodies (planets crowd the ecliptic)
-        # otherwise print over each other.
-        # Seed the collision list with the fixed chrome labels (cardinals and
-        # ring degrees) so body labels dodge them too.
-        placed: List[Tuple[float, float, float, float]] = []
-        for fx, fy, fw in ((cx, cy - R - 12, card_px), (cx, cy + R + 22, card_px),
-                           (cx - R - 14, cy + 5, card_px), (cx + R + 14, cy + 5, card_px),
-                           (cx + 6 + R / 3.0, cy - 6, 2.0 * grid_px),
-                           (cx + 8 + R * 2 / 3.0, cy - 6, 2.0 * grid_px)):
-            placed.append((fx - fw, fy - card_px, fx + fw, fy + 4))
-        deferred: List[str] = []
-
-        def _try_label(x: float, y: float, text: str, cls: str, gap: float,
-                       must: bool, opacity: Optional[float] = None,
-                       body: Optional[str] = None) -> None:
-            px = body_px if cls in ('bodylab', 'satlab') else star_px
-            est_w = 0.62 * px * len(text)
-            row_h = px + 3.0
-            anchor = 'start'
-            lx = x + gap
-            if lx + est_w > S - 4:
-                anchor = 'end'
-                lx = x - gap
-            ly = min(max(y + 4, row_h), 700.0)
-            for _tries in range(5):
-                x0 = lx if anchor == 'start' else lx - est_w
-                box = (x0, ly - px, x0 + est_w, ly + 2)
-                if not any(box[0] < o[2] and box[2] > o[0] and
-                           box[1] < o[3] and box[3] > o[1] for o in placed):
-                    break
-                if not must:
-                    return
-                ly = min(ly + row_h, 700.0)
-            placed.append((box[0], box[1], box[2], box[3]))
-            op = '' if opacity is None else ' opacity="%.2f"' % opacity
-            dat = '' if body is None else ' data-body="%s"' % _esc(body)
-            deferred.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="%s" '
-                            'style="font-size:%.1fpx"%s%s>%s</text>'
-                            % (lx, ly, anchor, cls, px, op, dat, text))
+        # otherwise print over each other.  The layout itself is
+        # _place_labels; a mark's label is requested here, beside its mark.
+        def _want(x: float, y: float, text: str, cls: str, gap: float,
+                  must: bool, opacity: Optional[float] = None,
+                  body: Optional[str] = None) -> None:
+            labels.append(('mark', x, y, text, cls, gap, must, opacity, body))
 
         star_labels: List[Tuple[float, float, str]] = []
         for s in self._stars(alm, star_limit):
@@ -1759,7 +1900,7 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(label), alt='%.1f' % b['alt'],
                                 az='%.1f' % b['az'], mag='%.1f' % b['mag'])))
-            _try_label(x, y, _esc(label), 'bodylab', 8, must=True, body=name)
+            _want(x, y, _esc(label), 'bodylab', 8, must=True, body=name)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
             p.append('<g class="dome-body" data-body="sun">')
@@ -1776,7 +1917,7 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°',
                                 name=_esc(self._label(alm, 'sun')),
                                 alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
-            _try_label(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True,
+            _want(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True,
                        body='sun')
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
@@ -1787,7 +1928,7 @@ class SkyPage:
                                 name=_esc(self._label(alm, 'moon')),
                                 alt='%.1f' % moon['alt'], az='%.1f' % moon['az'],
                                 pct='%d' % alm.moon_fullness)))
-            _try_label(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True,
+            _want(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True,
                        body='moon')
         # Satellites: a marker for any satellite above the horizon at the
         # chart's epoch -- the "sky at time T" contract.  On the pass
@@ -1825,7 +1966,7 @@ class SkyPage:
                      '<title>%s</title></circle></g>'
                      % (_esc(name), 1 if lit else 0, x, y, fill_cls, ring_cls,
                         title))
-            _try_label(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+            _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
         # Comets: a diamond for any configured comet above the horizon --
         # always plotted and always labeled (the config list IS the
         # filter; star_mag_limit is a census cutoff for the unconfigured
@@ -1868,7 +2009,7 @@ class SkyPage:
                      % (_esc(name), 1 if bright else 0, tail,
                         x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
                         fill_cls, ring_cls, title))
-            _try_label(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+            _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
         # Meteor-shower radiants: while a shower is active, a rayed mark
         # at the radiant when it stands above the horizon -- meteors
         # stream outward FROM this point, so the glyph is six short rays
@@ -1903,7 +2044,7 @@ class SkyPage:
                      '<circle cx="%.1f" cy="%.1f" r="1.8" class="sky-fill-brass">'
                      '<title>%s</title></circle></g>'
                      % (_esc(shower.key), ''.join(rays), x, y, title))
-            _try_label(x, y, _esc(shower.label), 'satlab', 10, must=False,
+            _want(x, y, _esc(shower.label), 'satlab', 10, must=False,
                        body=shower.key)
         if track is not None:
             xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
@@ -1941,40 +2082,129 @@ class SkyPage:
                 ly = y + 18.0 * (cy - y) / away
                 p.append('<circle cx="%.1f" cy="%.1f" r="2.2" class="sky-fill-brass"/>'
                          % (x, y))
-                p.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="mono nowlab" '
-                         'style="font-size:%.1fpx">%s</text>'
-                         % (lx, ly + 3, grid_px, _t_hm(ts)))
-                placed.append((lx - 2.0 * grid_px, ly - grid_px, lx + 2.0 * grid_px, ly + 5))
+                labels.append(('time', lx, ly, _t_hm(ts)))
             if track['name'] not in overhead:
                 xc, yc = xy[track['culm_i']]
-                _try_label(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
+                _want(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
                            body=track['name'])
         for x, y, name in star_labels:
-            _try_label(x, y, name, 'starlab', 6, must=False, opacity=star_op + STAR_LABEL_BUMP)
+            _want(x, y, name, 'starlab', 6, must=False, opacity=star_op + STAR_LABEL_BUMP)
         # Constellation names go last: background context that yields to
         # every body and star label (a collision simply drops the name --
         # its figure still shows).
-        con_px = 10.0 * label_scale
         for x, y, name in con_labels:
-            # Wider glyph estimate than the star labels': .conlab renders
-            # uppercase with letter-spacing.
-            est_w = 0.85 * con_px * len(name)
-            box = (x - est_w / 2, y - con_px, x + est_w / 2, y + 3)
-            if any(box[0] < o[2] and box[2] > o[0] and
-                   box[1] < o[3] and box[3] > o[1] for o in placed):
-                continue
-            placed.append(box)
-            deferred.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="conlab" '
-                            'style="font-size:%.1fpx" opacity="%.2f">%s</text>'
-                            % (x, y, con_px, star_op, _esc(name)))
-        p.extend(deferred)
+            labels.append(('con', x, y, name))
+        for scale, _query in layers:
+            p.append(self._place_labels(labels, scale, S, star_op))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, _layer_rules(pal_name, layers))
+
+    @staticmethod
+    def _place_labels(labels: List[Tuple[Any, ...]], scale: float, S: int,
+                      star_op: float) -> str:
+        """One label layer: the collision layout run over a sky chart's
+        label requests at one scale, wrapped in `<g class="dome-labels"
+        data-label-scale="...">`.  Called once per layer by _sky_chart;
+        the requests are the same for every layer, and only the sizes --
+        and so what fits -- differ.
+
+        Five kinds of request, in the order _sky_chart makes them:
+        `cardinal` and `ring` are the chrome (always placed, and the seed
+        the rest dodge); `mark` is a body's, satellite's, comet's or
+        radiant's name, or a star's -- placed beside its mark, nudged down
+        a row at a time when it must land (up to five rows) and dropped
+        when it need not; `time` is a pass arc's rise or set clock, always
+        placed; `con` is a constellation name, centered on its figure and
+        dropped on any collision.  Body and satellite names carry
+        data-body, the consumer contract that lets a live page move a
+        label with its mark -- on every layer, so a consumer that moves a
+        mark must move every layer's copy (querySelectorAll, not
+        querySelector)."""
+        star_px = 10.0 * scale
+        body_px = 11.0 * scale
+        card_px = 14.0 * scale
+        grid_px = 10.0 * scale
+        con_px = 10.0 * scale
+        placed: List[Tuple[float, float, float, float]] = []
+        out = ['<g class="dome-labels" data-label-scale="%s">' % _fmt_scale(scale)]
+
+        def clear(box: Tuple[float, float, float, float]) -> bool:
+            return not any(box[0] < o[2] and box[2] > o[0] and
+                           box[1] < o[3] and box[3] > o[1] for o in placed)
+
+        for req in labels:
+            kind = req[0]
+            if kind == 'cardinal':
+                _k, x, y, anch, text = req
+                out.append('<text x="%d" y="%d" text-anchor="%s" class="mono cardinal" '
+                           'style="font-size:%.1fpx">%s</text>'
+                           % (x, y, anch, card_px, text))
+                placed.append((x - card_px, y - card_px, x + card_px, y + 4))
+            elif kind == 'ring':
+                # skylab, not plain gridlab: these two sit on the dome
+                # gradient, where the axis-label gray every other panel
+                # uses reaches only 3.70:1.  The other panels' labels are
+                # on the panel surface and keep it (2.2).
+                _k, x, y, text = req
+                out.append('<text x="%d" y="%d" text-anchor="middle" '
+                           'class="mono gridlab skylab" style="font-size:%.1fpx">%s</text>'
+                           % (int(x), y, grid_px, text))
+                placed.append((x - 2.0 * grid_px, y - card_px, x + 2.0 * grid_px, y + 4))
+            elif kind == 'time':
+                _k, x, y, text = req
+                out.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="mono nowlab" '
+                           'style="font-size:%.1fpx">%s</text>'
+                           % (x, y + 3, grid_px, text))
+                placed.append((x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5))
+            elif kind == 'con':
+                _k, x, y, name = req
+                # Wider glyph estimate than the star labels': .conlab
+                # renders uppercase with letter-spacing.
+                est_w = 0.85 * con_px * len(name)
+                box = (x - est_w / 2, y - con_px, x + est_w / 2, y + 3)
+                if not clear(box):
+                    continue
+                placed.append(box)
+                out.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="conlab" '
+                           'style="font-size:%.1fpx" opacity="%.2f">%s</text>'
+                           % (x, y, con_px, star_op, _esc(name)))
+            else:
+                _k, x, y, text, cls, gap, must, opacity, body = req
+                px = body_px if cls in ('bodylab', 'satlab') else star_px
+                est_w = 0.62 * px * len(text)
+                row_h = px + 3.0
+                anchor = 'start'
+                lx = x + gap
+                if lx + est_w > S - 4:
+                    anchor = 'end'
+                    lx = x - gap
+                ly = min(max(y + 4, row_h), 700.0)
+                fits = False
+                for _tries in range(5):
+                    x0 = lx if anchor == 'start' else lx - est_w
+                    box = (x0, ly - px, x0 + est_w, ly + 2)
+                    if clear(box):
+                        fits = True
+                        break
+                    if not must:
+                        break
+                    ly = min(ly + row_h, 700.0)
+                if not fits and not must:
+                    continue
+                placed.append(box)
+                op = '' if opacity is None else ' opacity="%.2f"' % opacity
+                dat = '' if body is None else ' data-body="%s"' % _esc(body)
+                out.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="%s" '
+                           'style="font-size:%.1fpx"%s%s>%s</text>'
+                           % (lx, ly, anchor, cls, px, op, dat, text))
+        out.append('</g>')
+        return ''.join(out)
 
     # ── pass chart ───────────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_ENGINE)
     def pass_chart_html(self, alm, palette: str = 'night',
-                        label_scale: float = 1.0) -> str:
+                        label_scale: float = 1.0,
+                        label_layers: Optional[Sequence[Tuple[Any, Any]]] = None) -> str:
         """The Next Visible Pass panel: the whole sky as it will stand at the
         soonest upcoming visible pass's culmination, the pass's arc drawn
         across it -- one chart, one epoch, so the arc crosses the stars
@@ -1987,8 +2217,11 @@ class SkyPage:
         visible pass in its elements' validity window -- the satellite
         panel's rows then tell that story.  The data-body/dome-track
         hooks (the weewx-celestial consumer contract) appear here exactly
-        as on the dome."""
+        as on the dome, and so do label_scale and label_layers (see
+        dome_svg); the head line is HTML outside the SVG, sized by the
+        page's own CSS, and takes part in neither."""
         pal_name, pal = _resolve_palette(palette)
+        layers = _label_layers(label_scale, label_layers)
         track = self._satellite_track(alm)
         if track is None:
             return ''
@@ -2002,7 +2235,7 @@ class SkyPage:
                                time.localtime(track['culmination']))),
                            rise=_t_hm(track['rise']), set=_t_hm(track['set']),
                            alt='%.0f' % track['max_alt'])))
-        return head + self._sky_chart(culm, pal, pal_name, label_scale,
+        return head + self._sky_chart(culm, pal, pal_name, layers,
                                       PASS_STAR_MAG_LIMIT, PASS_STAR_LABEL_MAG,
                                       track=track, grad_id='skygp-%s' % pal_name,
                                       clip_id='domecp-%s' % pal_name,

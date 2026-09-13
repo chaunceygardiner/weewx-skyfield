@@ -20,8 +20,9 @@ configuration.  For the drawn panels rather than the numbers, see
 [Panels in your own skin](panels.md).
 
 {: .note }
-Every tag chain on this page is evaluated against a real almanac by the test suite, so these
-read correctly as written.  What the suite cannot check is your skin's own HTML around them.
+The test suite evaluates every chain on this page that starts at `$almanac` against a real
+almanac, and compiles every snippet as a Cheetah template, so these read correctly as written.
+What the suite cannot check is your skin's own HTML around them.
 
 ## A twilight block
 
@@ -91,9 +92,11 @@ use `next_pass` when you want every pass regardless of whether you could see it.
 
 The three times print with their date — `06/22/2025 03:11:25 AM` — because the pass being
 reported is anywhere in the coming week, which is what the `#else` branch above admits.
-Restyle them with a [`[Units]` `[[TimeFormats]]` `ephem_year`
-override](values-and-units.md#how-far-away-a-time-can-be), or drop the date on one tag with
-`$iss_pass.rise.format(format_string="%X")`.
+To print a bare clock time instead, format the tag in place:
+`$iss_pass.rise.format(format_string="%X")`.  Avoid overriding `ephem_year` in `[Units]`
+`[[TimeFormats]]` for this: that also restyles the equinoxes, the moon-phase and apsis finders,
+meteor-shower peaks and a comet's perihelion (see [how far away a time can
+be](values-and-units.md#how-far-away-a-time-can-be)).
 
 If a satellite's elements have gone stale, everything reads `N/A` and these two say why:
 

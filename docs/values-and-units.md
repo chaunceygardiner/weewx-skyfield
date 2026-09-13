@@ -115,7 +115,7 @@ rule is simply how far from now the instant can be:
 | Context | Default format | Renders | Used for |
 |---|---|---|---|
 | `ephem_day` | `%X` | `03:11:25 AM` | Instants at most about a day away: `$almanac.sunrise`, a body's `rise`, `set` and `transit`, the `next_rising` family. |
-| `ephem_year` | `%x %X` | `06/22/2025 03:11:25 AM` | Instants days or months out: equinoxes and solstices, the moon-phase and apsis finders, meteor-shower peaks, a comet's perihelion — and everything about a satellite pass. |
+| `ephem_year` | `%x %X` | `06/22/2025 03:11:25 AM` | Instants days, months or years out: equinoxes and solstices, the moon-phase finders, the moon's and Earth's apsides, `next_supermoon`, eclipses, meteor-shower peaks, a comet's perihelion, the `elements_epoch` of a satellite or comet — and everything about a satellite pass. |
 
 `ephem_day` does not promise the almanac's own date.  A body's `rise`, `set` and
 `transit` mean *the event occurring on the almanac's day*, searched forward from local
@@ -134,16 +134,20 @@ lose the date — it reads as tonight.  That covers the three
 [pass attributes](tag-index.md#pass-attributes) `rise`, `culmination` and `set`, and the
 satellite's own `rise`, `transit` and `set`, which come off the same pass list.
 
-To restyle a family, override its context in your skin:
+To change one tag only — a pass time you want as a bare clock time, say — format it in
+place: `$almanac.iss.next_pass.rise.format(format_string="%X")`.
 
-```
+To restyle a whole family, override its context in your skin:
+
+```ini
 [Units]
     [[TimeFormats]]
         ephem_year = %b %d %H:%M
 ```
 
-That reaches every `ephem_year` tag.  To change one tag only, format it in place:
-`$almanac.iss.next_pass.rise.format(format_string="%X")`.
+That reaches every `ephem_year` tag in the table above, not only the satellite times: the
+equinoxes, the moon's phases and apsides, eclipses, meteor-shower peaks and a comet's
+perihelion change with them.
 
 ## Radians that know they are radians
 
@@ -208,4 +212,5 @@ genuinely unknown or nonexistent*.  It is never a stale value and never a silent
 | Value 57.3× out | Mixing a radians tag with a degrees tag.  Check the [tag index](tag-index.md) Type column. |
 | Angle displays as a compass point when you wanted a number | You read a `degree_compass` twin; use the plain float, or `.raw` with a pinned unit. |
 | `N/A` everywhere for one body | Its elements are missing or stale — check `elements_epoch` and `elements_age`, and see [Troubleshooting](troubleshooting.md). |
+| A satellite time now shows a date | Satellite times print in `ephem_year` as of 2.5.  For a bare clock time, format that tag with `.format(format_string="%X")` rather than overriding `ephem_year` — see [How far away a time can be](#how-far-away-a-time-can-be). |
 | Time is right but the date is a day off | A day-window verb (`rise`, `set`, `transit`) answers for the almanac's *day*; you may want `next_rising`. |

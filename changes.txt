@@ -1,18 +1,53 @@
 weewx-skyfield change history
 -----------------------------
 
-2.4.1 (2026/09/10)
-------------------
+2.5 (2026/09/12)
+----------------
 - ACTION REQUIRED only if you print a satellite time and want it to keep
   reading as a bare clock time: satellite times now render with their date.
   `$almanac.iss.next_visible_pass.rise` printed `03:11:25 AM`, which reads
   as tonight; it now prints `06/22/2025 03:11:25 AM`.  To get the old look
   back on one tag, format it in place --
-  `$pass.rise.format(format_string="%X")` -- rather than overriding
+  `$almanac.iss.next_visible_pass.rise.format(format_string="%X")` --
+  rather than overriding
   `[Units] [[TimeFormats]] ephem_year`, which would also restyle the
   equinoxes, the moon-phase finders, meteor-shower peaks and a comet's
   perihelion.  Values are unchanged, and any tag read through `.raw` --
   which is how every live page here reads them -- is untouched.
+- New: label layers on the sky dome and the pass chart, for a page that
+  serves a phone layout and a desktop layout from one URL.  `dome_svg` and
+  `pass_chart_html` take `label_layers=[(scale, media_query), ...]` beside
+  `label_scale`: the marks are drawn once, the labels are laid out once per
+  scale -- each layout with its own collision pass, so the bigger names
+  find their own room -- and the chart's own `<style>` shows the layer whose
+  media query the reader's viewport matches.  Nothing is fetched and
+  nothing scripted; the chart is written once per report cycle and the
+  browser picks the layer.  Each layout sits in `<g class="dome-labels"
+  data-label-scale="...">`, the base layout included, and the `<svg>` root
+  names its scales and its queries (`data-label-layers`,
+  `data-label-media`), which the rules are scoped to, so any mix of charts
+  shares a page without one chart's rules reaching another's labels.  A
+  query is held to the characters a media query needs, its parentheses
+  balanced (`(max-width: 600px)`; the range syntax `(width < 600px)` is
+  refused, because the query is written inside inline SVG where `<` is
+  markup), and a bad query, scale or pair raises a template error naming
+  what is allowed.  See docs/panels.md.  Asked for by weewx-celestial, whose
+  9.3 had been fetching a second fragment set per scale to get the same
+  effect.
+- Changed, on every dome and pass chart: the labels now all sit together in
+  one `<g class="dome-labels">` group at the end of the SVG.  The cardinals,
+  the 30/60-degree ring figures and a pass's rise and set times used to be
+  written beside the marks they annotate; the ring figures therefore now
+  draw above the stars rather than under them, so a star no longer prints
+  over a figure.  Every label's position and size is unchanged for the
+  same `label_scale`; an embedding page that finds labels by class or by
+  `data-body` sees the same elements.  A live page that moves a label by
+  its `data-body` should use `querySelectorAll`, since a layered chart
+  carries one copy per layer.
+- Changed: `label_scale` is checked.  A value that is not a positive number
+  raises a template error naming the argument; it used to render 0px
+  labels for a zero and blank the panel with a TypeError in the log for
+  text.  Text that reads as a number (`label_scale='0.8'`) is accepted.
 - Fixed: the times a satellite reports were built in the wrong units
   context.  A pass is searched across the orbital elements' seven-day
   validity window, so the pass times routinely name an instant one to seven

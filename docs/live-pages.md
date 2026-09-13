@@ -99,7 +99,8 @@ these are a stable contract:
 
 | Hook | On | Meaning |
 |---|---|---|
-| `<g class="dome-body" data-body="mars">` | dome, pass chart | The sun's, moon's and each planet's mark; name labels carry the same `data-body`. |
+| `<g class="dome-body" data-body="mars">` | dome, pass chart | The sun's, moon's and each planet's mark; name labels carry the same `data-body`, one copy per label layer (see `dome-labels` below). |
+| `<g class="dome-labels" data-label-scale="2.2">` | dome, pass chart | One label layout (2.5 and later): every label the chart carries, at one scale.  A chart asked for [label layers](panels.md#the-sky-dome--dome_svg) has one group per scale, and the labels' `data-body` is repeated in each — a live page that moves a label must move every layer's copy (`querySelectorAll`). |
 | `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
 | `data-bright="1"`/`"0"` | dome, orrery | A comet's diamond, and whether it is plausibly naked-eye. |
 | `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one the moment this one sets. |
@@ -112,8 +113,8 @@ Locate marks by these names, never by tooltip text — tooltips are translated.
 
 ## A worked example
 
-[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (**9.1 or later**
-with weewx-skyfield 2.4) is
+[weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial) (**9.3 or later**
+with weewx-skyfield 2.5) is
 the reference implementation: a complete live celestial page built entirely from loopdata
 almanac fields, including this extension's own dome embedded as a live instrument, with each
 satellite's marker swept across the sky in real time and flipping between sunlit and shadow

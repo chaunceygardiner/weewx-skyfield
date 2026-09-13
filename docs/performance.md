@@ -95,6 +95,11 @@ The work concentrates in a few panels:
 | The dome's star field | One vectorized Skyfield observe — a few milliseconds | N/A |
 | Everything else | Ordinary per-cycle work | Positions keyed on the instant |
 
+A skin that passes `label_layers` to `dome_svg` or `pass_chart_html` pays one more label
+layout, collision pass included, per extra layer, per chart, per report cycle, and ships about
+5 KB more text per dome per layer.  The marks are drawn only once, and the bundled Sky page uses
+no layers.
+
 Because the year-scale panels are anchored to fixed instants, the [result
 cache](#the-result-cache) reuses them across cycles: the full price is paid once at startup,
 not every cycle.
