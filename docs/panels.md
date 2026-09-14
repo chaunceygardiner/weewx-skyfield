@@ -45,15 +45,17 @@ not in English:
    2.4 added two: `bandlab`, for the labels that sit on the twilight bands rather than on
    the panel, and a `.dot` rule that paints the chip and table swatches from the custom
    property the markup now carries — without that one the swatches have no color at all.
-   2.2 added one more, `skylab`, the sky charts' 30°/60° ring-degree labels, and that one
-   fails more gently — which is exactly why it is worth reading about.
+   2.2 added one more, `skylab`, the sky charts' 30°/60° ring-degree labels.
 
-   Those labels carry `class="mono gridlab skylab"`, so a skin without a `skylab` rule gets
-   `gridlab`'s color rather than the 16px default — the label looks fine and simply misses
-   the 2.2 contrast lift.  Two things to watch when you add it: `skylab` and `gridlab` are
-   equal specificity and both match the element, so the `skylab` rule must come *after* your
-   `gridlab` rule; and if your `gridlab` rule is scoped (`.night .gridlab`), scope `skylab`
-   the same way or it will lose.
+   Those labels carry `class="mono gridlab skylab"`: `skylab` is the hook for text drawn on
+   the dome gradient rather than on the panel.  The bundled stylesheet gives it the same
+   color as `gridlab`, since every text color there clears its contrast bars on both
+   surfaces, so a skin without a `skylab` rule loses nothing.  If you add one to style dome
+   text apart, two things matter: `skylab` and `gridlab` are equal specificity and both
+   match the element, so the `skylab` rule must come *after* your `gridlab` rule; and if
+   your `gridlab` rule is scoped (`.night .gridlab`), scope `skylab` the same way or it
+   will lose.  Whatever color you give it must still read against the lighter rim of the
+   dome, not just the panel.
 
    The panels' tooltips are native SVG `<title>` elements, so they work on hover with no
    help — but hover does not exist on a touch screen.  The bundled skin ships
@@ -118,7 +120,7 @@ one class per role would paint the inside of a stroked curve.
 | `sky-fill-line`, `sky-stroke-line` | gridlines and orbit circles drawn on the **panel** surface |
 | `sky-fill-grid`, `sky-stroke-grid` | the sky charts' altitude rings and the cross through the zenith, which read against the dome gradient instead |
 | `sky-fill-bandgrid`, `sky-stroke-bandgrid` | gridlines on the three panels that plot over twilight **bands** |
-| `sky-fill-bandcase`, `sky-stroke-bandcase` | the casing under those gridlines and under the data marks that cross the same bands.  Resolves to `none` on the night plate, which needs no casing — the element is always there, so a reader who flips to a light theme can be given one |
+| `sky-fill-bandcase`, `sky-stroke-bandcase` | the casing under those gridlines, under the data marks that cross the same bands, and under the labels drawn on them.  The night plate's is its night band's color, which covers the sun's arc beneath the sun path's hour numbers; the light plate's is white.  The element is always there, so a reader who flips themes gets the other plate's casing |
 | `sky-fill-bandedge`, `sky-stroke-bandedge` | the outline separating a body's identity color from the band under it |
 | `sky-fill-halo`, `sky-stroke-halo` | the stroke lifting body dots off the plate; also the interior of a hollow (shadowed satellite, faint comet) marker |
 | `sky-fill-conline`, `sky-stroke-conline` | the constellation figures |

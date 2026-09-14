@@ -61,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.5'
+WXSKYFIELD_VERSION = '2.6'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -3457,12 +3457,16 @@ class SkyfieldAlmanacBinder:
         (the pyephem_fallback fence).  Must stay in lockstep with the orb
         surface: the parametrized no-elements test enumerates it."""
         a = self.almanac
-        if attr in ('rise', 'set', 'transit', 'perihelion',
+        if attr in ('rise', 'set', 'transit',
                     'next_rising', 'next_setting',
                     'previous_rising', 'previous_setting',
                     'next_transit', 'previous_transit',
                     'next_antitransit', 'previous_antitransit'):
             return self.almanac_type.time_value(a, None, 'ephem_day')
+        if attr == 'perihelion':
+            # 'ephem_year', as the orb path serves it: a perihelion is
+            # years away, not within the day.
+            return self.almanac_type.time_value(a, None, 'ephem_year')
         if attr in SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES:
             _, flavor = SkyfieldAlmanacBinder.VALUE_HELPER_ANGLES[attr]
             if flavor == 'direction':

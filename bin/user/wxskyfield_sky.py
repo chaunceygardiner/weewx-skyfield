@@ -72,18 +72,18 @@ log = logging.getLogger(__name__)
 # marks that cross the twilight BANDS -- see _band_bar.
 PALETTES: Dict[str, Dict[str, Any]] = {
     'night': {
-        'ink': '#E9E4D4', 'muted': '#8B93B8', 'brass': '#D3A94C',
+        'ink': '#E9E4D4', 'muted': '#C0C5D9', 'brass': '#E0C27F',
         'line': '#2A3358', 'grid': '#6E7DBA', 'bandgrid': '#6E7DBA',
-        'bandcase': None, 'bandedge': '#8B93B8', 'halo': '#0A0F22',
+        'bandcase': '#0B1129', 'bandedge': '#8B93B8', 'halo': '#0A0F22',
         'body': {'sun': '#FFD75E', 'moon': '#C9D0DA', 'mercury': '#9CA0AC',
-                 'venus': '#F0E3BE', 'mars': '#CE6750', 'jupiter': '#D89A56',
+                 'venus': '#F0E3BE', 'mars': '#D06C56', 'jupiter': '#D89A56',
                  'saturn': '#AC8F3E', 'uranus': '#35A8BE', 'neptune': '#5F85E6'},
         'ring': {},
         'twilight': {'night': '#0B1129', 'astro': '#131B38', 'naut': '#1A2547',
                      'civil': '#233153', 'day': '#2E3D5C'},
         'moon_dark': '#1E2745', 'moon_lit': '#DDD8C4', 'moon_ring': '#2A3358',
         'dome_stops': (('0%', '#161F3D'), ('72%', '#1B2749'), ('100%', '#2A3A63')),
-        'dome_rim': '#D3A94C',
+        'dome_rim': '#E0C27F',
         'conline': '#6C82C4',
         'orrery_sun': '#FFD75E',
         'earth_fill': '#4FA3E3', 'earth_stroke': '#E9E4D4',
@@ -98,7 +98,7 @@ PALETTES: Dict[str, Dict[str, Any]] = {
         'ring': {'sun': '#BC7800', 'moon': '#767E8A', 'venus': '#97864A'},
         'twilight': {'night': '#3A5175', 'astro': '#4A648C', 'naut': '#6C8FBF',
                      'civil': '#9FBCDE', 'day': '#D7E6F5'},
-        'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#888888',
+        'moon_dark': '#26314F', 'moon_lit': '#F2ECD8', 'moon_ring': '#868686',
         # Three stops, like the night plate's: a stop's OFFSET is an
         # attribute and not a CSS property, so it cannot follow a reader's
         # theme switch -- two plates with different offsets would leave a
@@ -190,11 +190,13 @@ BAND_RULE_OPACITY = {'primary': 0.75, 'secondary': 0.65}
 DOME_RING_OPACITY = 0.75
 DOME_CROSS_OPACITY = 0.65
 # The star field dims while the sun is up, because those stars are not
-# visible and the chart should not pretend otherwise.  A star's NAME sits
-# a touch above its dot.
+# visible and the chart should not pretend otherwise.  Only the MARKS dim:
+# a star's or constellation's name is drawn at full strength at every hour,
+# since a name that is drawn is read, and text dimmed to 0.55 measured Lc 23
+# against the dome.  Text is held to WCAG 4.5 and APCA Lc 60 with no
+# opacity relief.
 STAR_OPACITY_SUN_UP = 0.55
 STAR_OPACITY_DARK = 0.95
-STAR_LABEL_BUMP = 0.05
 # The constellation figures are background context and dim further still.
 CONLINE_OPACITY_SUN_UP = 0.40
 CONLINE_OPACITY_DARK = 0.55
@@ -214,8 +216,8 @@ def _band_rule(x1: float, y1: float, x2: float,
     sun-path and day-length panels plot on.
 
     On the night plate the bands are all dark, so `bandgrid` alone reads
-    against every one of them (1.97-3.17:1) and the rule reads as a single
-    stroke -- its casing is written but paints nothing there.
+    against every one of them (1.97-3.17:1); its casing there is the night
+    band's own color, which only deepens the band a little under the rule.
     The light plate cannot work that way: its ramp runs #3A5175 to
     #D7E6F5, a wider luminance span than any single stroke color can
     straddle -- the best candidate measured bottoms out at 1.72.  So they
@@ -225,10 +227,9 @@ def _band_rule(x1: float, y1: float, x2: float,
     is the cartographer's answer to a line crossing varied ground, and the
     same trick the dome's labels already use as a halo.  New in 2.2.
 
-    The casing is emitted on BOTH plates as of 2.4, and paints nothing on
-    the plate that declines one: a reader flipping a night page to light
-    gets the casing the light plate's ratios assume, which a stylesheet
-    could not conjure if the element were not there."""
+    The casing is emitted on BOTH plates as of 2.4: a reader flipping a
+    night page to light gets the casing the light plate's ratios assume,
+    which a stylesheet could not conjure if the element were not there."""
     coords = ('x1="%s" y1="%s" x2="%s" y2="%s"'
               % (_num(x1), _num(y1), _num(x2), _num(y2)))
     strokes = ((_CASING, BAND_CASING_WIDTH, BAND_CASING_OPACITY),
@@ -258,10 +259,10 @@ def _band_bar(x: float, y: float, w: float, h: float,
     So every band is covered by one layer or the other, which no single
     color can do: the paper plate's ramp runs #3A5175 to #D7E6F5.  On the
     night plate the bands are all dark and the bar's own fill nearly
-    carries it alone -- that plate declares no casing and pays for a single
-    outline.  Be honest about what that outline buys there: exactly one body
-    (Mars, 2.93:1 on the day band) misses the floor, by 0.07.  The outline
-    itself is not invisible -- it measures 3.59 to 6.18:1 against the
+    carries it alone -- its casing, the night band's own color, adds a dark
+    rim the outline sits inside.  Be honest about what that outline bought
+    there when it was added: exactly one body (Mars, 2.93:1 on the day band)
+    missed the floor, by 0.07.  The outline itself is not invisible -- it measures 3.59 to 6.18:1 against the
     bands, which is the point -- but at page scale it reads as a hairline
     rim rather than a restyle, and the regenerated screenshot is the place
     to judge that.  It costs one attribute on a rect already being drawn, and it means the audit holds for whatever body
@@ -271,8 +272,8 @@ def _band_bar(x: float, y: float, w: float, h: float,
     the tooltip -- and deliberately does NOT go on the casing: the casing is
     decoration and should not be a second hover target.
 
-    Both layers are emitted on both plates as of 2.4 and paint nothing
-    where the plate declines them.  Before that, the casing's absence was
+    Both layers are emitted on both plates as of 2.4, and a layer a plate
+    declines paints nothing.  Before that, the casing's absence was
     decided HERE, in the markup, where no stylesheet could reach it -- so a
     night page flipped to light by its reader lost the contrast this whole
     docstring is about."""
@@ -309,9 +310,9 @@ def _band_curve(d: str, stroke_cls: str, width: float,
     dashed curve's casing takes the same dash, or a solid casing would
     quietly fill the gaps and turn the moon's track solid.
 
-    Night plates declare no casing and pay nothing: every one of these
-    marks already clears the floor there by its own color (4.93:1 worst),
-    and as of 2.4 carries the casing element anyway, painting nothing."""
+    On the night plate every one of these marks already clears the floor
+    by its own color (4.93:1 worst); the casing there is the night band's
+    own color and only deepens the band along the curve."""
     geom = 'd="M%s" fill="none"' % d
     return ('<path %s class="%s" stroke-width="%s" opacity="%s"%s/>'
             '<path %s class="%s" stroke-width="%s"%s%s/>'
@@ -327,8 +328,7 @@ def _band_dot(cx: float, cy: float, r: float, fill_cls: str,
     and the moon track's endpoint dots.  A dot is too small to carry a
     casing as a second element underneath, so the casing is its own edge:
     one pale ring, which is what lifts it off a band its fill matches.  The
-    ring is written on both plates as of 2.4 and paints nothing where the
-    plate declines a casing."""
+    ring is written on both plates as of 2.4."""
     return ('<circle cx="%s" cy="%s" r="%s" class="%s %s" '
             'stroke-width="%s" stroke-opacity="%s"%s>%s</circle>'
             % (_num(cx), _num(cy), _num(r), fill_cls, _CASING,
@@ -354,9 +354,12 @@ def _band_text(x: float, y: float, anchor: str, cls: str, text: str) -> str:
     pass that gate.  The casing copy is aria-hidden, or a screen reader
     reads every one of these labels twice.
 
-    The night plate declines a casing and both of its classes resolve to
-    `none`, so the copy paints nothing there and the dark page is
-    unchanged (2.4)."""
+    The night plate's labels clear every one of its bands by color alone,
+    but not what is DRAWN on the bands: the sun-path hour numbers sit on
+    the sun's own arc, and ink over that yellow read 1.17:1.  So the night
+    plate carries a casing too, in its night band's own color, which cannot
+    be seen over that band and covers whatever arc or dot runs under the
+    glyphs."""
     geom = '<text x="%.1f" y="%.1f" text-anchor="%s" ' % (x, y, anchor)
     return (geom + 'class="%s sky-fill-bandcase sky-stroke-bandcase" '
                    'stroke-width="%s" stroke-linejoin="round" '
@@ -371,11 +374,10 @@ def _band_tick(x1: float, y1: float, x2: float,
     """A line DATA mark over the same bands: the transit tick, the "now"
     line.  The casing half of _band_bar, without the outline -- an outline
     on a 1.5px line would just be a wider line, and these marks read
-    against their casing directly (3.65-10.9:1 on the paper plate).  The
-    night plate declares no casing and these already clear the floor on
-    every band by their own color (4.93:1 worst), so they get one stroke,
-    exactly as before 2.3 -- and as of 2.4 the casing element is written
-    there too, painting nothing.
+    against their casing directly (3.65-10.9:1 on the paper plate).  On the
+    night plate these already clear the floor on every band by their own
+    color (4.93:1 worst), and the casing, the night band's own color, only
+    deepens the band under them.
 
     `cls` is the mark's own class (the pulsing "now" line has one); it
     joins the stroke role rather than replacing it."""
@@ -461,9 +463,10 @@ _CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
 _DUAL_ROLES = ('ink', 'muted', 'brass', 'line', 'grid', 'bandgrid',
                'halo', 'conline')
 # Roles a plate may decline: the casing under a band mark and the outline on
-# it are the light plate's two answers to a ramp no single color straddles,
-# and the night plate needs neither.  Declining paints nothing; it no longer
-# decides whether the element exists (see _band_bar).
+# it, the light plate's two answers to a ramp no single color straddles.  The
+# night plate declared no casing until its labels were measured over the
+# sun's arc (see _band_text).  Declining paints nothing; it does not decide
+# whether the element exists (see _band_bar).
 _OPTIONAL_ROLES = ('bandcase', 'bandedge')
 # The two classes the band helpers reach for by name, often enough to be
 # worth spelling once.
@@ -476,10 +479,8 @@ def _sky_classes(pal: Dict[str, Any]) -> Dict[str, Tuple[str, str]]:
 
     Generated from the palette, so a color added there reaches the markup
     without a second list to keep in step.  A plate may decline the two
-    _OPTIONAL_ROLES -- the night plate needs neither the casing under its
-    band marks nor, in principle, the outline on them -- and a declined
-    role resolves to `none`: the mark is emitted either way and simply
-    paints nothing, because an element that was never written cannot be
+    _OPTIONAL_ROLES, and a declined role resolves to `none`: the mark is
+    emitted either way and simply paints nothing, because an element that was never written cannot be
     styled back into existence by a reader who flips to a plate that wants
     one."""
     d: Dict[str, Tuple[str, str]] = {}
@@ -1864,10 +1865,20 @@ class SkyPage:
         # keep the hover title.  Bunched-up bodies (planets crowd the ecliptic)
         # otherwise print over each other.  The layout itself is
         # _place_labels; a mark's label is requested here, beside its mark.
+        # Every body mark is a keep-out box for the labels, seeded before any
+        # label is placed: a label over a disc reads against the disc, not
+        # the sky -- a planet's name over the noon sun measured 1.09:1.  In
+        # chart units, and not scaled with the labels, because the marks
+        # are not.  Each half-size covers the mark's stroke (the sun's, its
+        # rays) and is smaller than the gap its own label is set at.
+        keep: List[Tuple[float, float, float, float]] = []
+
+        def _keep(x: float, y: float, half: float) -> None:
+            keep.append((x - half, y - half, x + half, y + half))
+
         def _want(x: float, y: float, text: str, cls: str, gap: float,
-                  must: bool, opacity: Optional[float] = None,
-                  body: Optional[str] = None) -> None:
-            labels.append(('mark', x, y, text, cls, gap, must, opacity, body))
+                  must: bool, body: Optional[str] = None) -> None:
+            labels.append(('mark', x, y, text, cls, gap, must, body))
 
         star_labels: List[Tuple[float, float, str]] = []
         for s in self._stars(alm, star_limit):
@@ -1900,6 +1911,7 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(label), alt='%.1f' % b['alt'],
                                 az='%.1f' % b['az'], mag='%.1f' % b['mag'])))
+            _keep(x, y, 6.5)
             _want(x, y, _esc(label), 'bodylab', 8, must=True, body=name)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
@@ -1917,6 +1929,7 @@ class SkyPage:
                         self._t('{name} — alt {alt}°, az {az}°',
                                 name=_esc(self._label(alm, 'sun')),
                                 alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
+            _keep(x, y, 17.0)
             _want(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True,
                        body='sun')
         moon = self._body(alm, 'moon')
@@ -1928,6 +1941,7 @@ class SkyPage:
                                 name=_esc(self._label(alm, 'moon')),
                                 alt='%.1f' % moon['alt'], az='%.1f' % moon['az'],
                                 pct='%d' % alm.moon_fullness)))
+            _keep(x, y, 8.5)
             _want(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True,
                        body='moon')
         # Satellites: a marker for any satellite above the horizon at the
@@ -1966,6 +1980,7 @@ class SkyPage:
                      '<title>%s</title></circle></g>'
                      % (_esc(name), 1 if lit else 0, x, y, fill_cls, ring_cls,
                         title))
+            _keep(x, y, 5.0)
             _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
         # Comets: a diamond for any configured comet above the horizon --
         # always plotted and always labeled (the config list IS the
@@ -2009,6 +2024,7 @@ class SkyPage:
                      % (_esc(name), 1 if bright else 0, tail,
                         x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
                         fill_cls, ring_cls, title))
+            _keep(x, y, 6.0)
             _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
         # Meteor-shower radiants: while a shower is active, a rayed mark
         # at the radiant when it stands above the horizon -- meteors
@@ -2044,6 +2060,7 @@ class SkyPage:
                      '<circle cx="%.1f" cy="%.1f" r="1.8" class="sky-fill-brass">'
                      '<title>%s</title></circle></g>'
                      % (_esc(shower.key), ''.join(rays), x, y, title))
+            _keep(x, y, 9.5)
             _want(x, y, _esc(shower.label), 'satlab', 10, must=False,
                        body=shower.key)
         if track is not None:
@@ -2082,26 +2099,27 @@ class SkyPage:
                 ly = y + 18.0 * (cy - y) / away
                 p.append('<circle cx="%.1f" cy="%.1f" r="2.2" class="sky-fill-brass"/>'
                          % (x, y))
-                labels.append(('time', lx, ly, _t_hm(ts)))
+                labels.append(('time', lx, ly, _t_hm(ts),
+                               (cx - x) / away, (cy - y) / away))
             if track['name'] not in overhead:
                 xc, yc = xy[track['culm_i']]
                 _want(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
                            body=track['name'])
         for x, y, name in star_labels:
-            _want(x, y, name, 'starlab', 6, must=False, opacity=star_op + STAR_LABEL_BUMP)
+            _want(x, y, name, 'starlab', 6, must=False)
         # Constellation names go last: background context that yields to
         # every body and star label (a collision simply drops the name --
         # its figure still shows).
         for x, y, name in con_labels:
             labels.append(('con', x, y, name))
         for scale, _query in layers:
-            p.append(self._place_labels(labels, scale, S, star_op))
+            p.append(self._place_labels(labels, scale, S, keep))
         p.append('</svg>')
         return _svg_out(p, pal_name, _layer_rules(pal_name, layers))
 
     @staticmethod
     def _place_labels(labels: List[Tuple[Any, ...]], scale: float, S: int,
-                      star_op: float) -> str:
+                      keep: Optional[List[Tuple[float, float, float, float]]] = None) -> str:
         """One label layer: the collision layout run over a sky chart's
         label requests at one scale, wrapped in `<g class="dome-labels"
         data-label-scale="...">`.  Called once per layer by _sky_chart;
@@ -2114,18 +2132,22 @@ class SkyPage:
         radiant's name, or a star's -- placed beside its mark, nudged down
         a row at a time when it must land (up to five rows) and dropped
         when it need not; `time` is a pass arc's rise or set clock, always
-        placed; `con` is a constellation name, centered on its figure and
-        dropped on any collision.  Body and satellite names carry
+        placed, but stepped further in along its own ray until it clears;
+        `con` is a constellation name, centered on its figure and dropped
+        on any collision.  Body and satellite names carry
         data-body, the consumer contract that lets a live page move a
         label with its mark -- on every layer, so a consumer that moves a
         mark must move every layer's copy (querySelectorAll, not
-        querySelector)."""
+        querySelector).
+
+        `keep` is the chart's body marks as boxes, counted as placed before
+        anything else, so no label lands on a mark."""
         star_px = 10.0 * scale
         body_px = 11.0 * scale
         card_px = 14.0 * scale
         grid_px = 10.0 * scale
         con_px = 10.0 * scale
-        placed: List[Tuple[float, float, float, float]] = []
+        placed: List[Tuple[float, float, float, float]] = list(keep or [])
         out = ['<g class="dome-labels" data-label-scale="%s">' % _fmt_scale(scale)]
 
         def clear(box: Tuple[float, float, float, float]) -> bool:
@@ -2151,11 +2173,23 @@ class SkyPage:
                            % (int(x), y, grid_px, text))
                 placed.append((x - 2.0 * grid_px, y - card_px, x + 2.0 * grid_px, y + 4))
             elif kind == 'time':
-                _k, x, y, text = req
+                # Always placed, but not on top of what is already there:
+                # stepped in along its own ray toward the center, a row at a
+                # time, until it clears.  A pass's set time otherwise sat on
+                # the moon's dark disc when the moon was low over the same
+                # stretch of horizon (2.18:1).
+                _k, x, y, text, ux, uy = req
+                box = (x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5)
+                for _tries in range(5):
+                    if clear(box):
+                        break
+                    x += ux * grid_px
+                    y += uy * grid_px
+                    box = (x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5)
                 out.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="mono nowlab" '
                            'style="font-size:%.1fpx">%s</text>'
                            % (x, y + 3, grid_px, text))
-                placed.append((x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5))
+                placed.append(box)
             elif kind == 'con':
                 _k, x, y, name = req
                 # Wider glyph estimate than the star labels': .conlab
@@ -2166,10 +2200,10 @@ class SkyPage:
                     continue
                 placed.append(box)
                 out.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="conlab" '
-                           'style="font-size:%.1fpx" opacity="%.2f">%s</text>'
-                           % (x, y, con_px, star_op, _esc(name)))
+                           'style="font-size:%.1fpx">%s</text>'
+                           % (x, y, con_px, _esc(name)))
             else:
-                _k, x, y, text, cls, gap, must, opacity, body = req
+                _k, x, y, text, cls, gap, must, body = req
                 px = body_px if cls in ('bodylab', 'satlab') else star_px
                 est_w = 0.62 * px * len(text)
                 row_h = px + 3.0
@@ -2192,11 +2226,10 @@ class SkyPage:
                 if not fits and not must:
                     continue
                 placed.append(box)
-                op = '' if opacity is None else ' opacity="%.2f"' % opacity
                 dat = '' if body is None else ' data-body="%s"' % _esc(body)
                 out.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="%s" '
-                           'style="font-size:%.1fpx"%s%s>%s</text>'
-                           % (lx, ly, anchor, cls, px, op, dat, text))
+                           'style="font-size:%.1fpx"%s>%s</text>'
+                           % (lx, ly, anchor, cls, px, dat, text))
         out.append('</g>')
         return ''.join(out)
 

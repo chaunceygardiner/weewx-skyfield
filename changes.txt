@@ -1,6 +1,41 @@
 weewx-skyfield change history
 -----------------------------
 
+2.6 (2026/09/14)
+----------------
+- ACTION REQUIRED only if your skin copies the Sky page's night colors
+  into its own stylesheet: they have moved, and a copied value will no
+  longer match the panels.  `--muted` is now #C0C5D9 (was #8B93B8),
+  `--brass` #E0C27F (was #D3A94C), `.conlab` #BBC5E3 (was #9DABD7), and
+  `.skylab` and `.starlab` now take `var(--muted)` (were #9FA5C4).  The
+  night palette's `muted`, `brass` and `dome_rim` follow, night Mars is
+  #D06C56 (was #CE6750), and the paper plate's moon ring is #868686 (was
+  #888888).  A skin that styles the classes rather than copying hexes
+  needs nothing.
+- Every piece of text on the Sky page now clears WCAG 2 contrast 4.5 and
+  APCA Lc 60, in both themes, and every mark that must be seen clears 3.0
+  and Lc 30.  The night theme's secondary gray and its brass accent read
+  Lc 43 and Lc 58 against the panels, and the dome's star, constellation
+  and degree labels Lc 46: each passed the WCAG ratio and each was hard to
+  read.  They are lighter.  Measured on the rendered page glyph by glyph as well
+  as by color, which is how a label drawn on the dome's gradient was
+  scored against the gradient rather than against the panel.
+- Star and constellation names on the sky dome are drawn at full strength
+  at every hour.  While the sun was up they dimmed along with the star
+  field, to where they could not be read against the daytime sky; the
+  stars and constellation figures still dim.
+- Labels on the sky dome and the pass chart step clear of body marks.  A
+  planet's name could land on the sun's disc, and a pass's rise or set
+  time on the moon's, where each read against the disc rather than the
+  sky.  Names and times now step clear of every body where there is room,
+  and a star or constellation name with no room beside its mark is left
+  off, as it already was when it met another label.
+- In the night theme the sun path's hour numbers could sit on the sun's
+  yellow arc and vanish.  The labels and marks drawn over the twilight
+  bands now carry a casing in the night band's color, as the light theme's
+  already did, so a label reads against its casing wherever the arc runs
+  under it.
+
 2.5 (2026/09/12)
 ----------------
 - ACTION REQUIRED only if you print a satellite time and want it to keep

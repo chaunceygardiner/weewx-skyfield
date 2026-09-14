@@ -33,6 +33,9 @@ import weewx.units
 import wxskyfield
 import wxskyfield_sky
 
+sys.path.insert(0, TEST_DIR)
+import contrast
+
 LATITUDE   = 37.4419
 LONGITUDE  = -122.143
 ALTITUDE_M = 9.0
@@ -1252,10 +1255,10 @@ class TestPalettes:
                  'countdown_html', 'header_sub')
 
     # The complete set of night-plate colors ever baked into markup.
-    NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#D3A94C', '#2A3358', '#6E7DBA',
+    NIGHT_HEXES = ('#E9E4D4', '#8B93B8', '#C0C5D9', '#E0C27F', '#2A3358', '#6E7DBA',
                    '#0A0F22', '#1E2745', '#DDD8C4', '#161F3D', '#1B2749',
                    '#2A3A63', '#0B1129', '#131B38', '#1A2547', '#233153',
-                   '#2E3D5C', '#FFD75E', '#C9D0DA', '#C04F36', '#CE6750')
+                   '#2E3D5C', '#FFD75E', '#C9D0DA', '#C04F36', '#D06C56')
 
     def test_default_is_night(self, almanac, page):
         for name in self.RENDERERS:
@@ -1267,7 +1270,7 @@ class TestPalettes:
         colors as of 1.5."""
         dome = page.dome_svg(almanac)
         for hexval in ('#161F3D', '#1B2749', '#2A3A63',     # dome gradient
-                       '#6E7DBA', '#D3A94C', '#E9E4D4', '#0A0F22'):
+                       '#6E7DBA', '#E0C27F', '#E9E4D4', '#0A0F22'):
             assert hexval in dome
         # The rings and cross take `grid`, never the panel-border `line`:
         # on the dome gradient that value is 1.07:1, invisible (2.2).
@@ -1300,7 +1303,7 @@ class TestPalettes:
         for hexval in ('#FACC15', '#2E7DBE', '#1B5C8F'):    # sun, earth + ring
             assert hexval in orrery
         moon = page.moon_svg(almanac, palette='light')
-        for hexval in ('#26314F', '#F2ECD8', '#888888'):    # disc + ring
+        for hexval in ('#26314F', '#F2ECD8', '#868686'):    # disc + ring
             assert hexval in moon
         assert '#A44A08' in page.analemma_svg(almanac, palette='light')
         assert '#b23a24' in page.table_html(almanac, palette='light')   # mars
@@ -1427,37 +1430,144 @@ class TestPalettes:
                 getattr(page, name)(almanac, palette='sepia')
 
 
-def _luminance(hexval):
-    """WCAG 2.x relative luminance of an #rrggbb string."""
-    h = hexval.lstrip('#')
-    out = 0.0
-    for weight, i in ((0.2126, 0), (0.7152, 2), (0.0722, 4)):
-        c = int(h[i:i + 2], 16) / 255.0
-        out += weight * (c / 12.92 if c <= 0.03928
-                         else ((c + 0.055) / 1.055) ** 2.4)
-    return out
-
-
 def _composite(fg, bg, opacity):
     """The real color of a translucent mark: SVG opacity is alpha
     compositing, so what the eye gets is the blend.  Returned as a hex
     string so it can serve as the BACKGROUND of a further mark -- which is
     what a casing is (see _band_rule)."""
-    f, b = fg.lstrip('#'), bg.lstrip('#')
-    return '#' + ''.join(
-        '%02X' % round(int(f[i:i + 2], 16) * opacity
-                       + int(b[i:i + 2], 16) * (1 - opacity))
-        for i in (0, 2, 4))
+    return '#%02X%02X%02X' % tuple(
+        int(round(v)) for v in contrast.flatten(contrast.parse(fg)[:3] + (opacity,), bg))
+
+
+def _measure(fg, bg, opacity=1.0):
+    """(WCAG 2 ratio, APCA |Lc|) of fg over bg, fg first composited at
+    `opacity` -- SVG opacity is alpha compositing, so a translucent mark's
+    real color is the blend, not the value in the palette.  The arithmetic
+    is tests/contrast.py's, the same copy its command line uses."""
+    ground = contrast.flatten(bg)
+    seen = contrast.flatten(contrast.parse(fg)[:3] + (opacity,), ground + (1.0,))
+    return contrast.wcag(seen, ground), abs(contrast.apca(seen, ground))
 
 
 def _contrast(fg, bg, opacity=1.0):
-    """WCAG contrast of fg over bg, fg first composited at `opacity` --
-    SVG opacity is alpha compositing, so a translucent mark's real color
-    is the blend, not the value in the palette."""
-    fg = _composite(fg, bg, opacity)
-    a, b = _luminance(fg), _luminance(bg)
-    hi, lo = max(a, b), min(a, b)
-    return (hi + 0.05) / (lo + 0.05)
+    """The WCAG 2 half of _measure alone, for the proofs that an audit can
+    trip, which are written against that ratio."""
+    return _measure(fg, bg, opacity)[0]
+
+
+# The contrast standard, the same bars in every one of the author's
+# extensions.  Every piece of text clears TEXT_BARS, with no relief for
+# size or weight; a non-text mark that must be seen clears MARK_BARS.
+# Opacity is part of the color and is applied before scoring.  Each is
+# (WCAG 2 ratio, APCA |Lc|) and both halves must hold: through 2.5 the
+# dome's star names passed the ratio at 4.59 and read Lc 46.
+TEXT_BARS = (4.5, 60.0)
+MARK_BARS = (3.0, 30.0)
+
+# A mark allowed to miss MARK_BARS is a NAMED EXCEPTION, keyed by
+# (plate, mark), with its reason.  _hold_mark enforces both directions: a
+# listed mark must still miss -- one that starts clearing the bar comes out
+# of this table rather than staying on to excuse a later regression -- and
+# an unlisted one must clear.  A listed mark still holds the visibility
+# floor its audit states.
+_CHROME = ('chrome: the dome rings, the cross through the zenith and the '
+           'band gridlines orient the eye and then get out of the way, so '
+           'they sit below the graphics bar on purpose')
+_FIGURES = ('background context: mockups of constellation lines bright '
+            'enough to pass showed the star field turned into a net at the '
+            'half scale the phone layout uses; their names carry them')
+MARK_EXCEPTIONS = {
+    ('night', 'dome rings'): _CHROME,
+    ('night', 'dome cross'): _CHROME,
+    ('light', 'dome rings'): _CHROME,
+    ('light', 'dome cross'): _CHROME,
+    ('night', 'band gridlines primary'): _CHROME,
+    ('night', 'band gridlines secondary'): _CHROME,
+    ('night', 'constellation figures'): _FIGURES,
+    ('light', 'constellation figures'): _FIGURES,
+}
+
+
+def _clears(got, bars):
+    return got[0] >= bars[0] and got[1] >= bars[1]
+
+
+def _hold_mark(plate, mark, measured, floor):
+    """Grade one mark against MARK_BARS, honoring MARK_EXCEPTIONS.
+    measured: every (ratio, |Lc|) the mark takes, one per ground."""
+    worst = (min(m[0] for m in measured), min(m[1] for m in measured))
+    if (plate, mark) in MARK_EXCEPTIONS:
+        assert not all(_clears(m, MARK_BARS) for m in measured), (
+            '%s %s now clears %.1f / Lc %.0f everywhere (worst %.2f / Lc %.1f): '
+            'remove its named exception'
+            % (plate, mark, MARK_BARS[0], MARK_BARS[1], worst[0], worst[1]))
+        assert worst[0] >= floor, ('%s %s is %.2f, under its visibility floor %.1f'
+                                   % (plate, mark, worst[0], floor))
+    else:
+        assert all(_clears(m, MARK_BARS) for m in measured), (
+            '%s %s is %.2f / Lc %.1f at worst, under %.1f / Lc %.0f'
+            % (plate, mark, worst[0], worst[1], MARK_BARS[0], MARK_BARS[1]))
+
+
+class TestContrastArithmetic:
+    """The one copy of the contrast math, pinned at the points every
+    extension sharing it pins, so a drifted constant fails here first."""
+
+    def test_apca_oracle(self):
+        assert contrast.apca((0, 0, 0), (255, 255, 255)) == pytest.approx(106.04, abs=0.005)
+        assert contrast.apca((255, 255, 255), (0, 0, 0)) == pytest.approx(-107.88, abs=0.005)
+
+    def test_wcag_oracle(self):
+        assert contrast.wcag((0, 0, 0), (255, 255, 255)) == pytest.approx(21.0)
+
+    def test_opacity_is_part_of_the_color(self):
+        """The 2.5 night constellation name as the chart drew it with the
+        sun up: #9DABD7 at 0.55 over the dome's rim.  Opaque it passed the
+        ratio; composited it misses both bars by far."""
+        assert _clears(_measure('#9DABD7', '#2A3A63'), (4.5, 0))
+        got = _measure('#9DABD7', '#2A3A63', 0.55)
+        assert got[0] == pytest.approx(2.56, abs=0.02)
+        assert got[1] == pytest.approx(23.1, abs=0.2)
+        assert not _clears(got, TEXT_BARS)
+
+    def test_named_exceptions_say_why(self):
+        for key, reason in MARK_EXCEPTIONS.items():
+            assert key[0] in wxskyfield_sky.PALETTES, key
+            assert len(reason) > 40, key
+
+    def test_named_exceptions_name_graded_marks(self):
+        """Every exception names a mark an audit still grades.  An entry
+        that stops applying -- a gridline rank renamed, its mark graded
+        under the new name -- would otherwise stay in the table, excusing
+        nothing, which is how a stale exemption survives.  The gridline
+        names come from BAND_RULE_OPACITY itself, the renamable part."""
+        graded = {'dome rings', 'dome cross', 'constellation figures'}
+        graded |= {'band gridlines %s' % rank
+                   for rank in wxskyfield_sky.BAND_RULE_OPACITY}
+        stale = sorted(key for key in MARK_EXCEPTIONS if key[1] not in graded)
+        assert not stale, stale
+
+
+class TestPageTextContrast:
+    """The page's own text tokens against the grounds the page paints under
+    them -- the body (--night) and every section (--vault) -- in both
+    themes, read from the shipped sky.css so an edit there can fail it.
+    Through 2.5 nothing graded these, and the night --muted read Lc 43.5 on
+    a section, --brass Lc 57.6."""
+
+    def test_text_tokens_clear_the_text_bars(self):
+        with open(os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'sky.css')) as f:
+            css = re.sub(r'/\*.*?\*/', ' ', f.read(), flags=re.S)
+        for theme, pattern in (('dark', r':root\{(.*?)\}'),
+                               ('light', r':root\.theme-light\{(.*?)\}')):
+            block = re.search(pattern, css, re.S).group(1)
+            tok = dict(re.findall(r'--([a-z]+):\s*(#[0-9A-Fa-f]{6})', block))
+            for text in ('ink', 'muted', 'brass'):
+                for ground in ('night', 'vault'):
+                    got = _measure(tok[text], tok[ground])
+                    assert _clears(got, TEXT_BARS), (
+                        '%s --%s %s on --%s %s is %.2f / Lc %.1f'
+                        % (theme, text, tok[text], ground, tok[ground], got[0], got[1]))
 
 
 class TestClassContract:
@@ -1593,16 +1703,17 @@ class TestClassContract:
         finally:
             wxskyfield_sky._warned_palettes.clear()
 
-    def test_the_night_plate_still_declines_its_casing(self, almanac, page):
+    def test_both_plates_paint_their_casing(self, almanac, page):
         """The structural half of 2.4: the casing is an ELEMENT on both
-        plates now, because markup a plate declines to write is markup a
-        reader who flips to the other plate can never get back.  The night
-        plate goes on paying nothing for it -- the class resolves to
-        `none`, which paints no pixels (proved in the raster comparison and
-        by the browser check)."""
+        plates, because markup a plate declines to write is markup a reader
+        who flips to the other plate can never get back.  Both plates now
+        give it a value too: the night plate's is its night band's own
+        color, which covers the sun's arc under the sun-path hour numbers
+        (ink over that arc read 1.17:1)."""
         svg = page.ribbons_svg(almanac)
         assert 'class="sky-fill-bandcase"' in svg
-        assert ':where(.sky-fill-bandcase){fill:none}' in svg
+        assert (':where(.sky-fill-bandcase){fill:%s}'
+                % wxskyfield_sky.PALETTES['night']['twilight']['night']) in svg
         light = page.ribbons_svg(almanac, palette='light')
         assert ':where(.sky-fill-bandcase){fill:#ffffff}' in light
 
@@ -1632,7 +1743,7 @@ class TestClassContract:
 
 class TestSkyChartContrast:
     """Every mark on the two sky charts (the dome and the Next Visible Pass
-    chart -- one _sky_chart, so one audit) must hold its floor against the
+    chart -- one _sky_chart, so one audit) must hold its bars against the
     dome gradient it is drawn on, on BOTH plates.
 
     This exists because the altitude rings and the cross through the zenith
@@ -1643,24 +1754,22 @@ class TestSkyChartContrast:
     caught it: the rings were present, correct and invisible.  A golden-hex
     test cannot see that; only the ratio can.
 
-    Floors are WCAG 2.x: 4.5 for text, 3.0 for graphics.  Two marks are
-    deliberately exempt and carry their own floor -- see FIGURE_FLOOR."""
+    Text clears TEXT_BARS, marks MARK_BARS.  The chrome and the
+    constellation figures are named exceptions (MARK_EXCEPTIONS), each held
+    to a visibility floor of its own below."""
 
     SKIN_DIR = os.path.join(REPO_ROOT, 'skins', 'Skyfield')
-    TEXT_FLOOR = 4.5
-    MARK_FLOOR = 3.0
     # The rings and cross are chrome: they orient the eye and then get out
-    # of the way, so they sit below the graphics floor on purpose.  The bar
-    # is that they stay unambiguously visible -- an order of magnitude off
-    # the 1.07 that made them disappear.
+    # of the way.  The floor is that they stay unambiguously visible -- an
+    # order of magnitude off the 1.07 that made them disappear.
     CHROME_FLOOR = 1.9
-    # The constellation FIGURES are the one mark left under its floor by
-    # choice (night 1.87, light 1.47).  Mockups of the WCAG-compliant
-    # version showed why: at the half scale the phone layout uses, lines
-    # bright enough to pass turn the star field into a net over the sky
-    # rather than figures within it.  Their LABELS were lifted instead --
-    # a dozen marks, not five hundred segments.  This floor is "no worse
-    # than 2.2 shipped", not a standard.
+    # The constellation FIGURES are left under the mark bars by choice
+    # (night 1.87, light 1.47).  Mockups of the compliant version showed
+    # why: at the half scale the phone layout uses, lines bright enough to
+    # pass turn the star field into a net over the sky rather than figures
+    # within it.  Their LABELS were lifted instead -- a dozen marks, not
+    # five hundred segments.  This floor is "no worse than 2.2 shipped",
+    # not a standard.
     FIGURE_FLOOR = 1.4
 
     def _dome_stops(self, pal):
@@ -1725,92 +1834,75 @@ class TestSkyChartContrast:
             out[cls] = tuple(resolved)
         return out
 
-    def test_text_marks_hold_45(self):
-        """Star names, ring degrees and constellation names, composited at
-        the opacities the chart actually renders them with -- read from the
-        module, not restated here, so a change to either recomputes these
-        ratios rather than making them fiction.
+    def test_text_marks_clear_the_text_bars(self):
+        """Star names, ring degrees, constellation names, satellite names
+        and pass times, against every stop of the gradient.
 
         As of 2.4 satlab and nowlab are graded too -- brass text, inside
         the dome, ungraded until a consuming skin measured it at 4.25
         against the paper plate's rim.
 
-        SCOPE, deliberate: the dark-sky opacity.  While the sun is up the
-        chart dims its star field to STAR_OPACITY_SUN_UP, which puts these
-        same labels at 2.2-3.3 -- under the floor, on purpose, because
-        those stars are not visible and their names are not there to be
-        read.  Only .skylab, which never dims, holds 4.5 around the
-        clock."""
+        Through 2.5 this audit graded the ratio alone, and graded star and
+        constellation names only at the dark-sky opacity: while the sun was
+        up the chart dimmed them with the star field, to Lc 23 on the night
+        plate.  Names are now drawn at full strength at every hour
+        (test_the_dome_draws_the_opacities_the_audit_reads pins it), so
+        there is no opacity to composite and no hour this can miss."""
         fills = self._chart_label_fills()
-        dark = wxskyfield_sky.STAR_OPACITY_DARK
-        # DRIVEN BY THE HELPER, not by a list written here.  This test
-        # hardcoded its own three classes, so widening the helper to grade
-        # satlab and nowlab in 2.4 added two entries that nothing read and
-        # the paper plate's brass went on failing -- the same defect as the
-        # gap being closed, one level up.  A class the helper resolves and
-        # this map does not name now fails here instead.
-        opacities = {'skylab': 1.0,
-                     'starlab': dark + wxskyfield_sky.STAR_LABEL_BUMP,
-                     'conlab': dark,
-                     'satlab': 1.0,          # a satellite's name, beside its marker
-                     'nowlab': 1.0}          # a pass's rise and set times
-        assert set(opacities) == set(fills), sorted(
-            set(opacities) ^ set(fills))
         for plate, idx in (('night', 0), ('light', 1)):
             pal = wxskyfield_sky.PALETTES[plate]
-            for cls, opacity in sorted(opacities.items()):
+            for cls in sorted(fills):
                 fill = fills[cls][idx]
                 for stop in self._dome_stops(pal):
-                    got = _contrast(fill, stop, opacity)
-                    assert got >= self.TEXT_FLOOR, (
-                        '%s .%s %s on %s is %.2f, under %.1f'
-                        % (plate, cls, fill, stop, got, self.TEXT_FLOOR))
+                    got = _measure(fill, stop)
+                    assert _clears(got, TEXT_BARS), (
+                        '%s .%s %s on %s is %.2f / Lc %.1f, under %.1f / Lc %.0f'
+                        % (plate, cls, fill, stop, got[0], got[1],
+                           TEXT_BARS[0], TEXT_BARS[1]))
 
-    def test_body_dots_hold_3(self):
-        """A body dot clears the graphics floor by its FILL or by its RING
-        -- that is exactly what the palette's `ring` key is for, and the
-        pale bodies on the paper plate (sun, venus) rely on it."""
+    def test_body_dots_clear_the_mark_bars(self):
+        """A body dot clears the bars by its FILL or by its RING -- that is
+        exactly what the palette's `ring` key is for, and the pale bodies on
+        the paper plate (sun, venus) rely on it.  Night Mars read Lc 29.2 on
+        the dome's rim through 2.5."""
         for plate in ('night', 'light'):
             pal = wxskyfield_sky.PALETTES[plate]
             for name, fill in pal['body'].items():
                 ring = pal['ring'].get(name)
                 for stop in self._dome_stops(pal):
-                    best = _contrast(fill, stop)
-                    if ring:
-                        best = max(best, _contrast(ring, stop))
-                    assert best >= self.MARK_FLOOR, (
-                        '%s %s (fill %s, ring %s) is %.2f on %s, under %.1f'
-                        % (plate, name, fill, ring, best, stop, self.MARK_FLOOR))
+                    got = _measure(fill, stop)
+                    ok = _clears(got, MARK_BARS) or (
+                        ring is not None and _clears(_measure(ring, stop), MARK_BARS))
+                    assert ok, ('%s %s (fill %s, ring %s) on %s: fill %.2f / Lc %.1f'
+                                % (plate, name, fill, ring, stop, got[0], got[1]))
 
     def test_rings_and_cross_are_visible(self):
         """The 2.1.3 defect, pinned.  `grid` must never fall back to
         `line`: on both plates that value is ~1.1 against the dome."""
         for plate, pal in wxskyfield_sky.PALETTES.items():
             assert pal['grid'] != pal['line'], plate
-            for opacity in (wxskyfield_sky.DOME_RING_OPACITY,
-                            wxskyfield_sky.DOME_CROSS_OPACITY):
-                for stop in self._dome_stops(pal):
-                    got = _contrast(pal['grid'], stop, opacity)
-                    assert got >= self.CHROME_FLOOR, (
-                        '%s grid %s at %.2f is %.2f on %s, under %.1f'
-                        % (plate, pal['grid'], opacity, got, stop,
-                           self.CHROME_FLOOR))
+            for mark, opacity in (('dome rings', wxskyfield_sky.DOME_RING_OPACITY),
+                                  ('dome cross', wxskyfield_sky.DOME_CROSS_OPACITY)):
+                _hold_mark(plate, mark,
+                           [_measure(pal['grid'], stop, opacity)
+                            for stop in self._dome_stops(pal)],
+                           self.CHROME_FLOOR)
 
     def test_constellation_figures_stay_recessive(self):
         """Two-sided on purpose: the figures must stay visible, and must
-        NOT be lifted to the graphics floor without revisiting the half
-        scale render that argued against it."""
+        NOT be lifted to the mark bars without revisiting the half-scale
+        render that argued against it -- their named exception fails the
+        day they clear."""
         for plate in ('night', 'light'):
             pal = wxskyfield_sky.PALETTES[plate]
-            for stop in self._dome_stops(pal):
-                got = _contrast(pal['conline'],
-                                stop, wxskyfield_sky.CONLINE_OPACITY_DARK)
-                assert got >= self.FIGURE_FLOOR, (
-                    '%s conline %s is %.2f on %s, under %.1f'
-                    % (plate, pal['conline'], got, stop, self.FIGURE_FLOOR))
+            _hold_mark(plate, 'constellation figures',
+                       [_measure(pal['conline'], stop,
+                                 wxskyfield_sky.CONLINE_OPACITY_DARK)
+                        for stop in self._dome_stops(pal)],
+                       self.FIGURE_FLOOR)
 
     def test_the_dome_draws_the_opacities_the_audit_reads(self, almanac, page):
-        """The audit's ratios are composites at the module's opacities, so
+        """The audit's numbers are composites at the module's opacities, so
         they mean nothing unless the dome really renders at them.  Checked
         in the rendered svg: the constant and the chart cannot drift apart
         without this failing, and no source grep is involved."""
@@ -1819,19 +1911,177 @@ class TestSkyChartContrast:
                 % wxskyfield_sky.DOME_RING_OPACITY) in dome
         assert dome.count('stroke-width="1" opacity="%s"'
                           % wxskyfield_sky.DOME_CROSS_OPACITY) == 2
-        # Whichever star opacity the fixture instant calls for -- it is
-        # local noon, so the dimmed one -- with the labels a shade above
-        # it.  Derived rather than written down: the pair that matters is
-        # (what the module says, what the chart drew), not the clock.
-        star_op = (wxskyfield_sky.STAR_OPACITY_SUN_UP if page.sun_is_up(almanac)
-                   else wxskyfield_sky.STAR_OPACITY_DARK)
-        for cls, expected in (
-                ('starlab', star_op + wxskyfield_sky.STAR_LABEL_BUMP),
-                ('conlab', star_op)):
-            drawn = [float(o) for o in re.findall(
-                r'<text[^>]*class="%s"[^>]*opacity="([\d.]+)"' % cls, dome)]
-            assert drawn, cls
-            assert all(o == pytest.approx(expected) for o in drawn), (cls, drawn)
+        # The fixture instant is local noon, the hour the chart used to dim
+        # star and constellation names along with the star field.  The
+        # MARKS still dim; the names must not, on any element or on the
+        # layer that holds them -- the text bars are scored at full
+        # strength, and an opacity anywhere above a label makes that fiction.
+        assert page.sun_is_up(almanac)
+        assert re.search(r'<circle[^>]*class="sky-fill-ink" opacity="%.2f"'
+                         % wxskyfield_sky.STAR_OPACITY_SUN_UP, dome)
+        for cls in ('starlab', 'conlab'):
+            texts = re.findall(r'<text[^>]*class="%s"[^>]*>' % cls, dome)
+            assert texts, cls
+            assert not [t for t in texts if 'opacity' in t], (cls, texts[:3])
+        assert not re.search(r'<g class="dome-labels"[^>]*opacity', dome)
+
+
+class TestLabelKeepouts:
+    """Labels step clear of body marks where there is room.  A planet's
+    name over the noon sun measured 1.09:1 and a pass's set time over the
+    moon's dark disc 2.18: each label cleared its bars against the sky and
+    read against a disc instead.  _sky_chart hands _place_labels every body
+    mark as a box, and the layout counts those boxes as already placed.  A
+    label that must be drawn and finds no room in five steps is still
+    drawn -- the fixtures below are not that crowded."""
+
+    KEEP = [(100.0, 90.0, 160.0, 110.0)]
+    DAY_TS = 1750536000          # 2025-06-21 13:00 PDT: Jupiter beside the sun
+
+    @staticmethod
+    def _texts(svg):
+        return [(float(x), float(y), t) for x, y, t in re.findall(
+            r'<text x="([-\d.]+)" y="([-\d.]+)"[^>]*>([^<]*)</text>', svg)]
+
+    def test_a_body_name_steps_off_a_mark(self):
+        out = wxskyfield_sky.SkyPage._place_labels(
+            [('mark', 100.0, 100.0, 'Jupiter', 'bodylab', 8, True, None)],
+            1.0, 680, self.KEEP)
+        (_x, y, text), = self._texts(out)
+        assert text == 'Jupiter'
+        assert y - 11.0 >= 110.0, y
+
+    def test_an_optional_name_yields_to_a_mark(self):
+        for req in (('mark', 100.0, 100.0, 'Mizar', 'starlab', 6, False, None),
+                    ('con', 130.0, 100.0, 'LYRA')):
+            out = wxskyfield_sky.SkyPage._place_labels([req], 1.0, 680, self.KEEP)
+            assert self._texts(out) == [], req
+
+    def test_a_pass_time_steps_inward_off_a_mark(self):
+        """Four steps of 10 clear the box, so the label is placed by the
+        clear check, not by running out of tries (five)."""
+        out = wxskyfield_sky.SkyPage._place_labels(
+            [('time', 100.0, 100.0, '03:21', 1.0, 0.0)], 1.0, 680,
+            [(80.0, 85.0, 115.0, 110.0)])
+        (x, y, text), = self._texts(out)
+        assert text == '03:21'
+        assert x == pytest.approx(140.0), x
+        assert y == pytest.approx(103.0)
+
+    def test_with_nothing_in_the_way_nothing_moves(self):
+        out = wxskyfield_sky.SkyPage._place_labels(
+            [('time', 100.0, 100.0, '03:21', 1.0, 0.0),
+             ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)], 1.0, 680)
+        texts = self._texts(out)
+        assert (100.0, 103.0, '03:21') in texts, texts
+        assert (308.0, 304.0, 'Mars') in texts, texts
+
+    @staticmethod
+    def _marks(svg):
+        """{body: box} for every body mark, sized by everything the mark
+        draws -- the sun's rays as well as its disc, a comet's diamond, a
+        radiant's rays -- read out of the rendered SVG.  A comet's tail is
+        left out: it trails away from the mark and is not kept clear."""
+        marks = {}
+        for body, inner in re.findall(
+                r'<g class="dome-body[^"]*" data-body="([^"]+)"[^>]*>(.*?)</g>', svg):
+            xs, ys = [], []
+            for cx, cy, r in re.findall(
+                    r'<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([\d.]+)"', inner):
+                cx, cy, r = float(cx), float(cy), float(r)
+                xs += [cx - r, cx + r]
+                ys += [cy - r, cy + r]
+            for line in re.findall(r'<line [^>]*>', inner):
+                if 'comet-tail' in line:
+                    continue
+                for axis, vals in (('x', xs), ('y', ys)):
+                    vals += [float(v) for v in re.findall(
+                        r' %s[12]="([-\d.]+)"' % axis, line)]
+            for d in re.findall(r'<path d="(M[-\d. L]+Z)"', inner):
+                pts = [float(v) for v in re.findall(r'-?[\d.]+', d)]
+                xs += pts[0::2]
+                ys += pts[1::2]
+            if xs:
+                marks[body] = (min(xs), min(ys), max(xs), max(ys))
+        return marks
+
+    def _overlaps(self, svg):
+        """Every label box, estimated as the layout estimates it, that
+        touches another body's mark in the chart's first label layer."""
+        marks = sorted(self._marks(svg).items())
+        assert marks
+        layer = svg.split('<g class="dome-labels"')[1].split('</g>')[0]
+        boxes = []
+        for x, y, anchor, cls, px, body, text in re.findall(
+                r'<text x="([-\d.]+)" y="([-\d.]+)" text-anchor="(\w+)" '
+                r'class="(bodylab|satlab)" style="font-size:([\d.]+)px" '
+                r'data-body="([^"]+)">([^<]*)</text>', layer):
+            x, y, px = float(x), float(y), float(px)
+            w = 0.62 * px * len(text)
+            x0 = x if anchor == 'start' else x - w
+            boxes.append((body, text, (x0, y - px, x0 + w, y + 2)))
+        for x, y, px, text in re.findall(
+                r'<text x="([-\d.]+)" y="([-\d.]+)" text-anchor="middle" '
+                r'class="mono nowlab" style="font-size:([\d.]+)px">([^<]*)</text>', layer):
+            x, y, px = float(x), float(y) - 3, float(px)
+            boxes.append((None, text, (x - 2 * px, y - px, x + 2 * px, y + 5)))
+        assert boxes
+        hits = []
+        for body, text, b in boxes:
+            for mbody, m in marks:
+                if mbody != body and b[0] < m[2] and b[2] > m[0] and b[1] < m[3] and b[3] > m[1]:
+                    hits.append('%s over %s' % (text, mbody))
+        return hits
+
+    def test_every_drawn_mark_is_kept_clear(self, sky, monkeypatch):
+        """The keep-out boxes the chart hands the layout must cover each
+        mark as DRAWN -- the sun's rays, a comet's diamond -- not a smaller
+        idea of it.  Checked directly rather than through where labels
+        happen to fall: at the fixture instants no label sits on the sun's
+        rays, so shrinking the sun's keep-out to its disc would pass the
+        end-to-end test below and fail only here."""
+        seen = []
+        real = wxskyfield_sky.SkyPage._place_labels
+
+        def spy(labels, scale, S, keep=None):
+            seen.append(list(keep or []))
+            return real(labels, scale, S, keep)
+        monkeypatch.setattr(wxskyfield_sky.SkyPage, '_place_labels', staticmethod(spy))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            day = weewx.almanac.Almanac(self.DAY_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            dome = wxskyfield_sky.SkyPage().dome_svg(day)
+        keep = seen[0]
+        marks = self._marks(dome)
+        assert {'sun', 'moon', 'halley'} <= set(marks), sorted(marks)
+        for body, m in sorted(marks.items()):
+            assert any(k[0] <= m[0] and k[1] <= m[1] and k[2] >= m[2] and k[3] >= m[3]
+                       for k in keep), (body, m)
+
+    def test_the_charts_seed_every_body_mark(self, sky):
+        """End to end: at 13:00 on the fixture day, when Jupiter stands
+        beside the sun, and on the pass chart, no body name or pass time is
+        laid over another body's mark."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            fmt = weewx.units.get_default_formatter()
+            day = weewx.almanac.Almanac(self.DAY_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M, formatter=fmt)
+            noon = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                         altitude=ALTITUDE_M, formatter=fmt)
+            page = wxskyfield_sky.SkyPage()
+            for plate in ('night', 'light'):
+                dome = page.dome_svg(day, palette=plate)
+                assert 'Jupiter' in dome
+                # The sun's box must be its rays, not just its disc.
+                sun = self._marks(dome)['sun']
+                assert sun[2] - sun[0] > 30.0, sun
+                assert self._overlaps(dome) == [], plate
+                chart = page.pass_chart_html(noon, palette=plate)
+                assert 'nowlab' in chart
+                assert self._overlaps(chart) == [], plate
 
 
 class TestBandLabelContrast:
@@ -1854,7 +2104,7 @@ class TestBandLabelContrast:
     of the date and the latitude -- so this renders at two of them, and
     would have caught either defect at either one."""
 
-    FLOOR = 4.5                        # WCAG AA, small text
+    BARS = TEXT_BARS
     PANELS = ('sunpath_svg', 'ribbons_svg', 'daylength_svg')
     # Palo Alto, and inside the Arctic Circle where the arc lies along the
     # bands rather than crossing them.  Two is a compromise: each sun-path
@@ -1904,7 +2154,7 @@ class TestBandLabelContrast:
             return None
         return resolve(best[1], light_root if plate == 'light' else root)
 
-    def test_every_label_over_a_band_holds_45(self, sky):
+    def test_every_label_over_a_band_clears_the_text_bars(self, sky):
         rules, root, light_root, resolve = self._fills()
         worst = []
         with saved_almanacs():
@@ -1951,12 +2201,12 @@ class TestBandLabelContrast:
                             if (round(x, 1), round(y, 1)) in cased and pal['bandcase']:
                                 on = [('its casing', pal['bandcase'])]
                             for where, bg in on:
-                                got = _contrast(fill, bg)
-                                if got < self.FLOOR:
+                                got = _measure(fill, bg)
+                                if not _clears(got, self.BARS):
                                     worst.append(
                                         '%s %s lat %.1f: %s (%s) on %s (%s) is '
-                                        '%.2f' % (plate, panel, lat, classes,
-                                                  fill, where, bg, got))
+                                        '%.2f / Lc %.1f' % (plate, panel, lat, classes,
+                                                            fill, where, bg, got[0], got[1]))
         assert not worst, '\n'.join([''] + sorted(set(worst)))
 
     def test_the_audit_reads_labels_and_bands(self, sky):
@@ -2013,21 +2263,23 @@ class TestPanelGridContrast:
         on the day and the latitude."""
         for plate, pal in wxskyfield_sky.PALETTES.items():
             for rank, opacity in wxskyfield_sky.BAND_RULE_OPACITY.items():
-                for shade, band in pal['twilight'].items():
+                measured = []
+                for band in pal['twilight'].values():
                     under = (_composite(pal['bandcase'], band,
                                         wxskyfield_sky.BAND_CASING_OPACITY)
                              if pal['bandcase'] else band)
-                    got = _contrast(pal['bandgrid'], under, opacity)
-                    assert got >= self.FLOOR, (
-                        '%s %s rule on the %s band is %.2f, under %.1f'
-                        % (plate, rank, shade, got, self.FLOOR))
+                    measured.append(_measure(pal['bandgrid'], under, opacity))
+                # Chrome on the night plate, a named exception there; the
+                # paper plate's cased rules clear the mark bars outright.
+                _hold_mark(plate, 'band gridlines %s' % rank, measured, self.FLOOR)
 
-    def test_the_night_plates_draw_no_casing(self):
-        """The casing is the light plate's answer to a ramp it cannot
-        straddle.  The night plate reads against every one of its own
-        bands with a single stroke, so it must not pay for a second
-        element per gridline."""
-        assert wxskyfield_sky.PALETTES['night']['bandcase'] is None
+    def test_the_night_casing_is_its_darkest_band(self):
+        """The night plate's casing exists for its LABELS, which read against
+        the bands by color but not against the sun's arc drawn on them.  It
+        is the night band's own color, so over that band it cannot be seen,
+        and over the lighter bands it only deepens the ground under a mark."""
+        night = wxskyfield_sky.PALETTES['night']
+        assert night['bandcase'] == night['twilight']['night']
 
     def test_every_palette_carries_the_same_keys(self):
         """_band_rule reads `bandgrid` and `bandcase` by subscript, so a
@@ -2095,7 +2347,7 @@ class TestBandMarkContrast:
     Why this cannot be fixed with a color, and what carries it instead, is
     in _band_bar's docstring."""
 
-    FLOOR = TestSkyChartContrast.MARK_FLOOR
+    BARS = MARK_BARS
 
     @staticmethod
     def _under(pal, band, curve=False):
@@ -2128,13 +2380,14 @@ class TestBandMarkContrast:
             for name, fill in pal['body'].items():
                 for shade, band in pal['twilight'].items():
                     under = self._under(pal, band)
-                    best = _contrast(fill, under)
-                    if pal['bandedge']:
-                        best = max(best, _contrast(pal['bandedge'], under))
-                    assert best >= self.FLOOR, (
-                        '%s %s bar (fill %s, edge %s) is %.2f on the %s band,'
-                        ' under %.1f' % (plate, name, fill, pal['bandedge'],
-                                         best, shade, self.FLOOR))
+                    got = _measure(fill, under)
+                    ok = _clears(got, self.BARS) or bool(
+                        pal['bandedge']
+                        and _clears(_measure(pal['bandedge'], under), self.BARS))
+                    assert ok, (
+                        '%s %s bar (fill %s, edge %s) is %.2f / Lc %.1f on the %s'
+                        ' band' % (plate, name, fill, pal['bandedge'],
+                                   got[0], got[1], shade))
 
     def test_the_line_marks_read_on_every_band(self):
         """The marks drawn as lines and curves over the bands -- transit
@@ -2156,10 +2409,10 @@ class TestBandMarkContrast:
                       for b in ('sun', 'moon')]
             for name, color in marks:
                 for shade, band in pal['twilight'].items():
-                    got = _contrast(color, self._under(pal, band, curve=True))
-                    assert got >= self.FLOOR, (
-                        '%s %s mark %s is %.2f on the %s band, under %.1f'
-                        % (plate, name, color, got, shade, self.FLOOR))
+                    got = _measure(color, self._under(pal, band, curve=True))
+                    assert _clears(got, self.BARS), (
+                        '%s %s mark %s is %.2f / Lc %.1f on the %s band'
+                        % (plate, name, color, got[0], got[1], shade))
 
     def test_every_band_crossing_panel_paints_its_casing(self, almanac, page):
         """The ratios above assume a casing under every data mark that

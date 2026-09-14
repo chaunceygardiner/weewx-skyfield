@@ -20,8 +20,8 @@ Five claims, each of which was a live risk while 2.4 was being written:
      repaint the first panel.
   4. A theme rule repaints a night-rendered panel -- the switch this whole
      mechanism exists for.
-  5. The band casing the night plate declines is an ELEMENT that is there
-     and paints nothing, so a reader flipping to light can be given it.
+  5. The band casing is an ELEMENT on both plates, painting each plate's
+     own value, so a reader flipping themes can be given the other's.
   6. The chip and table swatches, which are HTML and carry their color
      inline, can still be repainted by an ordinary consumer rule -- they
      set --sky-dot rather than `background`, and sky.css reads it.
@@ -105,6 +105,7 @@ def render(out_dir):
     pal = wxskyfield_sky.PALETTES
     want = {'night_ink': pal['night']['ink'], 'light_ink': pal['light']['ink'],
             'light_bandcase': pal['light']['bandcase'],
+            'night_bandcase': pal['night']['bandcase'],
             'night_mars': pal['night']['body']['mars'],
             'light_mars': pal['light']['body']['mars']}
     css_path = os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'sky.css')
@@ -199,11 +200,12 @@ def check(work_dir):
         expect('4. night panel flipped to light', fill_of('.sky-fill-ink'),
                light_ink)
 
-        # 5. The casing the night plate declines is present and paints
-        #    nothing, and a consumer can hand it the light plate's value.
+        # 5. The casing is present on both plates and paints each plate's
+        #    own value, and a consumer can hand the night one the light
+        #    plate's value.
         page.set_content(page_html(frags['ribbons_night']))
-        expect('5. night casing paints nothing',
-               fill_of('.sky-fill-bandcase'), 'none')
+        expect('5. night casing paints the night band',
+               fill_of('.sky-fill-bandcase'), _hex_to_rgb(want['night_bandcase']))
         page.set_content(page_html(frags['ribbons_light']))
         expect('5. light casing paints', fill_of('.sky-fill-bandcase'),
                _hex_to_rgb(want['light_bandcase']))
@@ -215,8 +217,8 @@ def check(work_dir):
                _hex_to_rgb(want['light_bandcase']))
         # ... and the same for the stroked casing on the gridlines.
         page.set_content(page_html(frags['ribbons_night']))
-        expect('5. night rule casing paints nothing',
-               stroke_of('.sky-stroke-bandcase'), 'none')
+        expect('5. night rule casing paints the night band',
+               stroke_of('.sky-stroke-bandcase'), _hex_to_rgb(want['night_bandcase']))
 
         # 6. The chip and table swatches are HTML and cannot carry a
         #    <style> of their own, so their color rides inline -- but as

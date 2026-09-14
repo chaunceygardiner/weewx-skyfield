@@ -2,8 +2,8 @@
    Copyright (C)2022-2026 by John A Kline (john@johnkline.com)
    Distributed under the terms of the GNU Public License (GPLv3) */
 :root{
-  --night:#0A0F22; --vault:#111834; --ink:#E9E4D4; --muted:#8B93B8;
-  --brass:#D3A94C; --line:#2A3358;
+  --night:#0A0F22; --vault:#111834; --ink:#E9E4D4; --muted:#C0C5D9;
+  --brass:#E0C27F; --line:#2A3358;
   color-scheme: dark;
 }
 /* The light theme (theme = light, or auto with the sun up): the paper-atlas
@@ -100,29 +100,28 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
 svg{width:100%; height:auto; display:block}
 svg text{fill:var(--ink)}
 .cardinal{font-size:14px; fill:var(--brass); letter-spacing:.1em}
-/* The sky charts' small labels are their own value, not --muted: --muted is
-   set for body copy on the panel SURFACE, and the dome and next-visible-pass
-   charts put these on the dome gradient instead, whose rim is much lighter.
-   There --muted reached only 3.70:1.  .skylab is the scoped opt-in -- the
-   axis labels on every other panel are on the panel surface and keep plain
-   .gridlab.  The paper plate needs no lift at all: its --muted clears 4.94
-   on the dome, so the light rules hand it straight back.  (2.2) */
+/* The sky charts' small labels: .skylab is the scoped hook for text drawn
+   on the dome gradient rather than on the panel surface, whose rim is much
+   lighter.  From 2.2 it carried a lift of its own, because --muted reached
+   only 3.70:1 there.  Every text color now clears WCAG 4.5 and APCA Lc 60
+   on the panel AND on the dome, on both plates, so the hook points back at
+   --muted; it stays so a skin can still style dome text apart. */
 .gridlab{font-size:10px; fill:var(--muted)}
 /* Labels that sit ON the twilight bands rather than on the panel: the sun
    path's hour numbers, which follow the arc down through the bands, and the
    moon's times.  The panel-surface gray reads 3.59:1 against the night
    plate's day band and 1.03 against the paper plate's astronomical one, so
    neither plate can use it here.  The night plate has ink, which clears
-   every one of its bands at 8.52 or better.  The paper plate has nothing
-   that clears them -- not muted, not ink, not black -- so its labels read
-   against a casing of their own instead (see _band_text), which is what
-   every other mark over these bands already does.  Like .skylab in 2.2,
-   this rides alongside .gridlab: a skin with no .bandlab rule gets the
-   gridlab gray and merely misses the lift.  New in 2.4. */
+   every one of its bands at 8.52 or better, over a casing in its night
+   band's color that covers the sun's arc under the hour numbers.  The paper
+   plate has nothing that clears them -- not muted, not ink, not black -- so
+   its labels read against a casing of their own instead (see _band_text),
+   which is what every other mark over these bands already does.  Like
+   .skylab in 2.2, this rides alongside .gridlab: a skin with no .bandlab
+   rule gets the gridlab gray and merely misses the lift.  New in 2.4. */
 .bandlab{fill:var(--ink)}
 :root.theme-light .bandlab{fill:var(--muted)}
-.skylab{fill:#9FA5C4}
-:root.theme-light .skylab{fill:var(--muted)}
+.skylab{fill:var(--muted)}
 .moonlab{font-size:10px; fill:#C9D0DA}
 /* The moon's times on the sun-path chart sit ON the twilight bands, not on
    the panel, and no single color clears 4.5:1 against all five of the paper
@@ -131,9 +130,8 @@ svg text{fill:var(--ink)}
    that chart wears; the moon's #767E8A is its dot's RIM color, which held
    4.10 on white and 1.23 on the nautical band.  Fixed in 2.4. */
 :root.theme-light .moonlab{fill:var(--muted)}
-.starlab{font-size:10px; fill:#9FA5C4; font-family:Georgia, serif; font-style:italic}
-:root.theme-light .starlab{fill:var(--muted)}
-.conlab{font-size:10px; fill:#9DABD7; font-family:Georgia, serif; font-style:italic;
+.starlab{font-size:10px; fill:var(--muted); font-family:Georgia, serif; font-style:italic}
+.conlab{font-size:10px; fill:#BBC5E3; font-family:Georgia, serif; font-style:italic;
         letter-spacing:.14em; text-transform:uppercase}
 :root.theme-light .conlab{fill:#57637B}
 .bodylab{font-size:11px; fill:var(--ink); font-family:Georgia, serif}

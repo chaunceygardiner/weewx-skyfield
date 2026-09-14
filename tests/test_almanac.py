@@ -2064,6 +2064,25 @@ class TestCometBinder:
             else:
                 assert value == 0.0
 
+    def test_no_elements_keeps_each_time_context(self, tmp_path, almanac):
+        """A time tag's context is the same with elements and without, so a
+        skin formatting one by its context gets one format either way.
+        Through 2.5 `perihelion` was served `ephem_day` without elements,
+        where the orb path serves it `ephem_year` -- the shape test above
+        checks raw values only and could not see it."""
+        with_elements = {attr: getattr(almanac.halley, attr).context
+                         for attr, shape in COMET_SURFACE_SHAPES if shape == 'time'}
+        assert with_elements['perihelion'] == 'ephem_year'
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
+                           comets={'halley': '1P'}, comet_dir=str(tmp_path))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
+                                        altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            without = {attr: getattr(alm.halley, attr).context for attr in with_elements}
+        assert without == with_elements
+
     def test_no_elements_visible_change(self, tmp_path):
         s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'),
                            comets={'halley': '1P'}, comet_dir=str(tmp_path))
