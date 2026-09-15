@@ -370,8 +370,8 @@ $sky_page.pass_chart_html($almanac)
 The whole sky as it will stand at the culmination of the soonest upcoming
 [visible pass](tags.md#satellites) among the configured satellites, with the pass drawn
 across it as a dashed arc — rise and set times at the endpoints, the satellite's own dot at
-the peak — under a dated head line naming the satellite and the pass ("ISS · Sun Jun 22 ·
-03:11 → 03:21 · peak 19°").  The peak dot can be the hollow in-shadow ring: a pass is
+the peak — under a dated head line naming the satellite and the pass ("ISS · Sun, Jun 22 ·
+3:11 AM → 3:21 AM · peak 19°").  The peak dot can be the hollow in-shadow ring: a pass is
 visible when *any* of it is sunlit in a dark sky, and a morning pass often exits Earth's
 shadow just after culminating — the chart honestly shows it flaring into view mid-sky.  One chart, one epoch: the arc crosses the stars it will
 actually cross, the per-pass convention sky-charting has always used for future events (the
@@ -428,7 +428,7 @@ Today's sun, midnight to midnight, as altitude against azimuth — a dot every h
 every third.  The dashed curve is the moon's path, with the moon drawn at its true phase when
 above the plot floor; the bands below the horizon line are civil, nautical and astronomical
 twilight depth.  Moonrise, moonset and the transit are ticked and labeled on the moon's curve
-with times in the skin's format, and the curve's two ends — the moon's positions at 00:00 and
+with the page's clock times, and the curve's two ends — the moon's positions at 00:00 and
 24:00 — get dots labeled 00 and 24 when they clear the plot floor.  The curve is open between
 those ends because a lunar day runs about 50 minutes longer than a calendar day, so a day's
 track never quite closes; near full moon, when the moon transits around midnight, the break
@@ -571,7 +571,7 @@ configured.  The `chips` wrapper provides the single-column layout.
 One card per configured satellite (see [Satellites](installation.md#satellites)): its
 [next visible pass](tags.md#satellites) — the date and countdown in the countdown-chip
 idiom, rolling into "overhead now" during the pass itself, then "appears WSW · peaks 45° SSW
-· disappears NE · 6 min".  The rows are honest about nothing-to-see: a satellite with no
+· disappears NE · 6 m".  The rows are honest about nothing-to-see: a satellite with no
 visible pass in the coming week says so, and one with no usable orbital elements says
 *that*, pointing at the weewxd log — the panel never shows a stale pass.
 `$sky_page.has_satellites()` returns whether any satellites are configured, so a template
@@ -596,7 +596,7 @@ its time comes — and the next major [meteor shower](tags.md#meteor-showers) is
 there, its detail line carrying the moon's peak-night illumination as the interference
 judgment: a bright moon washes out the faint meteors, and the chip says so.  The days-to-go
 line counts local calendar days, so it always agrees with the date above it: an event just
-after midnight reads "in 1 day", and one later today reads "today at 21:14" — on the day
+after midnight reads "in 1 day", and one later today reads "today at 9:14 PM" — on the day
 itself the clock time is the one thing the chip is not already showing.  The
 `countdown` wrapper lays the chips out as a wrapping row.
 

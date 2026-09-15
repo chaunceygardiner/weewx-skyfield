@@ -214,6 +214,22 @@ class TestPanels:
             assert '>%s</text>' % body in svg
         assert 'now ' in svg
 
+    def test_ribbons_time_column_fits(self, almanac, page):
+        """The right-hand rise → set column widens for 12-hour times
+        instead of running off the 1080 viewBox, and a 24-hour language
+        keeps the layout it always had (text at x=964)."""
+        def columns(svg):
+            return [(int(x), len(re.sub(r'&#?\w+;', 'x', text)))
+                    for x, text in re.findall(
+                        r'<text x="(\d+)" y="[\d.]+" class="mono timelab">([^<]*)</text>', svg)]
+        cols = columns(page.ribbons_svg(almanac))
+        assert cols and any(' PM' in t or ' AM' in t for t in re.findall(
+            r'class="mono timelab">([^<]*)<', page.ribbons_svg(almanac)))
+        assert all(x + 6.82 * n <= 1080 - 8 for x, n in cols), cols
+        cols24 = columns(wxskyfield_sky.SkyPage(
+            {'Texts': {'%-I:%M %p': '%H:%M'}}).ribbons_svg(almanac))
+        assert {x for x, _n in cols24} == {964}
+
     def test_orrery(self, almanac, page):
         svg = page.orrery_svg(almanac)
         assert_balanced(svg)
@@ -259,15 +275,15 @@ class TestPanels:
         instants (local standard noon); the fixed ±18-minute frame; the
         USNO sign.  The brass point is TODAY's own standard-noon value,
         not the nearest weekly sample: at the June-solstice test time the
-        sundial runs '-1m 56s' behind -- negative, below the zero line --
-        where the Jun 18 grid sample would have mislabeled it '-1m 16s',
+        sundial runs '-1 m 56 s' behind -- negative, below the zero line --
+        where the Jun 18 grid sample would have mislabeled it '-1 m 16 s',
         40 seconds off."""
         svg = page.eot_svg(almanac)
         assert_balanced(svg)
         assert svg.count(' L') == 52          # the weekly curve
-        assert '-1m 56s' in svg               # today's value, signed
-        assert '-1m 16s' not in svg           # ...not the weekly sample's
-        assert '+15m' in svg and '-15m' in svg
+        assert '-1\u00a0m 56\u00a0s' in svg             # today's value, signed
+        assert '-1\u00a0m 16\u00a0s' not in svg         # ...not the weekly sample's
+        assert '>+15\u00a0m<' in svg and '>-15\u00a0m<' in svg
 
     def test_analemma(self, almanac, page):
         svg = page.analemma_svg(almanac)
@@ -315,14 +331,21 @@ class TestPanels:
 
     def test_sunpath_moon_times(self, almanac, page):
         """Moonrise, moonset and the transit are ticked on the moon's curve,
-        labeled with the report formatter's times.  On 2025-06-21 all three
-        fall inside the plotted day, and the midnight endpoints hide below
-        the plot floor, so no 00/24 open-track markers appear."""
+        labeled with the page's clock times, the format every other panel
+        uses -- not the skin's ephem_day ('16:47:33'), which they read
+        through 2.6.  On 2025-06-21 all three fall inside the plotted day,
+        and the midnight endpoints hide below the plot floor, so no 00/24
+        open-track markers appear."""
         svg = page.sunpath_svg(almanac)
         assert_balanced(svg)
-        assert '<title>Moonrise %s</title>' % almanac.moon.rise in svg
-        assert '<title>Moonset %s</title>' % almanac.moon.set in svg
-        assert '<title>Moon transit %s' % almanac.moon.transit in svg
+
+        def hm(vh):
+            return page._hm(wxskyfield_sky._raw(vh, 'unix_epoch'))
+        assert '<title>Moonrise %s</title>' % hm(almanac.moon.rise) in svg
+        assert '<title>Moonset %s</title>' % hm(almanac.moon.set) in svg
+        assert '<title>Moon transit %s' % hm(almanac.moon.transit) in svg
+        assert '>4:47 PM<' in svg or '&#8600;4:47 PM<' in svg
+        assert ':33<' not in svg                    # no seconds
         assert 'Moon at 00:00' not in svg
         assert 'Moon at 24:00' not in svg
 
@@ -369,7 +392,7 @@ class TestPanels:
         # test_almanac.py against Espenak's tables) -- and no supermoon:
         # June 2025's full moon (Jun 11) is nowhere near perigee.
         assert 'perigee' in html and 'apogee' in html
-        assert 'Jun 22 21:44' in html and 'Jul 4 19:28' in html
+        assert 'Jun 22, 9:44 PM' in html and 'Jul 4, 7:28 PM' in html
         assert 'supermoon' not in html
 
     def test_supermoon_callout(self, almanac, page):
@@ -404,7 +427,7 @@ class TestPanels:
         converts at construction -- .raw is unformatted, not unconverted.
         Every panel must render identically to a default-units report.
         Field case: group_deltatime = hour fed hours into the panels'
-        seconds arithmetic and every duration rendered as 0h 00m."""
+        seconds arithmetic and every duration rendered as 0 h 0 m."""
         groups = dict(weewx.units.MetricUnits,
                       group_deltatime='hour', group_time='unix_epoch_ms')
         with saved_almanacs():
@@ -429,8 +452,8 @@ class TestPanels:
             # Exactly one zero duration: Hale-Bopp's honest neverup (dec
             # -85 from 37N).  The units-override bug this pins against
             # zeroed EVERY row.
-            assert table.count('0h 00m') == 1
-            assert re.search(r'14h \d\dm', table)   # the solstice sun, up ~14h46m
+            assert table.count('>0\u00a0h 0\u00a0m<') == 1
+            assert re.search('>14\u00a0h \\d+\u00a0m<', table)   # the solstice sun, up ~14 h 46 m
 
     def test_header_bits(self, almanac, page):
         assert 'N' in page.header_sub(almanac)
@@ -447,7 +470,7 @@ class TestPanels:
         # eclipse (from Palo Alto in June 2025, the 2026-03-03 total
         # lunar), its date carrying the year since it can be years out.
         assert 'lunar eclipse' in countdown
-        assert 'Mar 3 2026' in countdown
+        assert 'Mar 3, 2026' in countdown
         assert 'total' in countdown
         assert page.sun_is_up(almanac) is True
 
@@ -527,7 +550,7 @@ class TestCountdownDayCount:
             wxskyfield_sky.SkyPage().countdown_html(almanac(almanac_time=morning)),
             'full moon')
         assert time.strftime('%b %-d', lt) in chip
-        assert '>today at %s<' % time.strftime('%H:%M', lt) in chip
+        assert '>today at %s<' % time.strftime('%-I:%M %p', lt) in chip
 
     def test_today_phrase_is_one_translatable_key(self):
         """The today line is a single phrase with a {time} placeholder, not
@@ -558,7 +581,42 @@ class TestCountdownDayCount:
             {'Texts': {'today at {time}': 'heute um {time}'}})
         chip = self._chip(page.countdown_html(almanac(almanac_time=morning)),
                           'full moon')
-        assert '>heute um %s<' % time.strftime('%H:%M', lt) in chip
+        assert '>heute um %s<' % time.strftime('%-I:%M %p', lt) in chip
+
+    def test_clock_times_follow_the_language(self, almanac):
+        """English prints clock times 12-hour; a language that translates
+        the clock key prints its own form, 24-hour for every bundled one."""
+        ts = wxskyfield_sky._raw(almanac.next_full_moon, 'unix_epoch')
+        lt = time.localtime(ts)
+        morning = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 30, 0, 0, 0, -1))
+        page = wxskyfield_sky.SkyPage({'Texts': {'%-I:%M %p': '%H:%M'}})
+        chip = self._chip(page.countdown_html(almanac(almanac_time=morning)),
+                          'full moon')
+        assert '>today at %s<' % time.strftime('%H:%M', lt) in chip
+
+    def test_clock_format_without_am_pm_reads_24_hour(self, monkeypatch):
+        """A locale whose AM/PM designators are empty (most of continental
+        Europe) would print a bare '8:45 ': the 12-hour format falls back
+        to 24-hour there, and is left alone where %p prints."""
+        monkeypatch.setattr(wxskyfield_sky.locale, 'nl_langinfo', lambda _item: '')
+        assert wxskyfield_sky._clock_format('%-I:%M %p') == '%H:%M'
+        assert (wxskyfield_sky._clock_format('%A, %B %-d, %Y, %-I:%M %p %Z')
+                == '%A, %B %-d, %Y, %H:%M %Z')
+        assert wxskyfield_sky._clock_format('%H:%M') == '%H:%M'
+        monkeypatch.setattr(wxskyfield_sky.locale, 'nl_langinfo', lambda _item: 'AM')
+        assert wxskyfield_sky._clock_format('%-I:%M %p') == '%-I:%M %p'
+
+    def test_bundled_languages_keep_24_hour_clocks(self):
+        """Only English reads 12-hour: every other bundled language must
+        translate the clock key, or it would silently inherit AM/PM."""
+        for code in ('de', 'fr', 'es', 'da', 'nl', 'it', 'no', 'sv'):
+            path = os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'lang',
+                                '%s.conf' % code)
+            with open(path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            assert re.search(r'^\s*"%-I:%M %p" = "%H:%M"\s*$', text, re.M), code
+            m = re.search(r'^\s*"%A, %B %-d, %Y, %-I:%M %p %Z" = "(.*)"\s*$', text, re.M)
+            assert m and '%p' not in m.group(1), code
 
     def test_event_after_midnight_reads_one_day(self, almanac):
         """The mirror case, which rounding down gets wrong: bound to 23:30
@@ -579,8 +637,8 @@ class TestCountdownDayCount:
         Below a day the row keeps its finer elapsed-time resolution."""
         assert page._sat_when(almanac, TIME_TS + 30 * 3600, None) == 'in 1 day'
         assert page._sat_when(almanac, TIME_TS + 50 * 3600, None) == 'in 2 days'
-        assert page._sat_when(almanac, TIME_TS + 3 * 3600, None) == 'in 3 h'
-        assert page._sat_when(almanac, TIME_TS + 600, None) == 'in 10 min'
+        assert page._sat_when(almanac, TIME_TS + 3 * 3600, None) == 'in 3\u00a0h'
+        assert page._sat_when(almanac, TIME_TS + 600, None) == 'in 10\u00a0m'
         assert page._sat_when(almanac, TIME_TS - 60, TIME_TS + 60) == 'overhead now'
 
 
@@ -690,8 +748,8 @@ class TestSatellitePanel:
         # the fixture noon.  (ISS spelling needs the [Almanac] texts a
         # real report supplies; bare almanacs title-case the tag name.)
         assert 'Iss' in html
-        assert 'Jun 22 03:11 · in 15 h' in html
-        assert 'appears SSW · peaks 19° SE · disappears ENE · 10 min' in html
+        assert 'Jun 22, 3:11 AM · in 15\u00a0h' in html
+        assert 'appears SSW · peaks 19° SE · disappears ENE · 10\u00a0m' in html
         # Tiangong crosses all week but never visibly: the honest dash.
         assert 'no visible pass in the coming week' in html
 
@@ -745,9 +803,9 @@ class TestSatellitePanel:
         html = page.pass_chart_html(almanac)
         assert_balanced(html)
         assert '<span class="passname">Iss</span>' in html
-        assert 'Sun Jun 22 · 03:11 → 03:21 · peak 19°' in html
-        assert '<title>Iss pass — 03:11 → 03:21, peak 19°</title>' in html
-        assert '>03:11</text>' in html and '>03:21</text>' in html
+        assert 'Sun, Jun 22 · 3:11 AM → 3:21 AM · peak 19°' in html
+        assert '<title>Iss pass — 3:11 AM → 3:21 AM, peak 19°</title>' in html
+        assert '>3:11 AM</text>' in html and '>3:21 AM</text>' in html
         assert '<g class="dome-body" data-body="iss" data-sunlit="0">' in html
         assert 'alt 19.4°, az 130.2° — in shadow' in html
         assert 'class="satlab"' in html
@@ -851,7 +909,7 @@ class TestSatellitePanel:
         assert_balanced(svg)
         assert re.search(r'<title>Iss — alt 35\.\d°, az 22\d\.\d°</title>', svg)
         assert '<g class="dome-body" data-body="iss" data-sunlit="1">' in svg
-        assert '<title>Iss pass — 03:11 → 03:21, peak 19°</title>' in chart
+        assert '<title>Iss pass — 3:11 AM → 3:21 AM, peak 19°</title>' in chart
 
     def test_shadowed_satellite_is_hollow(self, sky):
         """Pre-dawn the ISS crosses 29° up inside Earth's shadow: the
@@ -3009,6 +3067,7 @@ class TestI18n:
         'Texts': {
             'today': 'heute',
             'now {time}': 'jetzt {time}',
+            '%-I:%M %p': '%H:%M',
             'Daylight': 'Tageslicht',
             'Body': 'Körper',
             'up now — alt {alt}° · az {az}°':
@@ -3079,7 +3138,7 @@ class TestI18n:
         page = wxskyfield_sky.SkyPage({'Texts': {'now {time}': 'jetzt {tiem}'}})
         svg = page.ribbons_svg(almanac)
         assert_balanced(svg)
-        assert '>now 12:00</text>' in svg
+        assert '>now 12:00 PM</text>' in svg
         assert 'tiem' not in svg
 
     def test_shipped_lang_files_are_consistent(self):
@@ -3190,7 +3249,7 @@ class TestI18n:
         # The satellite rows: the ISS label from [Almanac], the pass line
         # translated, the compass ordinals from [[Ordinates]] (SE -> SO).
         assert '>ISS</div>' in sats
-        assert 'erscheint SSW · Höchststand 19° SO · verschwindet ONO · 10 min' in sats
+        assert 'erscheint SSW · Höchststand 19° SO · verschwindet ONO · 10\u00a0min' in sats
         assert 'kein sichtbarer Überflug in der kommenden Woche' in sats
         assert 'Berechnet mit ' + LINKED_NAME in footer
         assert 'IAU-CSN-Sternnamen' in footer

@@ -1,6 +1,38 @@
 weewx-skyfield change history
 -----------------------------
 
+2.6.1 (2026/09/15)
+------------------
+- ACTION REQUIRED only if your skin overrides the Sky page's [Texts] for
+  a date, clock or duration format: six keys are renamed, and an
+  override under the old name silently stops applying.  "%a %b %-d" is
+  now "%a, %b %-d", "%b %-d %Y" is "%b %-d, %Y", "%A, %B %-d %Y, %-H:%M
+  %Z" is "%A, %B %-d, %Y, %-I:%M %p %Z", "{h}h {m}m" is "{h} h {m} m",
+  "in {m} min" is "in {m} m", and the satellites panel's "appears {rise}
+  · peaks {alt}° {culm} · disappears {set} · {m} min" ends "{m} m".
+  A translation that is not one of the nine bundled languages should add
+  the new "%-I:%M %p" key (to "%H:%M" for 24-hour times), or its clock
+  times read 12-hour, and the new "{date}, {time}" key (to "{date} {time}"
+  for no comma).
+- Clock times on the English Sky page read 12-hour, "8:45 PM" where they
+  read "20:45": the rise and set timeline, the planet table, the chips,
+  the pass chart, the sky dome's pass times, the moon's perigee and
+  apogee, and The Sun's Path's moonrise, moonset and transit labels, which
+  had read the skin's time format with seconds ("16:47:33").  The other bundled languages keep 24-hour times.  An English
+  report running in a locale with no AM/PM reads 24-hour as well, rather
+  than printing a bare "8:45".
+- Dates carry their comma: "Aug 17, 2027" on the eclipse chip, "Sun, Jun
+  22" on the pass chart, the header's date, and a date with its time,
+  "Jun 22, 3:11 AM" on the satellites panel and the moon's perigee and
+  apogee.
+- Durations are spaced and unpadded: "14 h 6 m" where they read "14h 06m",
+  the equation of time reads "-1 m 56 s", its axis "+10 m", and a
+  satellite pass counts down "in 5 m" and lasts "6 m".  The other
+  bundled languages keep their own duration words; their minutes are no
+  longer zero-padded either.  A number never wraps away from its unit.
+- The Rise & Set panel's time column widens to fit 12-hour times rather
+  than running off the right edge.
+
 2.6 (2026/09/14)
 ----------------
 - ACTION REQUIRED only if your skin copies the Sky page's night colors

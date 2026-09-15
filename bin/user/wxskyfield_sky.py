@@ -14,6 +14,7 @@ JavaScript libraries and nothing fetched at run time.
 import datetime
 import functools
 import hashlib
+import locale
 import logging
 import math
 import re
@@ -887,8 +888,38 @@ def _tag_raw(obj: Any, path: str, unit: str) -> Optional[float]:
         return None
 
 
-def _t_hm(ts: Optional[float]) -> str:
-    return time.strftime('%H:%M', time.localtime(ts)) if ts else '&#8212;'
+def _clock_format(fmt: str) -> str:
+    """fmt, made 24-hour when the report's locale has no AM/PM.
+
+    English prints clock times 12-hour, and the format is a [Texts] key so
+    each language picks its own -- but %p comes from the locale WeeWX set
+    for the report, not from the lang file, and most non-English locales
+    define it as nothing.  An English report on such a host would print a
+    bare, ambiguous '8:45 '; the 24-hour reading is the honest one there."""
+    if '%p' not in fmt:
+        return fmt
+    try:
+        blank = locale.nl_langinfo(locale.AM_STR) == ''
+    except AttributeError:  # platform without nl_langinfo
+        blank = False
+    if not blank:
+        return fmt
+    return re.sub(r'\s*%p', '', re.sub(r'%-?I:%M', '%H:%M', fmt))
+
+
+# A number and its unit are one reading: '10 m' must never wrap to leave
+# the 'm' alone on the next line.  Applied to every duration the panels
+# write, whatever the language's unit word ('min', 't', 'h').
+_UNIT_GAP = re.compile(r'(\d) (?=[^\W\d_]{1,3}(?![^\W\d_]))')
+
+
+def _keep_units(text: str) -> str:
+    return _UNIT_GAP.sub('\\1\u00a0', text)
+
+
+def _t_hm(ts: Optional[float], fmt: str = '%H:%M') -> str:
+    return (time.strftime(_clock_format(fmt), time.localtime(ts))
+            if ts else '&#8212;')
 
 
 def _days_until(now_ts: float, ts: float) -> int:
@@ -1179,8 +1210,8 @@ class SkyPage:
     def _dur(self, seconds: Optional[float]) -> str:
         if seconds is None:
             return '&#8212;'
-        return self._t('{h}h {m}m', h=int(seconds // 3600),
-                       m='%02d' % int(seconds % 3600 // 60))
+        return _keep_units(self._t('{h} h {m} m', h=int(seconds // 3600),
+                                   m=int(seconds % 3600 // 60)))
 
     def _date(self, ts: float) -> str:
         """A short panel date.  The strftime format itself is a [Texts]
@@ -1191,7 +1222,14 @@ class SkyPage:
 
     def _date_hm(self, ts: Optional[float]) -> str:
         """A short panel date with its clock time, em-dash when unknown."""
-        return '%s %s' % (self._date(ts), _t_hm(ts)) if ts else '&#8212;'
+        if not ts:
+            return '&#8212;'
+        return self._t('{date}, {time}', date=self._date(ts), time=self._hm(ts))
+
+    def _hm(self, ts: Optional[float]) -> str:
+        """A clock time, em-dash when unknown.  The format is a [Texts]
+        key: English reads 12-hour, the other bundled languages 24-hour."""
+        return _t_hm(ts, self._t('%-I:%M %p'))
 
     # ── shared data access (plain $almanac tags) ─────────────────────────────
     def _body(self, alm, name: str) -> Dict[str, Any]:
@@ -1539,7 +1577,7 @@ class SkyPage:
         return '%.2f&#176; %s &#183; %.2f&#176; %s &#183; %s' % (
             abs(lat), _esc(hemi[0] if lat >= 0 else hemi[1]),
             abs(lon), _esc(hemi[2] if lon >= 0 else hemi[3]),
-            time.strftime(self._t('%A, %B %-d %Y, %-H:%M %Z'),
+            time.strftime(_clock_format(self._t('%A, %B %-d, %Y, %-I:%M %p %Z')),
                           time.localtime(alm.time_ts)))
 
     @_panel_guard()
@@ -1606,7 +1644,7 @@ class SkyPage:
                 # word order is the translator's to choose, and a lone "at"
                 # is a fragment no one can translate in isolation.
                 # Jacques Terrettaz's follow-up on issue #6.
-                return self._t('today at {time}', time=_t_hm(ts))
+                return self._t('today at {time}', time=self._hm(ts))
             if n == 1:
                 return self._t('in {n} day', n=1)
             return self._t('in {n} days', n=n)
@@ -1647,7 +1685,7 @@ class SkyPage:
             chips.append('<div class="count"><span class="k">%s</span>'
                          '<span class="v mono">%s</span><span class="d">%s &#183; %s</span></div>'
                          % (kind_label,
-                            time.strftime(self._t('%b %-d %Y'), time.localtime(ts)),
+                            time.strftime(self._t('%b %-d, %Y'), time.localtime(ts)),
                             type_label, when_str(ts)))
         # The next major meteor shower -- always: there is always a next
         # one, rolling to the following shower as each peak passes.  The
@@ -1733,11 +1771,12 @@ class SkyPage:
         through Cheetah and took the WHOLE page with it -- not the line,
         the page.  A Cheetah #try does not help, because the <div> is
         already written to the output stream by the time the tag fails,
-        which would leave the markup unbalanced.  The value keeps the
-        ValueHelper's own .format(), so the rendered text is unchanged
-        wherever it rendered before."""
+        which would leave the markup unbalanced.  The value goes through
+        the ValueHelper's own .format(), given the page's clock format, so
+        it reads like every other clock time on the page ("8:45 PM" in
+        English, "20:45" in the 24-hour languages)."""
         return ('<div class="mpct mono">%s</div>'
-                % self._t('moonset {time}', time=alm.moon.set.format("%H:%M")))
+                % self._t('moonset {time}', time=alm.moon.set.format(_clock_format(self._t('%-I:%M %p')))))
 
     # ── sky dome ─────────────────────────────────────────────────────────────
     @staticmethod
@@ -2087,8 +2126,8 @@ class SkyPage:
                         clip_id,
                         ' L'.join('%.1f %.1f' % pt for pt in xy),
                         self._t('{name} pass — {rise} → {set}, peak {alt}°',
-                                name=_esc(track['label']), rise=_t_hm(track['rise']),
-                                set=_t_hm(track['set']), alt='%.0f' % track['max_alt'])))
+                                name=_esc(track['label']), rise=self._hm(track['rise']),
+                                set=self._hm(track['set']), alt='%.0f' % track['max_alt'])))
             for end_i, ts in ((0, track['rise']), (-1, track['set'])):
                 x, y = xy[end_i]
                 # The ends sit on the rim; nudge each time label toward the
@@ -2099,7 +2138,7 @@ class SkyPage:
                 ly = y + 18.0 * (cy - y) / away
                 p.append('<circle cx="%.1f" cy="%.1f" r="2.2" class="sky-fill-brass"/>'
                          % (x, y))
-                labels.append(('time', lx, ly, _t_hm(ts),
+                labels.append(('time', lx, ly, self._hm(ts),
                                (cx - x) / away, (cy - y) / away))
             if track['name'] not in overhead:
                 xc, yc = xy[track['culm_i']]
@@ -2179,13 +2218,16 @@ class SkyPage:
                 # the moon's dark disc when the moon was low over the same
                 # stretch of horizon (2.18:1).
                 _k, x, y, text, ux, uy = req
-                box = (x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5)
+                # Half-width follows the text: a 12-hour '12:45 PM' is
+                # wider than the 2.0 * grid_px that fit '20:45'.
+                half = max(2.0 * grid_px, 0.31 * grid_px * len(text))
+                box = (x - half, y - grid_px, x + half, y + 5)
                 for _tries in range(5):
                     if clear(box):
                         break
                     x += ux * grid_px
                     y += uy * grid_px
-                    box = (x - 2.0 * grid_px, y - grid_px, x + 2.0 * grid_px, y + 5)
+                    box = (x - half, y - grid_px, x + half, y + 5)
                 out.append('<text x="%.1f" y="%.1f" text-anchor="middle" class="mono nowlab" '
                            'style="font-size:%.1fpx">%s</text>'
                            % (x, y + 3, grid_px, text))
@@ -2264,9 +2306,9 @@ class SkyPage:
                 % (_esc(track['label']),
                    self._t('{date} · {rise} → {set} · peak {alt}°',
                            date=_esc(time.strftime(
-                               self._t('%a %b %-d'),
+                               self._t('%a, %b %-d'),
                                time.localtime(track['culmination']))),
-                           rise=_t_hm(track['rise']), set=_t_hm(track['set']),
+                           rise=self._hm(track['rise']), set=self._hm(track['set']),
                            alt='%.0f' % track['max_alt'])))
         return head + self._sky_chart(culm, pal, pal_name, layers,
                                       PASS_STAR_MAG_LIMIT, PASS_STAR_LABEL_MAG,
@@ -2289,6 +2331,20 @@ class SkyPage:
                    if b['dist_au'] is not None]
         H = TOP + ROW * len(bodies) + 34
         plot_h = ROW * len(bodies)
+
+        def _right(b: Dict[str, Any]) -> str:
+            if b['circumpolar']:
+                return self._t('always up')
+            if b['neverup']:
+                return self._t('never up')
+            return '%s &#8594; %s' % (self._hm(b['rise']), self._hm(b['set']))
+
+        # The right-hand column is as wide as its widest entry needs: a
+        # 12-hour '12:45 PM → 12:59 PM' overruns the viewBox at the 24-hour
+        # layout's X1 (11px mono, ~0.62 em a glyph, entities one glyph).
+        rights = [_right(b) for b in bodies]
+        widest = max((len(re.sub(r'&#?\w+;', 'x', r)) for r in rights), default=0)
+        X1 = min(X1, int(1080 - 20 - 6.82 * widest))
 
         def X(ts: float) -> float:
             return X0 + (X1 - X0) * (min(max(ts, sod), eod) - sod) / 86400.0
@@ -2339,11 +2395,10 @@ class SkyPage:
                      % (cy, dot_cls))
             p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _esc(label)))
             segs: List[Tuple[float, float]] = []
+            right = rights[i]
             if b['circumpolar']:
-                segs, right = [(sod, eod)], self._t('always up')
-            elif b['neverup']:
-                right = self._t('never up')
-            else:
+                segs = [(sod, eod)]
+            elif not b['neverup']:
                 r, s = b['rise'], b['set']
                 if r is not None and s is not None:
                     segs = [(r, s)] if r <= s else [(sod, s), (r, eod)]
@@ -2351,7 +2406,6 @@ class SkyPage:
                     segs = [(r, eod)]
                 elif s is not None:
                     segs = [(sod, s)]
-                right = '%s &#8594; %s' % (_t_hm(r), _t_hm(s))
             for a, z in segs:
                 xa, xz = X(a), X(z)
                 if xz - xa < 0.5:
@@ -2373,13 +2427,13 @@ class SkyPage:
                     xt, cy - 8, xt, cy + 8, 'sky-stroke-ink', 2,
                     inner='<title>%s</title>'
                     % self._t('{name} transit {time}', name=_esc(label),
-                              time=_t_hm(b['transit']))))
+                              time=self._hm(b['transit']))))
             p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>' % (X1 + 12, cy + 4, right))
         xn = X(alm.time_ts)
         p.append(_band_tick(xn, TOP - 8, xn, TOP + plot_h, 'sky-stroke-brass',
                             1.5, cls='nowpulse'))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">%s</text>'
-                 % (xn, TOP - 14, self._t('now {time}', time=_t_hm(alm.time_ts))))
+                 % (xn, TOP - 14, self._t('now {time}', time=self._hm(alm.time_ts))))
         p.append('</svg>')
         return _svg_out(p, pal_name)
 
@@ -2645,8 +2699,8 @@ class SkyPage:
                      % (Y(m), W - 24, Y(m),
                         'sky-stroke-ink' if strong else 'sky-stroke-line',
                         '0.7' if strong else '0.5'))
-            p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%+dm</text>'
-                     % (Y(m) + 4, m) if m else
+            p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%s</text>'
+                     % (Y(m) + 4, _keep_units(self._t('{m} m', m='%+d' % m))) if m else
                      '<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">0</text>'
                      % (Y(0) + 4))
         # Month ticks and labels, by month number (never by comparing
@@ -2676,11 +2730,12 @@ class SkyPage:
         p.append('<circle cx="%.1f" cy="%.1f" r="3.5" class="sky-fill-brass"/>'
                  % (tx, ty))
         # Today's value beside the point, in the almanac convention
-        # (16m 26s style), nudged to stay inside the frame.
+        # (16 m 26 s style), nudged to stay inside the frame.
         total = int(round(abs(today['eot']) * 60.0))
-        value = '%s%dm %02ds' % ('-' if today['eot'] < 0 else '+',
-                                 total // 60, total % 60)
-        anchor = 'start' if tx < W - 96 else 'end'
+        value = _keep_units(self._t('{sign}{m} m {s} s',
+                                    sign='-' if today['eot'] < 0 else '+',
+                                    m=total // 60, s=total % 60))
+        anchor = 'start' if tx < W - 110 else 'end'
         lx = tx + (8 if anchor == 'start' else -8)
         ly = min(max(ty + 4, 14.0), H - 56.0)
         p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono nowlab">%s</text>'
@@ -2831,25 +2886,29 @@ class SkyPage:
             if alt < FLOOR:
                 continue
             x, y = X(az), Y(alt)
+            # The page's own clock format, not the ValueHelper's: through
+            # 2.6 these read the skin's ephem_day ('16:47:33') beside
+            # panels that read '4:47 PM'.
+            hm = self._hm(event_ts)
             if kind == 'transit':
                 if any(abs(x - X(eaz)) < 34 for _i, _a, eaz in ends):
                     continue
                 p.append('<g><title>%s</title>%s%s</g>'
                          % (self._t('Moon transit {time} — altitude {alt}°',
-                                    time=str(vh), alt='%.1f' % alt),
+                                    time=hm, alt='%.1f' % alt),
                             _band_tick(x, y - 3, x, y - 8, moon_ink, 1.3),
                             _band_text(x, _dodge(x, y - 12, -12), 'middle',
-                                       'mono moonlab bandlab', str(vh))))
+                                       'mono moonlab bandlab', hm)))
             else:
-                title = (self._t('Moonrise {time}', time=str(vh)) if kind == 'rise'
-                         else self._t('Moonset {time}', time=str(vh)))
+                title = (self._t('Moonrise {time}', time=hm) if kind == 'rise'
+                         else self._t('Moonset {time}', time=hm))
                 p.append('<g><title>%s</title>'
                          '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'class="%s" stroke-width="1.3"/>%s</g>'
                          % (title, x, y - 4, x, y + 4, moon_ink,
                             _band_text(x, _dodge(x, y + 15, 12), 'middle',
                                        'mono moonlab bandlab',
-                                       '%s%s' % (glyph, vh))))
+                                       '%s%s' % (glyph, hm))))
         moon = self._body(alm, 'moon')
         if moon['alt'] >= FLOOR:
             x, y = X(moon['az']), Y(moon['alt'])
@@ -3093,16 +3152,16 @@ class SkyPage:
             % (dot_style('sun'), self._t('Daylight'),
                self._t('{duration} · sun {rise} → {set}',
                        duration=self._dur(sun['visible']),
-                       rise=_t_hm(sun['rise']), set=_t_hm(sun['set'])),
+                       rise=self._hm(sun['rise']), set=self._hm(sun['set'])),
                self._t('civil dusk {dusk} · astro dark {dark}',
-                       dusk=_t_hm(tw['civil_dusk']), dark=_t_hm(tw['astro_dusk']))))
+                       dusk=self._hm(tw['civil_dusk']), dark=self._hm(tw['astro_dusk']))))
         for name in PLANETS:
             b = self._body(alm, name)
             if b['alt'] > 0:
                 line = self._t('up now — alt {alt}° · az {az}°',
                                alt='%.0f' % b['alt'], az='%.0f' % b['az'])
             elif b['rise'] is not None:
-                line = self._t('rises {time}', time=_t_hm(b['rise']))
+                line = self._t('rises {time}', time=self._hm(b['rise']))
             else:
                 line = self._t('below the horizon')
             sub = self._t('mag {mag} · {dist} au · elong {elong}°',
@@ -3139,7 +3198,7 @@ class SkyPage:
                 line = self._t('up now — alt {alt}° · az {az}°',
                                alt='%.0f' % b['alt'], az='%.0f' % b['az'])
             elif b['rise'] is not None:
-                line = self._t('rises {time}', time=_t_hm(b['rise']))
+                line = self._t('rises {time}', time=self._hm(b['rise']))
             else:
                 line = self._t('below the horizon')
             mag = '%+.1f' % b['mag'] if b['mag'] is not None else '&#8212;'
@@ -3175,9 +3234,9 @@ class SkyPage:
             return self._t('overhead now')
         delta = rise_ts - now
         if delta < 3600:
-            return self._t('in {m} min', m=max(1, int(delta // 60)))
+            return _keep_units(self._t('in {m} m', m=max(1, int(delta // 60))))
         if delta < 86400:
-            return self._t('in {h} h', h=int(round(delta / 3600.0)))
+            return _keep_units(self._t('in {h} h', h=int(round(delta / 3600.0))))
         n = max(1, _days_until(now, rise_ts))
         if n == 1:
             return self._t('in {n} day', n=1)
@@ -3198,12 +3257,12 @@ class SkyPage:
             q = d['pass']
             sub = ''
             if q is not None:
-                line = '%s %s · %s' % (self._date(q['rise']), _t_hm(q['rise']),
-                                       self._sat_when(alm, q['rise'], q['set']))
-                sub = self._t('appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} min',
+                line = '%s · %s' % (self._date_hm(q['rise']),
+                                    self._sat_when(alm, q['rise'], q['set']))
+                sub = _keep_units(self._t('appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} m',
                               rise=_esc(q['rise_ord']), alt='%.0f' % q['max_alt'],
                               culm=_esc(q['culm_ord']), set=_esc(q['set_ord']),
-                              m='%d' % round(q['duration'] / 60.0))
+                              m='%d' % round(q['duration'] / 60.0)))
             elif d['usable']:
                 line = self._t('no visible pass in the coming week')
             else:
@@ -3266,7 +3325,7 @@ class SkyPage:
                         '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%+.1f</td><td>%s</td></tr>'
                         % (_esc(name), body_color[name], edge,
                            _esc(self._label(alm, name)),
-                           _t_hm(b['rise']), _t_hm(b['transit']), _t_hm(b['set']),
+                           self._hm(b['rise']), self._hm(b['transit']), self._hm(b['set']),
                            self._dur(b['visible']), b['alt'], b['az'], b['mag'], dist))
         # Configured comets with elements get a row like any body (brass
         # dot; a dash when the MPC row has no magnitude parameters); one
@@ -3282,7 +3341,7 @@ class SkyPage:
                         '</span>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
                         '<td>%+.1f&#176;</td><td>%.1f&#176;</td><td>%s</td><td>%s</td></tr>'
                         % (_esc(name), pal['brass'], _esc(self._label(alm, name)),
-                           _t_hm(b['rise']), _t_hm(b['transit']), _t_hm(b['set']),
+                           self._hm(b['rise']), self._hm(b['transit']), self._hm(b['set']),
                            self._dur(b['visible']), b['alt'], b['az'], mag, dist))
         return ('<table><thead><tr><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'
                 '<th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th>'

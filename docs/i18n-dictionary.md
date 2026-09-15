@@ -225,7 +225,9 @@ installed extension is always the authoritative copy for your version):
     "The sun's altitude and azimuth at local standard noon for every week of the year.  The figure-eight is the sum of Earth's tilt and its elliptical orbit; the brass point is today." = "The sun's altitude and azimuth at local standard noon for every week of the year.  The figure-eight is the sum of Earth's tilt and its elliptical orbit; the brass point is today."
 
     # ── panel strings (wxskyfield_sky.py) ────────────────────────────────
-    "{h}h {m}m" = "{h}h {m}m"
+    "{h} h {m} m" = "{h} h {m} m"
+    "{m} m" = "{m} m"
+    "{sign}{m} m {s} s" = "{sign}{m} m {s} s"
     "Supermoon {date} — full moon within a day of perigee" = "Supermoon {date} — full moon within a day of perigee"
     "perigee {date}" = "perigee {date}"
     "apogee {date}" = "apogee {date}"
@@ -304,14 +306,17 @@ installed extension is always the authoritative copy for your version):
     "{dist} km" = "{dist} km"
     "{dist} au" = "{dist} au"
     "overhead now" = "overhead now"
-    "in {m} min" = "in {m} min"
+    "in {m} m" = "in {m} m"
     "in {h} h" = "in {h} h"
     # TRANSLATORS: {rise}, {culm} and {set} are COMPASS POINTS here -- "SSW",
     # "ENE" -- not times.  The pass's clock time is on the line above this
     # one.  Mind that if your language wants a preposition before a
     # direction: it may have to elide before some of the sixteen ordinals,
-    # which one format string cannot do.
-    "appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} min" = "appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} min"
+    # which one format string cannot do.  French went through exactly
+    # this in 2026-08: a native speaker proposed "apparaît au {rise}" from
+    # the rendered page, then withdrew it once he saw they were
+    # directions, and the bare form stands there as it does here.
+    "appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} m" = "appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} m"
     "no visible pass in the coming week" = "no visible pass in the coming week"
     "no usable orbital elements — see the weewxd log" = "no usable orbital elements — see the weewxd log"
     "{name} pass — {rise} → {set}, peak {alt}°" = "{name} pass — {rise} → {set}, peak {alt}°"
@@ -329,11 +334,15 @@ installed extension is always the authoritative copy for your version):
     # ── date formats (strftime) ──────────────────────────────────────────
     # A translation reorders day and month and adjusts punctuation; the
     # month and weekday NAMES (%b, %B, %A) come from strftime, i.e. the
-    # weewxd process locale.
+    # weewxd process locale.  English reads clock times 12-hour; a 24-hour
+    # language translates "%-I:%M %p" to "%H:%M", and the header's %-I:%M %p
+    # likewise.
     "%b %-d" = "%b %-d"
-    "%a %b %-d" = "%a %b %-d"
-    "%b %-d %Y" = "%b %-d %Y"
-    "%A, %B %-d %Y, %-H:%M %Z" = "%A, %B %-d %Y, %-H:%M %Z"
+    "%a, %b %-d" = "%a, %b %-d"
+    "%b %-d, %Y" = "%b %-d, %Y"
+    "%A, %B %-d, %Y, %-I:%M %p %Z" = "%A, %B %-d, %Y, %-I:%M %p %Z"
+    "%-I:%M %p" = "%-I:%M %p"
+    "{date}, {time}" = "{date}, {time}"
     "moon {pct}%" = "moon {pct}%"
     "{name} radiant — ZHR {zhr}, peak {date}" = "{name} radiant — ZHR {zhr}, peak {date}"
 ```

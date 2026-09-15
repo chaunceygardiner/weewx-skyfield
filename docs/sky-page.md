@@ -71,7 +71,7 @@ Every panel on the page can also be embedded individually in your own skin — s
 With [satellites](configuration.md#the-skyfield-section) configured, the page adds two
 panels.  A **Satellites** panel gives one card per satellite with its
 [next visible pass](tag-index.md#satellite-tags): the date and countdown, then "appears WSW ·
-peaks 45° SSW · disappears NE · 6 min"; a satellite with no visible pass in the coming week
+peaks 45° SSW · disappears NE · 6 m"; a satellite with no visible pass in the coming week
 says so honestly.  And a **Next Visible Pass** chart draws the soonest of those passes on its
 own sky: the whole sky as it will stand at the pass's culmination — one chart, one moment, so
 the dashed, time-labeled arc crosses the stars it will actually cross — under a head line
