@@ -28,8 +28,12 @@ weewx-skyfield change history
 - Durations are spaced and unpadded: "14 h 6 m" where they read "14h 06m",
   the equation of time reads "-1 m 56 s", its axis "+10 m", and a
   satellite pass counts down "in 5 m" and lasts "6 m".  The other
-  bundled languages keep their own duration words; their minutes are no
-  longer zero-padded either.  A number never wraps away from its unit.
+  bundled languages write minutes one way throughout, as "min": the
+  equation of time had read "-1m 56s" in every language, and Danish and
+  Dutch durations "14h 44m" and "14u 44m" beside "om 5 min" and "over 5
+  min"; they now read "14 h 44 min" and "14 u 44 min".  Minutes are no
+  longer zero-padded in any language, and a number never wraps away from
+  its unit.
 - The Rise & Set panel's time column widens to fit 12-hour times rather
   than running off the right edge.
 
