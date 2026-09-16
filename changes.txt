@@ -36,6 +36,11 @@ weewx-skyfield change history
   its unit.
 - The Rise & Set panel's time column widens to fit 12-hour times rather
   than running off the right edge.
+- A satellite pass just under a day away no longer counts down "in 24 h",
+  which the row's day count never prints.  The hour step rounded, so it
+  also read later than the pass was -- "in 2 h" for a pass 1 h 40 m out.
+  Every step now counts down to the whole unit reached, as the minute and
+  day steps already did.
 
 2.6 (2026/09/14)
 ----------------

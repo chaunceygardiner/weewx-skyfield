@@ -640,6 +640,14 @@ class TestCountdownDayCount:
         assert page._sat_when(almanac, TIME_TS + 3 * 3600, None) == 'in 3\u00a0h'
         assert page._sat_when(almanac, TIME_TS + 600, None) == 'in 10\u00a0m'
         assert page._sat_when(almanac, TIME_TS - 60, TIME_TS + 60) == 'overhead now'
+        # Every rung floors, at the rung boundaries themselves: one second
+        # under a day is 'in 23 h', never the 'in 24 h' that rounding gave
+        # (a countdown the day rung never prints).
+        assert page._sat_when(almanac, TIME_TS + 86399, None) == 'in 23\u00a0h'
+        assert page._sat_when(almanac, TIME_TS + 86400, None) == 'in 1 day'
+        assert page._sat_when(almanac, TIME_TS + 3599, None) == 'in 59\u00a0m'
+        assert page._sat_when(almanac, TIME_TS + 3600, None) == 'in 1\u00a0h'
+        assert page._sat_when(almanac, TIME_TS + 5400, None) == 'in 1\u00a0h'
 
 
 class TestCatalogDome:

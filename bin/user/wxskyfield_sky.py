@@ -3222,6 +3222,11 @@ class SkyPage:
         under an hour, hours under a day, then the countdown chips'
         day count.
 
+        EVERY rung floors, so a pass 23 h 59 m out reads 'in 23 h'.
+        Rounding the hour rung printed 'in 24 h' for the last half hour
+        of the day -- a countdown the day rung above it never gives, and
+        one that reads later than the pass actually is.
+
         The sub-day branches are a resolution choice on elapsed time --
         'in 2 h' is what a go-watch reader wants, whichever side of
         midnight the pass falls on -- but the day count labels a row
@@ -3236,7 +3241,7 @@ class SkyPage:
         if delta < 3600:
             return _keep_units(self._t('in {m} m', m=max(1, int(delta // 60))))
         if delta < 86400:
-            return _keep_units(self._t('in {h} h', h=int(round(delta / 3600.0))))
+            return _keep_units(self._t('in {h} h', h=int(delta // 3600)))
         n = max(1, _days_until(now, rise_ts))
         if n == 1:
             return self._t('in {n} day', n=1)
