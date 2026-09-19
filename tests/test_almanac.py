@@ -604,6 +604,28 @@ class TestVisible:
         expected = today.sun.visible.raw - yesterday.sun.visible.raw
         assert today.sun.visible_change().raw == pytest.approx(expected, abs=1.0)
 
+    @pytest.mark.parametrize('kwargs', [{}, {'horizon': -0.8333333333}])
+    @pytest.mark.parametrize('days_ago', [1, 7])
+    def test_visible_change_carries_use_center(self, almanac, kwargs, days_ago):
+        # The earlier day is measured by a second binder, which must take
+        # the caller's use_center: left at the upper limb, the sun's 16'
+        # radius lengthens the earlier day alone by about 160 seconds.
+        noon = time.mktime((2026, 9, 18, 12, 0, 0, 0, 0, -1))
+        today = almanac(almanac_time=noon + 7 * 3600, **kwargs)
+        then = almanac(almanac_time=noon - days_ago * 86400, **kwargs)
+        expected = (today.sun(use_center=1).visible.raw
+                    - then.sun(use_center=1).visible.raw)
+        assert (today.sun(use_center=1).visible_change(days_ago).raw
+                == pytest.approx(expected, abs=1.0))
+        # And the limb stays the limb: the flag is carried, not forced on.
+        limb = today.sun.visible.raw - then.sun.visible.raw
+        assert today.sun.visible_change(days_ago).raw == pytest.approx(limb, abs=1.0)
+        # The moon has a radius too, and its day length moves by minutes.
+        expected = (today.moon(use_center=1).visible.raw
+                    - then.moon(use_center=1).visible.raw)
+        assert (today.moon(use_center=1).visible_change(days_ago).raw
+                == pytest.approx(expected, abs=1.0))
+
     def test_polar_day(self, almanac):
         polar = almanac(lat=70.0, lon=25.0, altitude=0.0)
         assert polar.sun.rise.raw is None

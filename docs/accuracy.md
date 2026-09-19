@@ -57,6 +57,15 @@ this extension follows the USNO, the IAU, or Meeus — and documents the differe
   refraction is scaled from the standard 34 arcminutes, and WeeWX's documented `pressure=0`
   idiom turns it off entirely.
 
+- **`visible_change()` with `use_center=1`** (2.6.2) deviates from WeeWX's built-in almanac,
+  which is incorrect here.  The tag is today's time above the horizon minus an earlier
+  day's, and the two must be measured the same way: this extension measures both to the
+  body's center.  WeeWX, as of 5.5.0, measures today to the center and the earlier day to
+  the upper limb, which adds the body's radius to the earlier day alone —
+  `$almanac.sun(use_center=1).visible_change()` then reads about 160 seconds too negative
+  at mid-latitudes.  The error is in WeeWX's almanac, not in PyEphem itself.  Without
+  `use_center` the two almanacs agree.
+
 - **`$almanac.separation()`** takes two `(longitude, latitude)` tuples in radians and returns
   radians, per the WeeWX 5.2 almanac API.  It also accepts two of this almanac's own body
   binders — `$almanac.separation($almanac.mars, $almanac.venus)` — computed natively.  Calls

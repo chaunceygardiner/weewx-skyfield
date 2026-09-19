@@ -1,6 +1,19 @@
 weewx-skyfield change history
 -----------------------------
 
+2.6.2 (2026/09/19)
+------------------
+- A deviation from WeeWX's built-in almanac, which is incorrect here:
+  visible_change() with use_center=1 measures both days to the body's
+  center.  WeeWX measures today to the center and the earlier day to the
+  upper limb, so the sun's radius goes into the earlier day alone and
+  $almanac.sun(use_center=1).visible_change() reads about 160 seconds
+  too negative: a day "2 minutes, 22 seconds" shorter than the one
+  before prints as "5 minutes, 3 seconds".  This extension had given
+  WeeWX's answer since 1.0; it now gives the correct one, for the moon
+  as for the sun.  Without use_center the two almanacs agree and nothing
+  changes.  See "Differences from PyEphem" in the manual's accuracy page.
+
 2.6.1 (2026/09/15)
 ------------------
 - ACTION REQUIRED only if your skin overrides the Sky page's [Texts] for

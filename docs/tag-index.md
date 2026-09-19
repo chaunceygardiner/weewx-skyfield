@@ -128,7 +128,7 @@ star and every configured comet.
 | `previous_transit` | time | 1.0 | | |
 | `previous_antitransit` | time | 1.0 | | |
 | `visible` | duration | 1.0 | | How long the body is above the horizon on the almanac's day. |
-| `visible_change(days_ago=1)` | duration | 1.0 | | **A method, not an attribute** — call it.  The change in `visible` against a day ago, anchored at local noon so DST cannot skew it. |
+| `visible_change(days_ago=1)` | duration | 1.0 | | **A method, not an attribute** — call it.  The change in `visible` against a day ago, anchored at local noon so DST cannot skew it.  With `use_center=1` it deviates from WeeWX's built-in almanac (2.6.2) — see [Accuracy and conventions](accuracy.md#differences-from-pyephem). |
 | `circumpolar` | bool | 1.0 | | Never sets, judged against the same effective horizon as `rise`/`set`. |
 | `neverup` | bool | 1.0 | | Never rises. |
 

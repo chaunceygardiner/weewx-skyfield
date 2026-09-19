@@ -61,7 +61,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.6.1'
+WXSKYFIELD_VERSION = '2.6.2'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -3148,7 +3148,15 @@ class SkyfieldAlmanacBinder:
         # 86400 is 23:30 PST two calendar days back).
         then_almanac = self.almanac(
             almanac_time=self.start_of_day_ts() + 43200 - days_ago * 86400)
-        then_visible = getattr(then_almanac, self.heavenly_body).visible
+        # The almanac's own arguments (horizon, temperature, pressure) carry
+        # into then_almanac; use_center lives on the binder and does not.
+        # Left at the upper limb, the earlier day alone gains the body's
+        # radius at both ends: about 160 seconds for the sun.  WeeWX's own
+        # visible_change leaves it there (5.5.0), so carrying it is a
+        # deliberate deviation from the built-in almanac.
+        then_binder = getattr(then_almanac, self.heavenly_body)(
+            use_center=self.use_center)
+        then_visible = then_binder.visible
         if today_visible.value_t[0] is None or then_visible.value_t[0] is None:
             # Either day has no answer (a comet without elements): an
             # honest empty ValueHelper, not a TypeError from None math.
