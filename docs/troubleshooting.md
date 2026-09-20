@@ -119,8 +119,8 @@ while you are editing rather than months later.  WeeWX skips the whole page and 
 previous copy on disk, which is why it looks stale rather than broken, and logs
 `Evaluation of template … failed with exception '<class 'user.wxskyfield_sky.SkyPageUsageError'>'`
 followed by a `**** Reason:` line naming what is wrong.  The usual causes: a `label_scale`
-that is not a positive number, or a `label_layers` entry that is not a `(scale, media_query)`
-pair, repeats a scale, or has a query using anything but letters, digits, spaces and
+that is not a positive number, a `narrow` value that is neither true nor false, or a
+`label_layers` entry that is not a `(scale, media_query)` pair, repeats a scale, or has a query using anything but letters, digits, spaces and
 `: ( ) , . -` with its parentheses balanced — for example
 `label_layers media query '(width < 600px)' is not usable: … for example '(max-width: 600px)'`.
 The range syntax `(width < 600px)` is always refused, because the query is written inside

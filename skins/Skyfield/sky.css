@@ -73,6 +73,27 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
   .sec-sunpath svg, .sec-orrery svg, .sec-analemma svg,
   .sec-passchart svg{max-width:560px; margin:0 auto}
 }
+/* The two frames.  Every chart panel carries both drawings -- the wide
+   one this page has always shown and the narrow one built for a phone
+   (see the `narrow` argument in docs/panels.md) -- and the viewport picks
+   which to show.  Nothing is fetched and nothing is scripted: the drawing
+   the reader does not need is simply not displayed.
+   The breakpoint is 600px because that is where the wide drawings' labels
+   fall below 11px on the glass; it is deliberately well under the 1159px
+   layout breakpoint, since a tablet in portrait has room for the wide
+   drawings and should get them. */
+.sky-phone{display:none}
+@media (max-width: 600px){
+  .sky-desk{display:none}
+  .sky-phone{display:block}
+  /* The narrow frame is 360 user units across and sets its type at 15 of
+     them, which reads at 11px only if the drawing gets roughly 270px of a
+     320px screen.  Padding is what stands between the two, so the phone
+     layout spends less of it than the desk layout does. */
+  body{padding:20px 10px 28px}
+  section{padding:14px 12px 12px}
+  header{padding-bottom:16px}
+}
 .chips{display:flex; flex-direction:column; gap:9px}
 .chip{display:flex; gap:10px; align-items:flex-start; border-bottom:1px solid var(--line);
       padding:7px 2px}

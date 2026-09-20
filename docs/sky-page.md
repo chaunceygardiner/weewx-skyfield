@@ -104,6 +104,27 @@ It is the busiest single page this extension generates, and
 [result cache](performance.md#the-result-cache) absorbs most of it, and which options move
 the needle on hardware that is struggling.
 
+### On a phone
+
+Since 2.7 every chart on this page is drawn **twice**: the wide drawing you see above, and a
+second one laid out for a hand — 360 units across, its labels set at a size that reads at 11 px
+or better on a 320 px screen, its gutters cut for words that size, and whatever will not fit
+thinned rather than shrunk.  Below 600 px the page shows the narrow drawings and hides the
+wide ones; above it, the other way round.  Nothing is fetched and nothing is scripted; the
+drawing you are not being shown is simply not displayed.
+
+This is not the wide drawing magnified.  Shown at a phone's width the wide charts put their
+axis labels at 2.5 px and the dome's star names at 3.3 — and simply enlarging that type would
+push the words into gutters and label pitches cut for small ones, where they collide and clip.
+The narrow drawing has its own geometry throughout, and gives up detail rather than legibility:
+hours numbered every six instead of every three, half the lunation's phase discs at twice the
+size, month names thinned, and a star census cut to magnitude 4.0 so the smaller sky is no
+denser than the big one.  Every body, every curve and every twilight band is still there.
+
+The cost is about 28 KB more over the wire and a second of generation — see
+[Two frames](performance.md#two-frames).  A skin embedding the panels gets the same
+argument: [`narrow`](panels.md#two-frames--the-narrow-argument).
+
 ### The two plates
 
 Everything above is the default `theme = dark`.  `theme = light` draws the same page on a

@@ -11,6 +11,7 @@ Cheetah template and skin.conf must parse.
 
 import contextlib
 import inspect
+import itertools
 import logging
 import os
 import re
@@ -115,6 +116,54 @@ class TestPanels:
         assert '<title>Mars' in svg
         # Stars render (dimmed by daylight, but present).
         assert 'starlab' in svg
+
+    def test_each_altitude_ring_carries_its_own_number(self, almanac, page):
+        """The dome's 30 and 60 degree rings are labeled with the altitude
+        they actually are.
+
+        They were not, from 1.0 until 2.7 -- the first release drew both
+        rings and both numbers and crossed them.  The ring radius and the label
+        were written as separate constants -- R/3 beside "30", 2R/3 beside
+        "60" -- and crossed, so the inner ring read 30 and the outer 60,
+        each naming the other.  The trap is the projection: the zenith is
+        the CENTER of this chart and the horizon is the rim, so altitude
+        counts DOWN as the radius counts up, and the first ring out from
+        the middle is 60, not 30.
+
+        Read off the rendered chart by GEOMETRY, not by pinning the two
+        strings: each number is matched to the ring it is actually drawn
+        against, and the ring's own radius says what altitude that is.  A
+        later edit that moves a ring or renames a label has to keep them
+        together or fail here."""
+        for narrow in (False, True):
+            for name in ('dome_svg', 'pass_chart_html'):
+                svg = getattr(page, name)(almanac, narrow=narrow)
+                rim = re.search(r'<circle cx="(\d+)" cy="\d+" r="(\d+)" fill="none" '
+                                r'class="sky-stroke-dome-rim"', svg)
+                assert rim, (name, narrow)
+                cx, R = float(rim.group(1)), float(rim.group(2))
+                # The altitude rings: the dashed circles on the dome.
+                rings = [float(m) for m in re.findall(
+                    r'<circle cx="\d+" cy="\d+" r="([\d.]+)" fill="none" '
+                    r'class="sky-stroke-grid" stroke-width="1" '
+                    r'stroke-dasharray="3 5"', svg)]
+                assert len(rings) == 2, (name, narrow, rings)
+                seen = []
+                for x, alt in re.findall(
+                        r'<text x="(\d+)" y="\d+" text-anchor="middle" '
+                        r'class="mono gridlab skylab"[^>]*>(\d+)&#176;</text>', svg):
+                    # The ring this number is drawn against: the label sits
+                    # a few units OUTSIDE its own ring, clear of the line.
+                    off = float(x) - cx
+                    near = [r for r in rings if 0 < off - r <= 10]
+                    assert len(near) == 1, (name, narrow, alt, off, rings)
+                    drawn_alt = 90.0 - 90.0 * near[0] / R
+                    assert drawn_alt == pytest.approx(float(alt), abs=0.6), (
+                        '%s%s: the label reading %s deg is drawn on the '
+                        '%.0f deg ring' % (name, ' narrow' if narrow else '',
+                                           alt, drawn_alt))
+                    seen.append(int(alt))
+                assert sorted(seen) == [30, 60], (name, narrow, seen)
 
     def test_dome_comet_markers(self, almanac, page):
         """Configured comets always plot when risen, always labeled --
@@ -992,6 +1041,295 @@ class TestSatellitePanel:
         assert 'satlab' not in svg
 
 
+class TestFrames:
+    """Two drawings, not one drawing scaled (2.7).
+
+    Every chart builder takes a FRAME.  The wide frame is what this file
+    has always drawn and its numbers are frozen -- `narrow=False` is the
+    default and must produce exactly what a caller got before frames
+    existed.  The narrow frame is a second drawing at 360 units across
+    with its type set for a hand, its gutters cut for that type, and
+    whatever will not fit thinned rather than shrunk.
+
+    These are markup checks.  The claim that actually matters -- that a
+    label reads at 11px or better ON THE GLASS, and that nothing is
+    clipped getting there -- is a measurement only a browser can make, and
+    it lives in tests/verify_narrow_frame.py, which
+    test_the_narrow_frame_reads_on_a_phone runs."""
+
+    SKY_CHARTS = ('dome_svg', 'pass_chart_html')
+    # The charts that take their type from the consuming stylesheet; the
+    # two sky charts set every label inline instead (see
+    # test_the_sky_charts_size_their_own_labels_instead).
+    AXIS_CHARTS = ('ribbons_svg', 'sunpath_svg', 'daylength_svg',
+                   'lunation_svg', 'orrery_svg', 'analemma_svg', 'eot_svg')
+    CHARTS = SKY_CHARTS + AXIS_CHARTS
+    # Which label classes an AXIS chart styles from the stylesheet rather
+    # than inline, and so must declare for itself on the narrow frame.
+    FROM_STYLESHEET = ('gridlab', 'rowlab', 'timelab', 'nowlab', 'todaylab',
+                       'moonlab', 'bodylab')
+
+    @staticmethod
+    def _texts(svg, cls):
+        """Every <text> whose class attribute is exactly `cls`, as
+        (anchor, content).  Exact, not "contains": the sun path draws
+        `mono gridlab` axis numbers and `mono gridlab bandlab` hour
+        numbers, and they are different labels with different jobs."""
+        return [(re.search(r'text-anchor="(\w+)"', tag).group(1)
+                 if 'text-anchor' in tag else 'start', body)
+                for tag, body in re.findall(r'(<text [^>]*>)([^<]*)</text>', svg)
+                if re.search(r'class="([^"]*)"', tag)
+                and re.search(r'class="([^"]*)"', tag).group(1) == cls]
+
+    def test_the_default_frame_is_the_wide_one(self, almanac, page):
+        """The whole compatibility promise in one assertion: a caller that
+        never heard of frames gets the drawing it always got, and asking
+        for the wide frame by name is the same thing.  (That this is the
+        drawing 2.6.2 shipped was proved against hashes of every panel at
+        two dates and both plates while the frames were written; what can
+        be kept as a standing test is the invariant, not a frozen hash,
+        which would fire on every deliberate change instead.)"""
+        for plate in ('night', 'light'):
+            for name in self.CHARTS:
+                default = getattr(page, name)(almanac, palette=plate)
+                asked = getattr(page, name)(almanac, palette=plate, narrow=False)
+                assert default == asked, (plate, name)
+                assert 'sky-narrow' not in default, (plate, name)
+
+    def test_a_narrow_drawing_is_its_own_drawing(self, almanac, page):
+        """It carries the class its type rules are scoped to, it is 360
+        units across, and it is not the wide drawing."""
+        for plate in ('night', 'light'):
+            for name in self.CHARTS:
+                wide = getattr(page, name)(almanac, palette=plate)
+                narrow = getattr(page, name)(almanac, palette=plate, narrow=True)
+                assert_balanced(narrow)
+                assert narrow != wide, (plate, name)
+                assert 'class="sky sky-%s sky-narrow"' % plate in narrow, (plate, name)
+                vb = re.search(r'viewBox="0 0 (\d+) (\d+)"', narrow)
+                assert vb and int(vb.group(1)) == 360, (name, vb and vb.group(0))
+
+    def test_narrow_is_checked(self, almanac, page):
+        """A template author's mistake fails loudly rather than quietly
+        drawing the other frame -- the rule label_scale follows (2.5).  The
+        words are accepted because a skin option arrives as text."""
+        for good, want_narrow in (('true', True), ('false', False),
+                                  (True, True), (False, False)):
+            svg = page.eot_svg(almanac, narrow=good)
+            assert ('sky-narrow' in svg) is want_narrow, good
+        for bad in ('maybe', '', None, 2.5, [], object()):
+            with pytest.raises(wxskyfield_sky.SkyPageUsageError):
+                page.eot_svg(almanac, narrow=bad)
+
+    def test_the_wide_type_table_matches_the_stylesheet(self):
+        """WIDE_TYPE_PX is what the code believes the stylesheet sets, and
+        it uses that belief to place labels beside their marks and to size
+        the sky charts' inline type.  The two drifting apart is silent: the
+        collision layout would reserve room for 10px words the browser drew
+        at 13, and they would overlap with every test still green."""
+        with open(os.path.join(REPO_ROOT, 'skins', 'Skyfield', 'sky.css')) as f:
+            css = re.sub(r'/\*.*?\*/', ' ', f.read(), flags=re.S)
+        sizes = {}
+        for sel, body in re.findall(r'([^{}]+)\{([^{}]*)\}', css):
+            sel = ' '.join(sel.split())
+            m = re.search(r'(?:^|;)\s*font-size:\s*(\d+(?:\.\d+)?)px', body)
+            if m and re.fullmatch(r'\.[a-z]+', sel):
+                sizes[sel[1:]] = float(m.group(1))
+        # Every class the stylesheet sizes and the table names must agree;
+        # a class the table names and the stylesheet does not size is one
+        # the sky charts set inline (satlab), and is not this test's
+        # business.
+        shared = sorted(set(sizes) & set(wxskyfield_sky.WIDE_TYPE_PX))
+        assert len(shared) >= 8, shared
+        for cls in shared:
+            assert wxskyfield_sky.WIDE_TYPE_PX[cls] == sizes[cls], cls
+        for cls in self.FROM_STYLESHEET:
+            assert cls in sizes, cls
+
+    def test_a_narrow_chart_declares_the_type_it_used(self, almanac, page):
+        """An axis chart takes its type from the consuming stylesheet,
+        which is right for the wide frame and impossible for the narrow
+        one: its gutters and its thinning were computed from 15-unit type,
+        and a consumer's stylesheet says 10.  So the narrow drawing brings
+        its own sizes -- for the classes it actually drew, and no others.
+        That these rules WIN against `.gridlab{font-size:10px}` is claim 3
+        of verify_narrow_frame.py; a :where() rule would lose."""
+        for name in self.AXIS_CHARTS:
+            wide = getattr(page, name)(almanac)
+            narrow = getattr(page, name)(almanac, narrow=True)
+            assert 'svg.sky-narrow' not in wide, name
+            used = set()
+            for attr in re.findall(r'class="([^"]*)"', narrow):
+                used |= set(attr.split())
+            declared = set(re.findall(r'svg\.sky-narrow \.([a-z]+)\{font-size:',
+                                      narrow))
+            assert declared == used & set(wxskyfield_sky.NARROW_TYPE_PX), name
+            for cls in declared:
+                assert ('svg.sky-narrow .%s{font-size:%gpx}'
+                        % (cls, wxskyfield_sky.NARROW_TYPE_PX[cls])) in narrow
+
+    def test_the_sky_charts_size_their_own_labels_instead(self, almanac, page):
+        """The dome and the pass chart are the exception, and deliberately
+        so: every label they draw carries its size inline, because the
+        collision layout has to agree with what the browser renders.  A
+        style rule for those classes would be a claim the inline attribute
+        then overrides -- true today, a lie the moment a caller passes
+        label_scale."""
+        for name in self.SKY_CHARTS:
+            narrow = getattr(page, name)(almanac, narrow=True)
+            assert 'svg.sky-narrow' not in narrow, name
+            for cls, px in (('starlab', 15.0), ('bodylab', 16.0),
+                            ('cardinal', 17.0)):
+                assert 'class="%s" style="font-size:%.1fpx"' % (cls, px) in narrow \
+                    or 'class="mono %s" style="font-size:%.1fpx"' % (cls, px) in narrow, \
+                    (name, cls)
+
+    def test_a_scale_multiplies_the_frame_rather_than_replacing_it(
+            self, almanac, page):
+        """The one place two knobs meet.  The frame sets the base size and
+        label_scale multiplies it, so label_scale=1 means "this frame's own
+        type" on either frame -- and a narrow chart asked for label layers
+        lays out one layer per scale from the narrow base, not from 680's."""
+        narrow = page.dome_svg(almanac, narrow=True, label_scale=2.0)
+        assert 'style="font-size:32.0px"' in narrow      # bodylab 16 x 2
+        assert 'style="font-size:30.0px"' in narrow      # starlab 15 x 2
+        layered = page.dome_svg(almanac, narrow=True,
+                                label_layers=[(2.0, '(max-width: 600px)')])
+        assert 'data-label-scale="1"' in layered
+        assert 'data-label-scale="2"' in layered
+        assert 'style="font-size:16.0px"' in layered     # the narrow base
+        assert 'style="font-size:32.0px"' in layered
+
+    def test_the_narrow_frame_thins_what_will_not_fit(self, almanac, page):
+        """What the frame gives up, panel by panel, and it is always words
+        or samples -- never a body, a curve or a band.  Counted from the
+        rendered drawings, so a thinning rule that stopped firing shows up
+        here rather than as a smear of overprinted type on a phone."""
+        # Hour scales: numbered every six hours rather than every three.
+        for name, wide_n, narrow_n in (('ribbons_svg', 9, 5),
+                                       ('daylength_svg', 9, 5)):
+            wide = getattr(page, name)(almanac)
+            narrow = getattr(page, name)(almanac, narrow=True)
+            assert len(self._texts(wide, 'mono gridlab')) >= wide_n, name
+            hours = [t for _a, t in self._texts(narrow, 'mono gridlab')
+                     if re.fullmatch(r'\d\d', t)]
+            assert len(hours) == narrow_n, (name, hours)
+            # ... and every RULE still draws: the hours are still there.
+            assert narrow.count('stroke-dasharray') >= 0
+        # The lunation strip samples fifteen discs rather than thirty.
+        for narrow, want in ((False, 30), (True, 15)):
+            svg = page.lunation_svg(almanac, narrow=narrow)
+            assert svg.count('% illuminated') == want, narrow
+        # The dome's star census is cut back to what half the area holds.
+        wide_stars = page.dome_svg(almanac).count('class="sky-fill-ink"')
+        narrow_stars = page.dome_svg(almanac, narrow=True).count(
+            'class="sky-fill-ink"')
+        assert 0 < narrow_stars < wide_stars / 2.0, (narrow_stars, wide_stars)
+        # Neither analemma axis carries more than five numbers.
+        analemma = page.analemma_svg(almanac, narrow=True)
+        degrees = self._texts(analemma, 'mono gridlab')
+        for anchor in ('end', 'middle'):
+            axis = [t for a, t in degrees if a == anchor and '&#176;' in t]
+            assert 1 <= len(axis) <= 5, (anchor, axis)
+
+    def test_both_frames_tell_the_same_story(self, almanac, page):
+        """Thinning drops WORDS.  Every body the wide drawing places, the
+        narrow one places too -- a frame that quietly lost a planet would
+        pass every check above."""
+        for name in ('dome_svg', 'pass_chart_html'):
+            bodies = []
+            for narrow in (False, True):
+                svg = getattr(page, name)(almanac, narrow=narrow)
+                bodies.append(set(re.findall(
+                    r'<g class="dome-body[^"]*" data-body="([^"]+)"', svg)))
+            assert bodies[0] == bodies[1], name
+            assert bodies[0]
+        wide_rows = self._texts(page.ribbons_svg(almanac), 'mono timelab')
+        narrow_rows = self._texts(page.ribbons_svg(almanac, narrow=True),
+                                  'mono timelab')
+        assert [t for _a, t in wide_rows] == [t for _a, t in narrow_rows]
+
+    def test_the_narrow_sky_charts_declare_their_geometry(self, almanac, page):
+        """A live page repositions a mark by projecting alt/az itself,
+        which takes the dome's center and radius -- and those are no longer
+        one pair for every chart.  The narrow chart says what it drew; the
+        wide one says nothing, because its numbers are frozen and published
+        (340/348/296 of a 680x706 viewBox).
+
+        Checked by PROJECTING: the declared geometry has to be the geometry
+        the marks were actually placed with, which a pair of attributes
+        copied from a comment would not be."""
+        for name in ('dome_svg', 'pass_chart_html'):
+            assert 'data-dome-cx' not in getattr(page, name)(almanac), name
+            narrow = getattr(page, name)(almanac, narrow=True)
+            geo = re.search(r'data-dome-cx="(\d+)" data-dome-cy="(\d+)" '
+                            r'data-dome-r="(\d+)"', narrow)
+            assert geo, name
+            cx, cy, R = (float(g) for g in geo.groups())
+            assert 0 < R < cx and cx == 180.0, (name, cx, R)
+        # The dome is the sky at the almanac's own instant, so the chart's
+        # marks can be checked against the tags any template would read.
+        narrow = page.dome_svg(almanac, narrow=True)
+        geo = re.search(r'data-dome-cx="(\d+)" data-dome-cy="(\d+)" '
+                        r'data-dome-r="(\d+)"', narrow)
+        cx, cy, R = (float(g) for g in geo.groups())
+        checked = 0
+        for body in ('moon', 'jupiter', 'saturn'):
+            binder = getattr(almanac, body)
+            if binder.alt <= 0:
+                continue
+            want = wxskyfield_sky.SkyPage._dome_xy(cx, cy, R, binder.az, binder.alt)
+            g = re.search(r'<g class="dome-body" data-body="%s">(.*?)</g>' % body,
+                          narrow, re.S)
+            assert g, body
+            mark = re.search(r'c[xX]="([-\d.]+)" c[yY]="([-\d.]+)"', g.group(1))
+            got = (float(mark.group(1)), float(mark.group(2)))
+            assert got == pytest.approx(want, abs=0.2), (body, got, want)
+            checked += 1
+        assert checked >= 2, 'no body was above the horizon to check'
+
+    def test_the_two_frames_do_not_share_an_svg_id(self, almanac, page):
+        """An id is global to the HTML document and the FIRST element wins
+        every url(#id) on it -- which is why 2.4 put the plate name in
+        these.  The frame has to join it, and against a sharper failure
+        than the plate's: the two frames' clip circles are DIFFERENT
+        circles, so a narrow dome placed after a wide one would have its
+        constellation figures trimmed at the wide dome's rim.  A page that
+        shows both frames is the whole point of having two, so this is the
+        ordinary case, not a corner.  (The validator calls the duplicate id
+        an error too; this says why it mattered.)"""
+        for name in self.SKY_CHARTS:
+            both = (getattr(page, name)(almanac)
+                    + getattr(page, name)(almanac, narrow=True))
+            ids = re.findall(r'<(?:radialGradient|clipPath) id="([^"]+)"', both)
+            assert len(ids) == 4, (name, ids)
+            assert len(set(ids)) == 4, (name, ids)
+        # ... and the narrow chart's clip circle is the narrow dome, not a
+        # differently-named copy of the wide one.
+        narrow = page.dome_svg(almanac, narrow=True)
+        clip = re.search(r'<clipPath id="[^"]+"><circle cx="(\d+)" cy="(\d+)" '
+                         r'r="(\d+)"/></clipPath>', narrow)
+        assert clip, narrow[:400]
+        geo = re.search(r'data-dome-cx="(\d+)" data-dome-cy="(\d+)" '
+                        r'data-dome-r="(\d+)"', narrow)
+        assert clip.groups() == geo.groups(), (clip.groups(), geo.groups())
+
+    def test_the_narrow_frame_reads_on_a_phone(self):
+        """The measurement the markup cannot make: every label at 11px or
+        better on the glass at 320 and 390 CSS px, nothing clipped, the
+        narrow type rules beating the stylesheet, and exactly one frame on
+        show.  Runs the real page in Chromium.  Costs about 18 seconds, 15
+        of which is a fresh process evaluating the almanac for the year's
+        worth of weekly samples the solar-year panel needs."""
+        script = os.path.join(TEST_DIR, 'verify_narrow_frame.py')
+        if not os.path.exists(os.path.join(REPO_ROOT, 'tools', 'pwenv',
+                                           'bin', 'python')):
+            pytest.skip('no browser environment (tools/pwenv)')
+        proc = subprocess.run([sys.executable, script], capture_output=True,
+                              text=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 class TestLabelLayers:
     """A sky chart can carry its labels laid out at more than one scale,
     for a page that serves a phone and a desktop layout from one URL: the
@@ -1654,13 +1992,29 @@ class TestClassContract:
                      'analemma_svg', 'eot_svg', 'sunpath_svg',
                      'daylength_svg', 'lunation_svg')
 
+    @staticmethod
+    def _renders(page, almanac, name, plate):
+        """(label, svg) for every FRAME this renderer draws.  A narrow
+        drawing carries the same role classes as its wide twin and has to
+        keep the same contract -- and it is nearly free to check, the two
+        sharing one page's memoized evaluations.  moon_svg takes a size
+        rather than a frame: the disc has no labels to set."""
+        yield name, getattr(page, name)(almanac, palette=plate)
+        if name != 'moon_svg':
+            yield '%s narrow' % name, getattr(page, name)(
+                almanac, palette=plate, narrow=True)
+
+    # The classes on the <svg> root that SCOPE the style block rather than
+    # paint anything: the plate, and (2.7) the narrow frame's type rules.
+    SCOPING = ('sky-night', 'sky-light', wxskyfield_sky.NARROW_CLASS)
+
     def _classes_on_marks(self, svg):
         """Every sky- role class used in a class ATTRIBUTE (never the style
-        block's own selectors), and the root plate class dropped."""
+        block's own selectors), with the root's scoping classes dropped."""
         out = set()
         for attr in re.findall(r'class="([^"]*)"', svg):
             out |= {c for c in attr.split()
-                    if c.startswith('sky-') and c not in ('sky-night', 'sky-light')}
+                    if c.startswith('sky-') and c not in self.SCOPING}
         return out
 
     def test_every_panel_carries_its_plate_class(self, almanac, page):
@@ -1670,8 +2024,8 @@ class TestClassContract:
         inline SVG being document-wide in an HTML page."""
         for plate in ('night', 'light'):
             for name in self.SVG_RENDERERS:
-                svg = getattr(page, name)(almanac, palette=plate)
-                assert 'class="sky sky-%s"' % plate in svg, (plate, name)
+                for label, svg in self._renders(page, almanac, name, plate):
+                    assert 'class="sky sky-%s' % plate in svg, (plate, label)
 
     def test_the_style_block_defines_every_class_a_mark_uses(self, almanac, page):
         """A class on a mark with no default beside it renders unpainted --
@@ -1681,10 +2035,10 @@ class TestClassContract:
         endpoint dots before the class existed."""
         for plate in ('night', 'light'):
             for name in self.SVG_RENDERERS:
-                svg = getattr(page, name)(almanac, palette=plate)
-                for cls in self._classes_on_marks(svg):
-                    assert ':where(.%s){' % cls in svg, (
-                        '%s %s: %s has no default' % (plate, name, cls))
+                for label, svg in self._renders(page, almanac, name, plate):
+                    for cls in self._classes_on_marks(svg):
+                        assert ':where(.%s){' % cls in svg, (
+                            '%s %s: %s has no default' % (plate, label, cls))
 
     def test_the_style_block_defines_nothing_a_mark_does_not_use(
             self, almanac, page):
@@ -1692,16 +2046,17 @@ class TestClassContract:
         panel carries its own roles -- and each of those roles in the other
         paint channel, for the swap below -- and not the whole palette."""
         for name in self.SVG_RENDERERS:
-            svg = getattr(page, name)(almanac)
-            used = self._classes_on_marks(svg)
-            want = set(used)
-            for cls in used:
-                partner = wxskyfield_sky._partner(cls)
-                if partner in wxskyfield_sky._sky_classes(
-                        wxskyfield_sky.PALETTES['night']):
-                    want.add(partner)
-            defined = set(re.findall(r':where\(\.(sky-[a-z0-9-]+)\)\{', svg))
-            assert defined == want, (name, sorted(defined ^ want))
+            for label, svg in self._renders(page, almanac, name, 'night'):
+                used = self._classes_on_marks(svg)
+                want = set(used)
+                for cls in used:
+                    partner = wxskyfield_sky._partner(cls)
+                    if partner in wxskyfield_sky._sky_classes(
+                            wxskyfield_sky.PALETTES['night']):
+                        want.add(partner)
+                defined = set(re.findall(
+                    r':where\(\.(sky-[a-z0-9-]+)\)\{', svg))
+                assert defined == want, (label, sorted(defined ^ want))
 
     def test_a_swapped_mark_still_has_a_default(self, almanac, page):
         """The guarantee the documented flip technique stands on.
@@ -1717,15 +2072,16 @@ class TestClassContract:
         consumer's code review, in the technique this repo recommends."""
         for plate in ('night', 'light'):
             for name in self.SVG_RENDERERS:
-                svg = getattr(page, name)(almanac, palette=plate)
-                for cls in self._classes_on_marks(svg):
-                    partner = wxskyfield_sky._partner(cls)
-                    if partner is None or partner not in wxskyfield_sky._sky_classes(
-                            wxskyfield_sky.PALETTES[plate]):
-                        continue
-                    assert ':where(.%s){' % partner in svg, (
-                        '%s %s: swapping %s asks for %s, which has no default'
-                        % (plate, name, cls, partner))
+                for label, svg in self._renders(page, almanac, name, plate):
+                    for cls in self._classes_on_marks(svg):
+                        partner = wxskyfield_sky._partner(cls)
+                        if partner is None or partner not in \
+                                wxskyfield_sky._sky_classes(
+                                    wxskyfield_sky.PALETTES[plate]):
+                            continue
+                        assert ':where(.%s){' % partner in svg, (
+                            '%s %s: swapping %s asks for %s, which has no '
+                            'default' % (plate, label, cls, partner))
 
     def test_no_mark_takes_two_roles_in_one_channel(self, almanac, page):
         """Two fill roles (or two stroke roles) on one mark leaves the
@@ -1735,13 +2091,14 @@ class TestClassContract:
         bandedge, and the rim won because 'r' sorts after 'b'."""
         for plate in ('night', 'light'):
             for name in self.SVG_RENDERERS:
-                svg = getattr(page, name)(almanac, palette=plate)
-                for attr in re.findall(r'class="([^"]*)"', svg):
-                    roles = [c for c in attr.split() if c.startswith('sky-')]
-                    fills = [c for c in roles if c.startswith('sky-fill-')]
-                    strokes = [c for c in roles if c.startswith('sky-stroke-')]
-                    assert len(fills) <= 1, (plate, name, attr)
-                    assert len(strokes) <= 1, (plate, name, attr)
+                for label, svg in self._renders(page, almanac, name, plate):
+                    for attr in re.findall(r'class="([^"]*)"', svg):
+                        roles = [c for c in attr.split() if c.startswith('sky-')]
+                        fills = [c for c in roles if c.startswith('sky-fill-')]
+                        strokes = [c for c in roles
+                                   if c.startswith('sky-stroke-')]
+                        assert len(fills) <= 1, (plate, label, attr)
+                        assert len(strokes) <= 1, (plate, label, attr)
 
     def test_no_svg_panel_bakes_a_color(self, almanac, page):
         """The point of the exercise: outside the style block, no mark
@@ -1750,11 +2107,11 @@ class TestClassContract:
         the consuming skin that themes them.)"""
         for plate in ('night', 'light'):
             for name in self.SVG_RENDERERS:
-                svg = getattr(page, name)(almanac, palette=plate)
-                marks = re.sub(r'<style>.*?</style>', '', svg, flags=re.S)
-                for attr in ('fill', 'stroke', 'stop-color'):
-                    assert '%s="#' % attr not in marks, (
-                        '%s %s bakes a %s' % (plate, name, attr))
+                for label, svg in self._renders(page, almanac, name, plate):
+                    marks = re.sub(r'<style>.*?</style>', '', svg, flags=re.S)
+                    for attr in ('fill', 'stroke', 'stop-color'):
+                        assert '%s="#' % attr not in marks, (
+                            '%s %s bakes a %s' % (plate, label, attr))
 
     def test_an_alias_scopes_to_the_plate_it_resolves_to(self, almanac, page):
         """A skin still passing 'classic-night' must get a working panel,
@@ -1998,8 +2355,9 @@ class TestLabelKeepouts:
     moon's dark disc 2.18: each label cleared its bars against the sky and
     read against a disc instead.  _sky_chart hands _place_labels every body
     mark as a box, and the layout counts those boxes as already placed.  A
-    label that must be drawn and finds no room in five steps is still
-    drawn -- the fixtures below are not that crowded."""
+    label that must be drawn and finds no room in the frame's allowance
+    of steps (five wide, eight narrow) is still drawn -- the fixtures
+    below are not that crowded."""
 
     KEEP = [(100.0, 90.0, 160.0, 110.0)]
     DAY_TS = 1750536000          # 2025-06-21 13:00 PDT: Jupiter beside the sun
@@ -2012,7 +2370,7 @@ class TestLabelKeepouts:
     def test_a_body_name_steps_off_a_mark(self):
         out = wxskyfield_sky.SkyPage._place_labels(
             [('mark', 100.0, 100.0, 'Jupiter', 'bodylab', 8, True, None)],
-            1.0, 680, self.KEEP)
+            1.0, wxskyfield_sky.WIDE_FRAME, 680, 706, self.KEEP)
         (_x, y, text), = self._texts(out)
         assert text == 'Jupiter'
         assert y - 11.0 >= 110.0, y
@@ -2020,15 +2378,16 @@ class TestLabelKeepouts:
     def test_an_optional_name_yields_to_a_mark(self):
         for req in (('mark', 100.0, 100.0, 'Mizar', 'starlab', 6, False, None),
                     ('con', 130.0, 100.0, 'LYRA')):
-            out = wxskyfield_sky.SkyPage._place_labels([req], 1.0, 680, self.KEEP)
+            out = wxskyfield_sky.SkyPage._place_labels(
+                [req], 1.0, wxskyfield_sky.WIDE_FRAME, 680, 706, self.KEEP)
             assert self._texts(out) == [], req
 
     def test_a_pass_time_steps_inward_off_a_mark(self):
         """Four steps of 10 clear the box, so the label is placed by the
         clear check, not by running out of tries (five)."""
         out = wxskyfield_sky.SkyPage._place_labels(
-            [('time', 100.0, 100.0, '03:21', 1.0, 0.0)], 1.0, 680,
-            [(80.0, 85.0, 115.0, 110.0)])
+            [('time', 100.0, 100.0, '03:21', 1.0, 0.0)], 1.0,
+            wxskyfield_sky.WIDE_FRAME, 680, 706, [(80.0, 85.0, 115.0, 110.0)])
         (x, y, text), = self._texts(out)
         assert text == '03:21'
         assert x == pytest.approx(140.0), x
@@ -2037,7 +2396,8 @@ class TestLabelKeepouts:
     def test_with_nothing_in_the_way_nothing_moves(self):
         out = wxskyfield_sky.SkyPage._place_labels(
             [('time', 100.0, 100.0, '03:21', 1.0, 0.0),
-             ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)], 1.0, 680)
+             ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)],
+            1.0, wxskyfield_sky.WIDE_FRAME, 680, 706)
         texts = self._texts(out)
         assert (100.0, 103.0, '03:21') in texts, texts
         assert (308.0, 304.0, 'Mars') in texts, texts
@@ -2109,9 +2469,9 @@ class TestLabelKeepouts:
         seen = []
         real = wxskyfield_sky.SkyPage._place_labels
 
-        def spy(labels, scale, S, keep=None):
+        def spy(labels, scale, f, S, H, keep=None):
             seen.append(list(keep or []))
-            return real(labels, scale, S, keep)
+            return real(labels, scale, f, S, H, keep)
         monkeypatch.setattr(wxskyfield_sky.SkyPage, '_place_labels', staticmethod(spy))
         with saved_almanacs():
             assert wxskyfield.register_almanac(sky)
@@ -2129,7 +2489,13 @@ class TestLabelKeepouts:
     def test_the_charts_seed_every_body_mark(self, sky):
         """End to end: at 13:00 on the fixture day, when Jupiter stands
         beside the sun, and on the pass chart, no body name or pass time is
-        laid over another body's mark."""
+        laid over another body's mark.
+
+        On BOTH frames (2.7), and the narrow one is the harder case: the
+        planets crowd the ecliptic whatever the frame, and there each name
+        is half again as wide with half the sky to land in.  That is what
+        the narrow frame's extra placement rows are for, and this is what
+        holds them to it."""
         with saved_almanacs():
             assert wxskyfield.register_almanac(sky)
             fmt = weewx.units.get_default_formatter()
@@ -2138,16 +2504,18 @@ class TestLabelKeepouts:
             noon = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE,
                                          altitude=ALTITUDE_M, formatter=fmt)
             page = wxskyfield_sky.SkyPage()
-            for plate in ('night', 'light'):
-                dome = page.dome_svg(day, palette=plate)
+            for plate, narrow in itertools.product(('night', 'light'),
+                                                   (False, True)):
+                where = (plate, narrow)
+                dome = page.dome_svg(day, palette=plate, narrow=narrow)
                 assert 'Jupiter' in dome
                 # The sun's box must be its rays, not just its disc.
                 sun = self._marks(dome)['sun']
-                assert sun[2] - sun[0] > 30.0, sun
-                assert self._overlaps(dome) == [], plate
-                chart = page.pass_chart_html(noon, palette=plate)
+                assert sun[2] - sun[0] > (24.0 if narrow else 30.0), sun
+                assert self._overlaps(dome) == [], where
+                chart = page.pass_chart_html(noon, palette=plate, narrow=narrow)
                 assert 'nowlab' in chart
-                assert self._overlaps(chart) == [], plate
+                assert self._overlaps(chart) == [], where
 
 
 class TestBandLabelContrast:
@@ -2168,7 +2536,15 @@ class TestBandLabelContrast:
     Reading the ground from the markup is the whole point.  A label's
     ground depends on where the sun happens to put it, which is a function
     of the date and the latitude -- so this renders at two of them, and
-    would have caught either defect at either one."""
+    would have caught either defect at either one.
+
+    BOTH FRAMES (2.7).  A label's ground also depends on the frame: the
+    narrow ribbons row lifts its name and its times off the bands onto the
+    panel above them, which is the reason that row was laid out the way it
+    was, and this is what holds that claim to it.  The second frame is
+    nearly free here because the two share one SkyPage and so one set of
+    memoized body evaluations -- which is also what makes the existing
+    three panels cheaper than they were."""
 
     BARS = TEXT_BARS
     PANELS = ('sunpath_svg', 'ribbons_svg', 'daylength_svg')
@@ -2229,11 +2605,13 @@ class TestBandLabelContrast:
                 alm = weewx.almanac.Almanac(
                     TIME_TS, lat, lon, altitude=ALTITUDE_M,
                     formatter=weewx.units.get_default_formatter())
+                page = wxskyfield_sky.SkyPage()
                 for plate in ('night', 'light'):
                     pal = wxskyfield_sky.PALETTES[plate]
-                    for panel in self.PANELS:
-                        svg = getattr(wxskyfield_sky.SkyPage(), panel)(
-                            alm, palette=plate)
+                    for panel, narrow in itertools.product(self.PANELS,
+                                                           (False, True)):
+                        svg = getattr(page, panel)(alm, palette=plate,
+                                                   narrow=narrow)
                         bands = [(float(m.group(1)), float(m.group(2)),
                                   float(m.group(3)), float(m.group(4)), m.group(5))
                                  for m in re.finditer(
@@ -2270,9 +2648,12 @@ class TestBandLabelContrast:
                                 got = _measure(fill, bg)
                                 if not _clears(got, self.BARS):
                                     worst.append(
-                                        '%s %s lat %.1f: %s (%s) on %s (%s) is '
-                                        '%.2f / Lc %.1f' % (plate, panel, lat, classes,
-                                                            fill, where, bg, got[0], got[1]))
+                                        '%s %s%s lat %.1f: %s (%s) on %s (%s) '
+                                        'is %.2f / Lc %.1f'
+                                        % (plate, panel,
+                                           ' narrow' if narrow else '', lat,
+                                           classes, fill, where, bg,
+                                           got[0], got[1]))
         assert not worst, '\n'.join([''] + sorted(set(worst)))
 
     def test_the_audit_reads_labels_and_bands(self, sky):
@@ -2907,6 +3288,51 @@ class TestSkinFiles:
         # Compile parses all directives; placeholders resolve at run time.
         assert Template.compile(source=source) is not None
 
+    def test_the_head_asks_for_this_release_s_stylesheet(self):
+        """The page's layout depends on its stylesheet as of 2.7 -- the
+        rules that pick the wide or the narrow drawing live there -- so a
+        browser must not serve the previous release's cached sky.css
+        against this release's markup, which would show BOTH drawings
+        stacked.  The two <head> links carry the skin's version.
+
+        Renders the shipped template's own two lines through Cheetah
+        against a SkyPage built from the shipped skin.conf, so this fails
+        if the template stops asking, if `asset` stops answering, or if
+        the two stop agreeing -- not merely if a string is edited.  (The
+        whole page is not rendered here: that costs eighteen panels and
+        an almanac, and these two lines are all that is under test.)"""
+        Template = pytest.importorskip('Cheetah.Template').Template
+        configobj = pytest.importorskip('configobj')
+        conf = configobj.ConfigObj(os.path.join(self.SKIN_DIR, 'skin.conf'),
+                                   encoding='utf-8')
+        version = conf['SKIN_VERSION']
+        with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
+            lines = [ln for ln in f
+                     if ln.lstrip().startswith(('<link', '<script'))]
+        assert len(lines) == 2, lines
+        page = wxskyfield_sky.SkyPage(dict(conf))
+        out = str(Template(source=''.join(lines),
+                           searchList=[{'sky_page': page}]))
+        assert 'href="sky.css?v=%s"' % version in out, out
+        assert 'src="sky.js?v=%s"' % version in out, out
+
+    def test_an_asset_link_survives_a_report_that_names_no_version(self):
+        """A skin dict without SKIN_VERSION -- an embedding report that
+        never set one -- must still produce a usable href rather than a
+        dangling `?v=`.  And whatever a report does put there reaches a
+        URL and an HTML attribute, so it is reduced to characters that are
+        safe in both."""
+        assert wxskyfield_sky.SkyPage().asset('sky.css') == 'sky.css'
+        assert wxskyfield_sky.SkyPage({'SKIN_VERSION': ''}).asset('sky.css') \
+            == 'sky.css'
+        assert wxskyfield_sky.SkyPage({'SKIN_VERSION': '2.7'}).asset('sky.js') \
+            == 'sky.js?v=2.7'
+        # Everything a URL and an attribute cannot safely carry is
+        # dropped; what is left is still a usable, distinct token.
+        rough = wxskyfield_sky.SkyPage({'SKIN_VERSION': '2.7 "&<b> beta/1'})
+        assert rough.asset('sky.css') == 'sky.css?v=2.7bbeta1'
+        assert '"' not in rough.asset('sky.css')
+
     def test_skin_conf_parses(self):
         configobj = pytest.importorskip('configobj')
         conf = configobj.ConfigObj(os.path.join(self.SKIN_DIR, 'skin.conf'))
@@ -2977,7 +3403,13 @@ class TestSkinFiles:
         must copy it beside sky.css, and the chip's .skytip rule must
         exist in sky.css."""
         with open(os.path.join(self.SKIN_DIR, 'index.html.tmpl')) as f:
-            assert '<script src="sky.js" defer></script>' in f.read()
+            # Loaded through the versioned-asset helper since 2.7.  That the
+            # version actually reaches the href is
+            # test_the_head_asks_for_this_release_s_stylesheet, which
+            # renders the line instead of reading it; this only pins that
+            # the script is still wired in at all.
+            assert ('<script src="$sky_page.asset(\'sky.js\')" defer></script>'
+                    in f.read())
         configobj = pytest.importorskip('configobj')
         conf = configobj.ConfigObj(os.path.join(self.SKIN_DIR, 'skin.conf'))
         assert conf['CopyGenerator']['copy_once'] == ['sky.css', 'sky.js']

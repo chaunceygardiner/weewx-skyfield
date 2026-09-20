@@ -80,6 +80,10 @@ template rather than shipping as a quietly empty panel (see
 Body evaluations are memoized, so several panels on one page do not repeat the expensive
 rise/set searches.
 
+Every chart method also takes `narrow`, choosing which of two drawings it makes — the wide
+one these panels have always made, or a second one laid out for a phone.  See
+[Two frames](#two-frames--the-narrow-argument).
+
 Every render method takes an optional `palette` argument choosing the panel's colors:
 `'night'` (the default, used in the screenshots below) or `'light'`, a paper-atlas
 plate for light-themed pages: `$sky_page.analemma_svg($almanac, palette='light')`.  Since 2.4
@@ -98,6 +102,165 @@ every twilight depth (2.3).
 logs a warning naming its replacement.  They lasted a very short time before 1.5 shipped, and
 keeping two frozen color schemes meant arguing every contrast fix twice — the second time on a
 plate whose whole premise was that its colors could not move.
+
+## Two frames — the `narrow` argument
+
+New in 2.7.  Every chart method takes `narrow`, choosing which of two **frames** it draws in:
+
+```
+$sky_page.sunpath_svg($almanac)                  ← the wide frame (the default)
+$sky_page.sunpath_svg($almanac, narrow=True)     ← the same data, drawn for a phone
+```
+
+The wide frame is what these panels have always drawn — 1080 units across for the strip
+charts, 480 for the square ones, 680 for the sky charts.  It is unchanged, byte for byte, with
+one deliberate exception made in this same release — the sky dome's and pass chart's two
+altitude ring numbers, which had named each other's rings since 1.0 and are now right.  Nothing
+else moved: no coordinate, no size, no class.  If you diff your fragments across the upgrade,
+that is the one difference you will find, and the two `<text>` elements it affects carry no
+`data-body` and nothing a live page locates.
+
+The trouble it runs into is a phone.  A 1080-unit drawing shown 272 px wide puts its 10-unit
+axis labels at 2.5 px on the glass; the sky dome's star names land at 3.3 px and its
+constellation names at 3.3.  That is not a small chart, it is an unreadable one — and
+enlarging the type in place does not fix it, because the gutters, the label pitch and the
+space between rows were all cut for small type.  Grow the words inside them and they collide
+and clip.
+
+So the narrow frame is a **second drawing**: 360 units across, so one unit is about one pixel
+in a hand, with its labels set at 15 units and up (11.3 px on a 320 px screen, 14 on a 390),
+its gutters cut for words that size, and whatever will not fit **thinned rather than shrunk**.
+
+| Panel | What the narrow frame does differently |
+|---|---|
+| `dome_svg`, `pass_chart_html` | The same projection at 360 units.  The star census is cut to magnitude 4.0 or brighter (the wide default is 5.0) and star names to first magnitude, so the sky is no denser than the wide dome's; a constellation is named only where its figure stands wide enough to carry the name.  Every body, satellite, comet and radiant is drawn and named as before. |
+| `ribbons_svg` | The one panel whose **layout** changes: a 360-unit row cannot hold a name column, a day of bar and a `12:45 PM → 12:59 PM` time column side by side, so each row puts its name and its times on a line of their own with the bar full width underneath, and the twilight bands run behind the bars rather than behind the text.  Hours numbered every six. |
+| `daylength_svg` | Hours numbered every six, every other month named.  All 53 weekly columns, every hour rule and every month rule still drawn. |
+| `sunpath_svg` | The sun's arc numbered every six hours instead of every three.  Both arcs, every band, and the moon's rise, set and transit times as before. |
+| `lunation_svg` | Fifteen phase discs instead of thirty, each twice the size — a crescent six pixels across says nothing.  The principal phases' names and dates stagger onto two levels.  The one thing the frame costs: today's brass ring is on the nearest of fifteen discs, so it can stand up to a day off the true phase where the wide strip is within half of one. |
+| `eot_svg` | The minute scale numbered every ten rather than every five, every third month named. |
+| `analemma_svg` | At most five numbers on each axis, and the month names thinned to the two lobes — January at the bottom, June at the top. |
+| `orrery_svg` | Nothing thinned: a body's name is this panel's whole content, so the rings give up the room and the type does not. |
+
+`moon_svg` takes no frame — the disc carries no labels; it already takes a `size`.
+
+`narrow` must be true or false.  The strings `'true'` and `'false'` are accepted, since a skin
+option arrives as text; anything else raises a template error naming the argument, the same way
+a bad `label_scale` does.
+
+### Showing both
+
+Nothing on the server knows how wide the reader's screen is, so a page that serves one URL to
+everybody emits **both** drawings and lets the viewport choose.  That is what the bundled skin
+does, and the pattern is three lines of CSS:
+
+```html
+<div class="sky-desk">$sky_page.sunpath_svg($almanac, palette=$palette)</div>
+<div class="sky-phone">$sky_page.sunpath_svg($almanac, palette=$palette, narrow=True)</div>
+```
+
+```css
+.sky-phone{display:none}
+@media (max-width: 600px){ .sky-desk{display:none} .sky-phone{display:block} }
+```
+
+Two things to know before you copy it.
+
+**The narrow drawing needs the room.**  15 units reads at 11 px only if the drawing is about
+270 px wide on a 320 px screen — so a phone layout that spends 40 px a side on padding hands
+back everything the frame bought.  `sky.css` cuts its own body and section padding under the
+same 600 px query for exactly this reason.
+
+**The second drawing is cheap to compute and not free to send.**  Both frames come out of the
+same memoized almanac evaluations, so the second one costs about a second of page-generation
+time for the whole set; what it costs is bytes — roughly 200 KB more markup for the nine
+panels, which gzip takes to about a fifth of that.  See [Performance](performance.md#two-frames).
+
+### What the narrow drawings bring with them
+
+A narrow drawing carries `sky-narrow` on its `<svg>` root, alongside `sky` and its plate
+class, and inside its `<style>` it brings **its own label sizes** for the classes it drew:
+
+```css
+svg.sky-narrow .gridlab{font-size:15px}
+```
+
+Those rules are deliberately *not* zero-specificity, unlike [the palette
+defaults](#restyling-the-marks--the-role-classes).  Your stylesheet already sets
+`.gridlab{font-size:10px}` — it has to, for the wide drawings — and a `:where()` rule would
+lose to it, leaving the narrow chart drawing 10 px type in gutters cut for 15.  So you need no
+CSS at all to use the narrow frame.
+
+One shape to check for, because its failure looks like a merely cramped chart rather than a
+broken one.  `svg.sky-narrow .gridlab` scores (0,2,1): it beats the bare `.gridlab` rule every
+stylesheet has, and it beats a two-part scoped rule such as `.night .gridlab` outright.  It
+**loses** to a three-part one — `.theme-dark .panel .gridlab`, or anything led by a
+pseudo-class like `:root.theme-light .gridlab`, both (0,3,0) — and a narrow chart under such a
+rule draws 10 px type in gutters cut for 15.  If your stylesheet sizes these classes that
+deeply, either add `svg.sky-narrow` to the front of those rules or give the narrow sizes a rule
+of your own.  Checking takes a moment in the inspector: select an axis label inside a narrow
+chart and confirm its computed `font-size` is 15 px, not 10.
+
+A rule of your own with equal-or-greater specificity (`svg.sky-narrow .gridlab{…}`) wins if you
+want a different size, at your own risk — the drawing's gutters were computed from these
+numbers.
+
+The two sky charts are the exception: `dome_svg` and `pass_chart_html` set every label's size
+inline on the element, because their collision layout has to agree with what the browser
+renders.  They carry no type rules on either frame.
+
+`label_scale` and `label_layers` compose with either frame: the frame sets the base size of
+every label and a scale multiplies it, so `label_scale=1` means "this frame's own type" on
+both, and a narrow chart asked for layers lays out one layer per scale from the narrow base.
+
+### Keep the stylesheet and the page in step
+
+One consequence of the frames worth arranging for.  Before 2.7 a reader whose browser held a
+stale copy of your stylesheet saw slightly wrong colors.  Now the stylesheet decides *which
+drawing is displayed*, so a stale one shows **both**, stacked.
+
+The file on your server is not the question — WeeWX's `copy_once` rewrites it on the first
+report cycle after every restart, unconditionally; it does not skip a file that is already
+there.  The reader's browser cache is the question, and a plain `<link href="sky.css">` gives
+it nothing to notice.  So ask for the file by version:
+
+```
+<link rel="stylesheet" href="$sky_page.asset('sky.css')">
+<script src="$sky_page.asset('sky.js')" defer></script>
+```
+
+`asset` appends your report's `SKIN_VERSION` as a query string — `sky.css?v=2.7` — reduced to
+characters safe in a URL and an attribute, and returns the bare name if the report sets no
+version.  The bundled skin does exactly this.  If you copied the frame rules into a stylesheet
+of your own, version *that* file the same way, by whatever means your skin already has.
+
+### If a script reads the chart
+
+A live page that repositions dome marks projects altitude and azimuth itself, which takes the
+dome's center and radius — and those are no longer one pair for every chart.  A **narrow** sky
+chart declares what it drew, on the `<svg>` root:
+
+```html
+<svg viewBox="0 0 360 360" class="sky sky-night sky-narrow"
+     data-dome-cx="180" data-dome-cy="178" data-dome-r="148" …>
+```
+
+A chart **without** those attributes is the wide frame, whose geometry is frozen and published:
+`cx=340, cy=348, r=296` of a `680 × 706` viewBox.  So one line covers both:
+
+```js
+var cx = +svg.dataset.domeCx || 340, cy = +svg.dataset.domeCy || 348,
+    r  = +svg.dataset.domeR  || 296;
+```
+
+Everything else a live page reads is per element and needs no change: `data-body`,
+`data-sunlit`, `data-bright`, and the pass arc's `data-rise`/`data-set` appear on the narrow
+chart exactly as on the wide one — see [Live-updating pages](live-pages.md#reusing-this-extensions-charts-live).
+A page showing both frames has two copies of every mark, so move them with
+`querySelectorAll`, not `querySelector` — the same rule label layers already impose.
+
+The axis charts publish no plot geometry on either frame, so there is nothing there for a
+script to read off the wrong drawing.
 
 ## Restyling the marks — the role classes
 
@@ -277,7 +440,10 @@ mark.  When the sun is up the stars are shown dimmed, standing where they are be
 daylight (`sun_is_up`, below, lets a caption react).  `dome_svg` additionally takes
 `label_scale` (default 1.0), which grows every label by that factor with the collision layout
 following along — useful when a skin displays the chart scaled down, such as a fixed-canvas
-smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.  It must
+smartphone page: `$sky_page.dome_svg($almanac, palette='light', label_scale=2.2)`.  (For a
+page that is simply narrow, prefer [the narrow frame](#two-frames--the-narrow-argument), which
+redraws the dome at phone size instead of enlarging type inside a chart laid out for a
+desk.)  It must
 be a positive number — numeric text such as `'0.8'` is accepted — and anything else raises a
 template error naming the argument (2.5 and later; before 2.5 a zero rendered 0px labels and
 text blanked the panel).

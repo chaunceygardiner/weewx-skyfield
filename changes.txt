@@ -1,6 +1,69 @@
 weewx-skyfield change history
 -----------------------------
 
+2.7 (2026/09/20)
+----------------
+- The Sky page reads on a phone.  Every chart is now drawn twice -- the
+  wide drawing this page has always shown, and a second one laid out for
+  a hand -- and the page shows whichever the reader's screen calls for,
+  switching at 600 pixels.  Nothing is fetched and nothing is scripted.
+  On a 320-pixel screen the wide charts put their axis labels at 2.5
+  pixels and the sky dome's star names at 3.3; every label in the narrow
+  drawings reads at 11 pixels or better, measured in a browser at 320 and
+  390 pixels wide.
+- The narrow drawing is a second drawing, not the wide one magnified.
+  Enlarging the type in place would push the words into gutters, label
+  pitches and row heights cut for small ones, where they collide and
+  clip; the narrow frame is 360 units across with its own geometry
+  throughout, and thins detail rather than shrinking it: hours numbered
+  every six rather than every three, fifteen phase discs at twice the
+  size instead of thirty, month names and axis numbers thinned, and the
+  dome's star census cut to magnitude 4.0 so the smaller sky is no denser
+  than the big one.  Every body, every curve and every twilight band is
+  still drawn.  The rise-and-set panel's rows are relaid: the body's name
+  and its times go on a line of their own with the bar full width
+  underneath, because a 360-unit row cannot hold a name column, a day of
+  bar and a "12:45 PM -> 12:59 PM" time column side by side.
+- Skins embedding the panels get the same second drawing: every chart
+  method takes narrow=True.  The wide frame is unchanged, byte for
+  byte, apart from the ring-label fix below, so a skin that asks for
+  nothing draws what it drew before.  A
+  narrow drawing carries the class sky-narrow and brings its own label
+  sizes with it, so no stylesheet work is needed to use one; the manual's
+  panels page has the three lines of CSS for serving both from one URL,
+  and what each panel thins.
+- A narrow sky chart declares its own center and radius on the <svg>
+  root, as data-dome-cx, data-dome-cy and data-dome-r.  A live page that
+  repositions marks by projecting altitude and azimuth needs them: the
+  narrow dome is not the wide dome's 340/348/296, and a chart without
+  these attributes is the wide frame, whose geometry is frozen and
+  published.  A page showing both frames carries two copies of every
+  mark, so move them with querySelectorAll.
+- The sky dome's and pass chart's altitude rings are labeled correctly.
+  The two numbers were crossed: the label reading 30 degrees sat on the
+  60-degree ring and the one reading 60 on the 30-degree ring, in both
+  themes, and had been since 1.0 -- the first release drew both rings
+  and both numbers, and crossed them.  On this projection the
+  zenith is the center of the chart and the horizon is the rim, so
+  altitude counts down as the radius counts up -- the first ring out
+  from the middle is 60, not 30.  The rings themselves were always drawn
+  in the right places; only the two numbers beside them were wrong, and
+  the manual's screenshots have been recaptured.
+- The bundled page spends less padding on a phone, which is what leaves
+  the narrow drawings the width their type was sized for.
+- The page asks for its stylesheet and script by version --
+  sky.css?v=2.7 -- so a reader's browser cannot serve the previous
+  release's cached copy against this release's markup.  It matters from
+  this release on: the rules that choose between the wide and the
+  narrow drawing live in the stylesheet, so a stale one shows both
+  drawings stacked, where before it cost only a color.  A skin
+  embedding the panels wants the same for whichever stylesheet carries
+  the rules it copied; $sky_page.asset('name') builds the link.
+- Cost of the second drawing, measured on a Raspberry Pi 5: about one
+  second of page generation and 28 KB more over the wire (the page goes
+  from 49 KB to 77 KB gzipped).  Both drawings come out of the same
+  almanac evaluations; only the markup is built twice.
+
 2.6.2 (2026/09/19)
 ------------------
 - A deviation from WeeWX's built-in almanac, which is incorrect here:

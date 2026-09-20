@@ -104,6 +104,34 @@ Because the year-scale panels are anchored to fixed instants, the [result
 cache](#the-result-cache) reuses them across cycles: the full price is paid once at startup,
 not every cycle.
 
+### Two frames
+
+Since 2.7 the bundled page draws every chart twice — the wide drawing and the
+[narrow one](panels.md#two-frames--the-narrow-argument) — and shows whichever the reader's
+viewport calls for.  The cost is almost entirely **bytes, not time**, because both drawings
+come out of the same memoized almanac evaluations: only the markup is built twice.  Measured
+on a Raspberry Pi 5 at the June solstice, with the default star limit, constellation figures
+on, two satellites and two comets:
+
+| | One frame (2.6) | Both frames (2.7) |
+|---|---|---|
+| Page generation | 19.3 s | 20.2 s |
+| Page, as written | 286 KB | 476 KB |
+| Page, gzipped over the wire | 49 KB | 77 KB |
+
+So about **a second of generation and 28 KB on the wire**.  Measured a second way, inside one
+warm process rather than end to end, the nine wide panels cost 17.6 s from cold and the nine
+narrow ones 1.2 s on top of them — **7% more**, which is the figure that transfers to other
+hardware, since the wall-clock pair above moves with whatever else the machine is doing.  The
+extra second is the second set of SVG assemblies; the almanac work behind them is paid once
+either way, and every input a chart needs — body positions, twilight, a satellite's next pass
+and the pass arc itself — is memoized per instant for exactly this reason.  The narrow dome is
+the one drawing that is much smaller than its wide twin rather than about the same size — its
+star census is cut back, which is a legibility decision that happens to pay for itself.
+
+If a page of yours wants only one of the two, draw only that one: `narrow` is per call, and
+nothing about the page requires both.
+
 ## Trimming it
 
 Only if you want to.  On hardware that is struggling — an older Pi sharing an archive

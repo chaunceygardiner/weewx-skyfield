@@ -100,6 +100,7 @@ these are a stable contract:
 | Hook | On | Meaning |
 |---|---|---|
 | `<g class="dome-body" data-body="mars">` | dome, pass chart | The sun's, moon's and each planet's mark; name labels carry the same `data-body`, one copy per label layer (see `dome-labels` below). |
+| `data-dome-cx` / `-cy` / `-r` on the `<svg>` | dome, pass chart | The chart's own center and radius, in its own units, for a page that projects altitude and azimuth itself (2.7 and later).  Present on a **narrow** chart, which is 360 units across; a chart without them is the wide frame, whose geometry is frozen and published — `cx=340, cy=348, r=296` of a `680 × 706` viewBox.  One line reads either: `+svg.dataset.domeCx \|\| 340`.  See [Two frames](panels.md#two-frames--the-narrow-argument). |
 | `<g class="dome-labels" data-label-scale="2.2">` | dome, pass chart | One label layout (2.5 and later): every label the chart carries, at one scale.  A chart asked for [label layers](panels.md#the-sky-dome--dome_svg) has one group per scale, and the labels' `data-body` is repeated in each — a live page that moves a label must move every layer's copy (`querySelectorAll`). |
 | `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
 | `data-bright="1"`/`"0"` | dome, orrery | A comet's diamond, and whether it is plausibly naked-eye. |
@@ -110,6 +111,11 @@ these are a stable contract:
 | `$sky_page.theme($almanac)` / `.palette($almanac)` | template | The consuming report's own theme, resolved — see [Helpers](panels.md#helpers--theme-palette-header_sub-and-sun_is_up).  Resolve once per page: the palette sets each fragment's default colors, so a page that re-renders fragments must hand every one the same value or the chart flips plate on a refresh.  (The marks' role classes let your own stylesheet override that default — see [the role classes](panels.md#restyling-the-marks--the-role-classes).) |
 
 Locate marks by these names, never by tooltip text — tooltips are translated.
+
+A page that serves both frames from one URL has **two copies of every mark**, one per
+drawing, exactly as a chart with label layers has one copy of every label per layer.  Move
+them with `querySelectorAll`, not `querySelector`, and read each drawing's geometry off that
+drawing — a narrow chart moved with the wide chart's center puts the mark in the wrong place.
 
 ## A worked example
 

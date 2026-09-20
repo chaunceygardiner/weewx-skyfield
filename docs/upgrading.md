@@ -92,7 +92,19 @@ moon-phase finders, meteor-shower peaks and a comet's perihelion.  Values are un
 tag read through `.raw` is untouched.  See [How far away a time can
 be](values-and-units.md#how-far-away-a-time-can-be).
 
-### If you embed the panels, six things need your attention
+### If you embed the panels, seven things need your attention
+
+**Nothing you draw today has moved (2.7).**  Every chart method now takes `narrow`, and the
+frame it does *not* take — the wide one, the default — is byte for byte what 2.6.2 drew, apart
+from the corrected ring numbers described under *What's fixed* below.  If
+you want the second drawing, ask for it: `narrow=True` gives the same data laid out for a
+phone, at 360 units across with its type set to read in a hand.  It is a second drawing, not
+a scaled one, so a page that serves both emits both and lets a media query choose; the
+[panels page](panels.md#two-frames--the-narrow-argument) has the three lines of CSS and what
+each panel thins.  Two things to know if a script of yours reads the charts: a narrow sky
+chart declares its own center and radius on the `<svg>` root (`data-dome-cx`, `-cy`, `-r`) and
+a chart without them is the wide frame's published `340/348/296`; and a page showing both
+frames has two copies of every mark, so move them with `querySelectorAll`.
 
 **The charts' labels sit together in one group now (2.5).**  Every `<text>` a sky dome or pass
 chart carries — cardinals, ring figures, a pass's clocks, every name — is inside
@@ -147,6 +159,7 @@ it.  If you have never passed a `palette` argument, there is nothing to do.
 
 | Release | Worth knowing |
 |---|---|
+| **2.7** | Every chart draws in a second frame on request — `narrow=True` — laid out for a phone rather than scaled down for one: 360 units across, labels that read at 11 px or better on a 320 px screen, and detail thinned rather than shrunk where it will not fit.  The bundled Sky page now serves both and picks by viewport width.  The wide frame is unchanged, byte for byte, apart from the corrected ring numbers, so nothing else you draw today moves.  A narrow sky chart declares its own center and radius for live pages that reposition marks.  **Fixed:** the dome's and pass chart's altitude ring numbers named each other's rings from 1.0 until now — the label reading 30° sat on the 60° ring. |
 | **2.6.2** | A deviation from WeeWX's built-in almanac, which is incorrect here: `visible_change()` with `use_center=1` measures both days to the body's center, where WeeWX measures the earlier day to the upper limb and reads about 160 seconds too negative for the sun.  Earlier releases gave WeeWX's answer.  See [Accuracy and conventions](accuracy.md#differences-from-pyephem).  Nothing to configure. |
 | **2.6.1** | The English Sky page prints clock times 12-hour ("8:45 PM"), dates with their comma ("Aug 17, 2027") and durations spaced ("14 h 6 m"); the other bundled languages keep 24-hour times.  A skin that overrides one of the date, clock or duration [Texts] keys should take the renamed key (see changes.txt). |
 | **2.6** | Every piece of text on the Sky page clears WCAG 4.5 and APCA Lc 60 in both themes: the night theme's gray and brass are lighter, star and constellation names stay legible while the sun is up, and no label lands on a planet, the sun or the moon.  Nothing to configure — but a skin that copied the night colors as hex values should take the new ones (see changes.txt). |

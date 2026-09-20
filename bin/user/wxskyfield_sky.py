@@ -20,7 +20,7 @@ import math
 import re
 import time
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import weewx.almanac
 
@@ -573,14 +573,23 @@ def _style_block(markup: str, pal_name: str, extra: str = '') -> str:
         % (pal_name, cls, defs[cls][0], defs[cls][1]) for cls in used), extra)
 
 
-def _svg_out(p: List[str], pal_name: str, extra_css: str = '') -> str:
+def _svg_out(p: List[str], pal_name: str, extra_css: str = '',
+             narrow_type: bool = False) -> str:
     """Assemble an SVG built as [open tag, ...body..., '</svg>'].
 
     The style block is spliced in after the open tag, which is p[0] by
     construction -- never by searching the markup for the first '>', which
-    a translated aria-label could carry."""
+    a translated aria-label could carry.
+
+    `narrow_type` asks for the narrow frame's label sizes as well: an axis
+    chart on the narrow frame passes it, a wide one never does, and the sky
+    charts never do because they size every label inline (see
+    _narrow_type_css)."""
     body = ''.join(p[1:])
-    return p[0] + _style_block(p[0] + body, pal_name, extra_css) + body
+    markup = p[0] + body
+    if narrow_type:
+        extra_css += _narrow_type_css(markup)
+    return p[0] + _style_block(markup, pal_name, extra_css) + body
 
 
 # ── label layers ─────────────────────────────────────────────────────────
@@ -740,9 +749,160 @@ def _layer_rules(pal_name: str, layers: List[Tuple[float, Optional[str]]]) -> st
         for scale, query in layers[1:])
 
 
-def _svg_open(attrs: str, pal_name: str) -> str:
-    """An SVG root tag carrying the plate class its defaults are scoped to."""
-    return '<svg %s class="sky sky-%s">' % (attrs, pal_name)
+# ── frames ───────────────────────────────────────────────────────────────
+# Every chart is drawn at one of two FRAMES, and the frame is the whole
+# difference between a drawing read on a desk and one read in a hand.
+#
+# The WIDE frame is what this file has always drawn: 1080 units across for
+# the strip charts, 480 for the square ones, 680 for the sky charts, with
+# labels set at the 10-14px the consuming stylesheet gives them.  Shown at a
+# phone's width those labels land at 3 to 7 px on the glass -- a drawing
+# whose words cannot be read is not a small drawing, it is a broken one.
+#
+# The NARROW frame redraws the same data at NARROW_W units across, so one
+# unit is about one pixel on a phone, and sets its labels at NARROW_TYPE_PX
+# -- 15 units and up, which is 11.3 px on a 320 px screen and 14 on a 390.
+# That is the whole trick, and it is not magnification: enlarging the wide
+# drawing's type would grow words inside gutters, bands and label pitches
+# sized for small ones until they collided and clipped.  This is a SECOND
+# DRAWING, its geometry laid out for the type it carries.  Where the numbers
+# still will not fit it THINS rather than shrinks -- month names, hour
+# labels, dates, the dimmer stars -- because a chart that shows fewer things
+# legibly beats one that shows everything illegibly.
+#
+# The wide frame's numbers are FROZEN, and were proved so against hashes
+# of every panel at two dates and both plates while this was written --
+# with ONE deliberate exception, made in the same release: the dome's and
+# pass chart's two altitude ring numbers, which had named each other's
+# rings since 1.0 and are now right (see the ring labels in _sky_chart).
+# Nothing else a caller draws moved; no coordinate, no size, no class.
+# Say that precisely wherever it is claimed, because consumers pin against
+# the claim -- a blanket "byte for byte" would have a skin diffing its
+# fragments and finding the difference unexplained.
+# TestFrames::test_the_default_frame_is_the_wide_one pins what can be
+# pinned as an invariant: that the wide frame IS the default, so asking
+# for it by name changes nothing.  (It cannot pin equality with 2.6.2, and
+# a frozen hash that did would fire on every deliberate change after.)
+# A narrow drawing is only ever produced by asking for one.
+#
+# How the frame composes with the sky charts' label_scale/label_layers, the
+# one place two of these knobs meet: the FRAME sets the base size of every
+# label, and a scale MULTIPLIES it.  So label_scale=1 (the default) means
+# "this frame's own type", on either frame, and a narrow chart asked for
+# label_layers lays out one layer per scale exactly as a wide one does, from
+# the narrow base.  Nothing needs to know about both.
+NARROW_W = 360
+# What a narrow drawing sets each label class at, in user units -- which are
+# very nearly pixels on the glass, which is the point of the frame.  Nothing
+# here is below 15: at the 320 px screen's ~272 px of content width a unit
+# draws at 0.76 px, so 15 units is the 11 px floor.
+NARROW_TYPE_PX = {
+    'gridlab': 15.0, 'starlab': 15.0, 'conlab': 15.0, 'moonlab': 15.0,
+    'timelab': 15.0, 'nowlab': 15.0, 'bodylab': 16.0, 'satlab': 16.0,
+    'rowlab': 16.0, 'todaylab': 16.0, 'cardinal': 17.0,
+}
+# The same for the wide frame -- and for the seven classes an axis chart
+# styles from the stylesheet rather than inline, these numbers ARE
+# skins/Skyfield/sky.css's (pinned by TestFrames::
+# test_the_wide_type_table_matches_the_stylesheet).  The wide frame emits no
+# type rules of its own, so this table serves two purposes only: the sky
+# charts, which size every label inline, and the width estimates that place
+# a label beside its mark.
+WIDE_TYPE_PX = {
+    'gridlab': 10.0, 'starlab': 10.0, 'conlab': 10.0, 'moonlab': 10.0,
+    'timelab': 11.0, 'nowlab': 10.0, 'bodylab': 11.0, 'satlab': 11.0,
+    'rowlab': 13.0, 'todaylab': 11.0, 'cardinal': 14.0,
+}
+# The class a narrow drawing's root carries, on top of `sky` and its plate.
+# Prefixed like every other class this file publishes: a bare `narrow` in a
+# consuming page's stylesheet is a name somebody else has already used.
+NARROW_CLASS = 'sky-narrow'
+
+
+class Frame(NamedTuple):
+    """One drawing frame: the width a chart lays itself out in, the size it
+    sets each label class at, and the two glyph-width estimates that place a
+    label beside the thing it names.
+
+    `mono` and `glyph` are estimates of one character's width -- of the
+    stylesheet's monospace face and of its serif label face -- at the size
+    this frame sets the class in question.  They are deliberately generous:
+    a gutter has to hold its widest label in whatever face the reader's
+    device actually falls back to, and the honest failure of a tight
+    estimate is a clipped number, which is worse than a wide margin.  The
+    wide frame's two values are the constants this file has always used, so
+    the estimates it makes are the ones it made before.
+    """
+    narrow: bool
+    px: Dict[str, float]
+    mono: float         # one monospace glyph at `timelab`
+    glyph: float        # one serif glyph at `bodylab`
+
+
+WIDE_FRAME = Frame(narrow=False, px=WIDE_TYPE_PX, mono=6.82, glyph=7.0)
+NARROW_FRAME = Frame(narrow=True, px=NARROW_TYPE_PX, mono=9.3, glyph=10.2)
+# What `narrow=` accepts.  A template writing narrow=True is the whole
+# expected case; the strings are here because a skin option arrives as text
+# and a template author reasonably passes it straight through.  Anything
+# else is the caller's mistake and says so at report time rather than
+# quietly drawing the other frame.
+_FRAME_WORDS = {'true': True, 'yes': True, '1': True, 'on': True,
+                'false': False, 'no': False, '0': False, 'off': False}
+
+
+def _frame(narrow: Any) -> Frame:
+    """The frame a render call asked for."""
+    if isinstance(narrow, bool):
+        want = narrow
+    elif isinstance(narrow, str) and narrow.strip().lower() in _FRAME_WORDS:
+        want = _FRAME_WORDS[narrow.strip().lower()]
+    else:
+        raise SkyPageUsageError(
+            'narrow must be true or false, not %r' % (narrow,))
+    return NARROW_FRAME if want else WIDE_FRAME
+
+
+# The text classes whose SIZE a narrow axis chart has to declare for
+# itself.  The sky charts are not in this: every label they draw carries its
+# size inline, because the collision layout has to agree with what the
+# browser renders.  The axis charts take their type from the consuming
+# stylesheet -- which is right for the wide frame, and impossible for the
+# narrow one, whose gutters, label pitch and thinning were all computed from
+# these sizes.  So the narrow drawing brings them along.
+#
+# NOT zero specificity, unlike the palette defaults next door, and for the
+# same reason _layer_rules is not: `.gridlab{font-size:10px}` is in every
+# consuming stylesheet already (it has to be, for the wide drawings), and a
+# :where() rule would lose to it and leave the narrow chart drawing 10px
+# type in gutters cut for 15.
+#
+# `svg.sky-narrow .gridlab` scores (0,2,1), so it beats the bare class rule
+# every stylesheet has and beats a two-part scoped one (`.night .gridlab`,
+# (0,2,0)) outright rather than on document order.  Be honest about where
+# it stops: a THREE-part rule -- `.theme-dark .panel .gridlab`, or anything
+# with a pseudo-class in front like `:root.theme-light .gridlab` -- scores
+# (0,3,0) and wins, and a consumer who has one would silently get 10px type
+# in gutters cut for 15.  That is the one shape worth naming in the manual,
+# because the failure is a sized drawing that looks merely cramped rather
+# than broken.  A consumer that wants its own size on purpose out-specifies
+# this the same way.
+def _narrow_type_css(markup: str) -> str:
+    """The type rules a narrow axis chart carries, for the label classes it
+    actually used -- driven by the markup, like the palette defaults, so a
+    chart that grows a label cannot forget to size it."""
+    seen: set = set()
+    for attr in _CLASS_ATTR_RE.findall(markup):
+        seen.update(attr.split())
+    return ''.join('svg.%s .%s{font-size:%gpx}' % (NARROW_CLASS, cls,
+                                                   NARROW_TYPE_PX[cls])
+                   for cls in sorted(seen & set(NARROW_TYPE_PX)))
+
+
+def _svg_open(attrs: str, pal_name: str, frame: Frame = WIDE_FRAME) -> str:
+    """An SVG root tag carrying the plate class its defaults are scoped to,
+    and -- on a narrow drawing -- the class its type rules are scoped to."""
+    return '<svg %s class="sky sky-%s%s">' % (
+        attrs, pal_name, ' ' + NARROW_CLASS if frame.narrow else '')
 
 
 def _panel_guard(fallback: Any = '', needs: int = 0) -> Callable:
@@ -830,6 +990,16 @@ STAR_LABEL_MAG = 2.5          # ... and labels these (default)
 # Constants, not options, until a consumer asks.
 PASS_STAR_MAG_LIMIT = 3.5
 PASS_STAR_LABEL_MAG = 1.5
+# The narrow frame's ceiling on both, whatever the report asked for.  The
+# dome drawn at 360 units has 28% of the wide dome's area, so the wide
+# census -- about 1,600 stars at mag 5.0 -- lands at nearly four times the
+# density, a gray wash with the constellation figures lost inside it.
+# Mag 4.0 puts roughly the same number of stars per unit of sky on the
+# narrow dome as mag 5.0 does on the wide one.  The label ceiling is the
+# pass chart's: at phone type only the first-magnitude names have anywhere
+# to go.  A report that asked for LESS than these keeps what it asked for.
+NARROW_STAR_MAG_LIMIT = 4.0
+NARROW_STAR_LABEL_MAG = 1.5
 # The dome keeps constellation line vertices down to this altitude: a
 # just-set star still anchors its segment (the dome's clipPath trims it at
 # the rim), while the polar projection's blowup toward the antipode stays
@@ -1149,6 +1319,8 @@ class SkyPage:
         self._theme_conf: str = str(sd.get('theme', 'dark')).lower()
         # The dome's magnitude cutoffs (skin.conf star_mag_limit /
         # star_label_mag, overridable per report).
+        # This skin's version, for the page-asset links (see .asset).
+        self._skin_version: str = str(sd.get('SKIN_VERSION', '')).strip()
         self._star_mag_limit: float = _opt_float(sd, 'star_mag_limit', STAR_MAG_LIMIT)
         self._star_label_mag: float = _opt_float(sd, 'star_label_mag', STAR_LABEL_MAG)
         # The dome's constellation figures (skin.conf constellation_lines,
@@ -1337,7 +1509,8 @@ class SkyPage:
         out.sort(key=lambda s: -s['mag'])
         return out
 
-    def _constellation_layer(self, alm, cx: float, cy: float, R: float
+    def _constellation_layer(self, alm, cx: float, cy: float, R: float,
+                             min_span: float = 0.0
                              ) -> Tuple[List[str], List[Tuple[float, float, str]]]:
         """The dome's constellation figures: the line segments as SVG
         polyline fragments (projected but unclipped -- the caller wraps
@@ -1348,7 +1521,16 @@ class SkyPage:
         it; a segment is drawn when both endpoints are at least
         CON_ALT_FLOOR high and at least one is above the horizon --
         both-below chords would otherwise cut across the dome even
-        though the segment is below the horizon its whole length."""
+        though the segment is below the horizon its whole length.
+
+        `min_span` is a floor on how wide a figure must stand, per
+        character of its name, to be given that name at all -- the narrow
+        frame's thinning.  A name is only useful pointing at the figure it
+        names, and at phone type most names are wider than most figures;
+        asking for half the name's own width keeps the ones a reader can
+        actually trace and drops the rest to their lines.  The wide frame
+        passes 0 and labels everything substantially risen, as it always
+        has."""
         amt, sky = _find_almanac_type(), _find_sky()
         if amt is None or sky is None:
             return [], []
@@ -1397,6 +1579,8 @@ class SkyPage:
             name = str(con_names.get(abbr, latin.get(abbr, abbr)))
             xs = [xy[0] for xy in seen.values()]
             ys = [xy[1] for xy in seen.values()]
+            if min_span and max(xs) - min(xs) < min_span * len(name):
+                continue
             labels.append((sum(xs) / len(xs), sum(ys) / len(ys), name))
         return segs, labels
 
@@ -1496,7 +1680,23 @@ class SkyPage:
         the configured satellites, sampled along its path (a pass in
         progress counts -- its rise is simply in the past).  One track
         only: the next thing worth watching; several arcs would be
-        clutter."""
+        clutter.
+
+        Memoized per instant, like every other chart input (_body,
+        _twilight, _sat_pass): the search evaluates the satellite at 25
+        instants along the arc, and a page that draws the pass chart on
+        both frames asks for the same track twice.  An empty dict stands
+        for "no qualifying pass", so that answer is cached too -- it is
+        the expensive one, having scanned every configured satellite to
+        reach it."""
+        key = (alm.time_ts, '_satellite_track')
+        if key in self._memo:
+            return self._memo[key] or None
+
+        def remember(track: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            self._memo[key] = track or {}
+            return track
+
         best: Optional[str] = None
         for name in self.satellite_names():
             q = self._sat_pass(alm, name)['pass']
@@ -1504,7 +1704,7 @@ class SkyPage:
                                   q['rise'] < self._sat_pass(alm, best)['pass']['rise']):
                 best = name
         if best is None:
-            return None
+            return remember(None)
         q = dict(self._sat_pass(alm, best)['pass'])
         n = 24
         pts: List[Tuple[float, float]] = []
@@ -1513,12 +1713,12 @@ class SkyPage:
             b = getattr(alm(almanac_time=int(round(ts))), best)
             alt, az = b.alt, b.az
             if alt is None or az is None:
-                return None
+                return remember(None)
             pts.append((az, alt))
         q.update(name=best, label=self._label(alm, best), pts=pts,
                  culm_i=min(n, max(0, round(n * (q['culmination'] - q['rise'])
                                             / (q['set'] - q['rise'])))))
-        return q
+        return remember(q)
 
     # ── template conveniences ─────────────────────────────────────────────────
     @_panel_guard(fallback=False, needs=TIER_EXTRAS)
@@ -1787,7 +1987,8 @@ class SkyPage:
 
     @_panel_guard(needs=TIER_ENGINE)
     def dome_svg(self, alm, palette: str = 'night', label_scale: float = 1.0,
-                 label_layers: Optional[Sequence[Tuple[Any, Any]]] = None) -> str:
+                 label_layers: Optional[Sequence[Tuple[Any, Any]]] = None,
+                 narrow: Any = False) -> str:
         """label_scale grows every dome label (stars, bodies, cardinals, ring
         degrees) by that factor -- font sizes are emitted inline so the
         collision layout always matches the rendered size.  Useful for skins
@@ -1800,20 +2001,34 @@ class SkyPage:
         ...>`, and the chart's own <style> shows the layer whose media
         query the reader's viewport matches (the base layer otherwise).
         Nothing fetches and nothing scripts.  See _label_layers for what
-        a query may contain and _layer_rules for how a layer is picked."""
+        a query may contain and _layer_rules for how a layer is picked.
+
+        narrow=True draws the phone frame (see Frame): the same projection
+        at 360 units across instead of 680, with the labels set for a hand
+        rather than scaled down with the dome, the star field cut back to
+        the brighter census that half the area can hold, and a
+        constellation named only where its figure is wide enough to carry
+        the name.  The chart declares its own center and radius
+        (data-dome-cx / -cy / -r), because a live page that moves marks
+        cannot assume the wide frame's 340/348/296 any more.
+
+        label_scale and label_layers compose with either frame: the frame
+        sets the base size of every label and a scale multiplies it, so
+        label_scale=1 means "this frame's own type" on both."""
+        f = _frame(narrow)
         pal_name, pal = _resolve_palette(palette)
         return self._sky_chart(alm, pal, pal_name,
                                _label_layers(label_scale, label_layers),
                                self._star_mag_limit, self._star_label_mag,
                                track=None, grad_id='skyg-%s' % pal_name,
                                clip_id='domec-%s' % pal_name,
-                               aria=self._t('Sky dome chart'))
+                               aria=self._t('Sky dome chart'), f=f)
 
     def _sky_chart(self, alm, pal: Dict[str, Any], pal_name: str,
                    layers: List[Tuple[float, Optional[str]]],
                    star_limit: float, star_label_mag: float,
                    track: Optional[Dict[str, Any]], grad_id: str, clip_id: str,
-                   aria: str) -> str:
+                   aria: str, f: Frame = WIDE_FRAME) -> str:
         """The all-sky chart core shared by the dome (the sky at the
         almanac's time) and the pass chart (the sky at a pass's
         culmination): frame, stars, constellation figures, bodies, and any
@@ -1830,7 +2045,14 @@ class SkyPage:
         painted its sky with the night gradient -- navy, under light-plate
         stars.  Deriving the id from the plate is what makes that safe, and
         two charts of the SAME plate may share an id precisely because they
-        would define identical gradients.  A `<style>` block has the same
+        would define identical gradients.  The FRAME joins the plate below
+        for the same reason and against a sharper failure: the two frames'
+        clip circles are different circles, so a narrow dome placed after a
+        wide one on one page would have its figures trimmed at the wide
+        dome's rim -- and a page that shows both frames and lets the
+        viewport choose is the whole point of having two (2.7).  It is
+        also a duplicate id, which is invalid HTML and fails the
+        validator.  A `<style>` block has the same
         document-wide reach and is handled the same way, by scoping every
         rule to the plate class (see _style_block).
 
@@ -1845,12 +2067,61 @@ class SkyPage:
         requests is the layout: a must-place label is nudged clear of the
         ones before it, and a star or constellation name is dropped when
         anything placed earlier is in the way."""
-        S, cx, cy, R = 680, 340, 348, 296
+        # The dome's own geometry, the mark sizes that ride on it, and
+        # how far each name stands off the mark it belongs to.  The narrow
+        # frame is not the wide one scaled: the projection shrinks, the
+        # type grows, and the marks land in between -- a planet's dot has
+        # to stay findable under a thumb without swallowing the sky it
+        # sits in.  `star_floor` is what keeps a faint star from
+        # disappearing altogether at half the radius, and `con_span` the
+        # width per character a figure must stand to be named at all.
+        if f.narrow:
+            # R is what the CARDINALS leave, not what the square allows: a
+            # 17-unit 'E' anchored off the rim needs its own glyph width
+            # inside the frame, and the N label needs a full ascent above
+            # the rim.  Measured, not guessed -- at R=157 all four of them
+            # hung outside the drawing and were clipped.
+            S, cx, cy, R, H = NARROW_W, 180, 178, 148, 360
+            n_off, s_off, ew_off, ew_dy = 12, 26, 16, 6
+            star_floor, star_dy, con_span = 1.5, 10, 6.4
+            pl_r, pl_keep, pl_gap = 5.0, 6.0, 10
+            sun_r, ray0, ray1, sun_keep, sun_gap = 7.5, 9.0, 13.0, 14.0, 16
+            moon_r, moon_keep, moon_gap = 7.0, 7.5, 11
+            sat_r, sat_keep, sat_gap = 3.6, 4.5, 10
+            com_r, com_keep, com_gap = 4.5, 5.5, 10
+            rad0, rad1, rad_dot, rad_keep, rad_gap = 3.0, 7.5, 1.6, 8.0, 12
+            trk_r, trk_off = 2.5, 16.0
+        else:
+            S, cx, cy, R, H = 680, 340, 348, 296, 706
+            n_off, s_off, ew_off, ew_dy = 12, 22, 14, 5
+            star_floor, star_dy, con_span = 1.0, 8, 0.0
+            pl_r, pl_keep, pl_gap = 5.5, 6.5, 8
+            sun_r, ray0, ray1, sun_keep, sun_gap = 9.0, 11.0, 16.0, 17.0, 19
+            moon_r, moon_keep, moon_gap = 8.0, 8.5, 12
+            sat_r, sat_keep, sat_gap = 4.0, 5.0, 8
+            com_r, com_keep, com_gap = 5.0, 6.0, 8
+            rad0, rad1, rad_dot, rad_keep, rad_gap = 3.5, 9.0, 1.8, 9.5, 10
+            trk_r, trk_off = 2.2, 18.0
+        geo = ''
+        if f.narrow:
+            # See the id note above: the frame joins the plate, because
+            # the two frames define different clip circles.
+            grad_id += '-n'
+            clip_id += '-n'
+            # A live page repositions marks by projecting alt/az itself,
+            # which takes the dome's center and radius -- and those are no
+            # longer the one pair every chart carries.  A chart without
+            # these attributes is the wide frame, whose numbers are frozen
+            # (see Frame); one with them says what it actually drew.
+            geo = (' data-dome-cx="%d" data-dome-cy="%d" data-dome-r="%d"'
+                   % (cx, cy, R))
+            star_limit = min(star_limit, NARROW_STAR_MAG_LIMIT)
+            star_label_mag = min(star_label_mag, NARROW_STAR_LABEL_MAG)
         sun = self._body(alm, 'sun')
         star_op = (STAR_OPACITY_SUN_UP if sun['alt'] > 0
                    else STAR_OPACITY_DARK)
-        p = [_svg_open('viewBox="0 0 %d 706" role="img" aria-label="%s"%s'
-                       % (S, aria, _layer_attrs(layers)), pal_name)]
+        p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"%s%s'
+                       % (S, H, aria, _layer_attrs(layers), geo), pal_name, f)]
         p.append('<defs><radialGradient id="%s">%s</radialGradient>'
                  '<clipPath id="%s"><circle cx="%d" cy="%d" r="%d"/></clipPath></defs>'
                  % (grad_id,
@@ -1866,11 +2137,17 @@ class SkyPage:
         # own `grid` rather than `line` (the section-border color, which on
         # both plates is within a hair of the dome's own luminance -- 1.07:1
         # on the night plate, invisible).  Fixed in 2.2.
-        for alt in (30, 60):
+        # The altitude rings, outermost first, and the stand-off each
+        # one's number is written at.  ONE list: the ring below and the
+        # label further down are the same entry, so neither can be moved
+        # or renamed without the other.
+        rings = [(alt, R * (90 - alt) / 90.0, nudge)
+                 for alt, nudge in ((30, 8), (60, 6))]
+        for _alt, ring_r, _nudge in rings:
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" '
                      'class="sky-stroke-grid" '
                      'stroke-width="1" stroke-dasharray="3 5" opacity="%s"/>'
-                     % (cx, cy, R * (90 - alt) / 90.0, DOME_RING_OPACITY))
+                     % (cx, cy, ring_r, DOME_RING_OPACITY))
         for x1, y1, x2, y2 in ((cx - R, cy, cx + R, cy), (cx, cy - R, cx, cy + R)):
             p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" '
                      'class="sky-stroke-grid" stroke-width="1" opacity="%s"/>'
@@ -1882,14 +2159,40 @@ class SkyPage:
         # collision list so every later label dodges them.
         labels: List[Tuple[Any, ...]] = []
         c_n, c_e, c_s, c_w = self._cardinals(alm)
-        for label, dx, dy, anch in ((c_n, 0, -R - 12, 'middle'), (c_s, 0, R + 22, 'middle'),
-                                    (c_e, -R - 14, 5, 'end'), (c_w, R + 14, 5, 'start')):
-            labels.append(('cardinal', cx + dx, cy + dy, anch, _esc(label)))
-        labels.append(('ring', cx + 6 + R / 3.0, cy - 6, '30&#176;'))
-        labels.append(('ring', cx + 8 + R * 2 / 3.0, cy - 6, '60&#176;'))
+        for label, dx, dy, anch in ((c_n, 0, -R - n_off, 'middle'),
+                                    (c_s, 0, R + s_off, 'middle'),
+                                    (c_e, -R - ew_off, ew_dy, 'end'),
+                                    (c_w, R + ew_off, ew_dy, 'start')):
+            card_x = float(cx + dx)
+            if f.narrow and anch != 'middle':
+                # E and W hang off the rim, and on this frame the rim is
+                # close to the edge.  A cardinal is whatever the station's
+                # [Ordinates] say -- one Latin letter here, two elsewhere,
+                # and a full em in a language that writes it as a single
+                # wide glyph -- so reserve a whole em per character and
+                # hold the label inside the drawing.
+                room = f.px['cardinal'] * len(label) + 2
+                card_x = (max(card_x, room) if anch == 'end'
+                          else min(card_x, S - room))
+            labels.append(('cardinal', card_x, cy + dy, anch, _esc(label)))
+        # Each number is written just outside the ring it names, off the
+        # same entry in `rings` that drew that ring -- which is the whole
+        # point of the list.  They were two separate constants until 2.7
+        # (R/3 beside "30", 2R/3 beside "60") and they were crossed, so
+        # the inner ring read 30 and the outer 60: wrong in 1.0 and in
+        # every release after it.  The trap is the projection.  The zenith
+        # is the CENTER here and the horizon is the rim, so altitude counts
+        # DOWN as the radius counts up -- the first ring out from the
+        # middle is 60, not 30, and pairing the first ring with the first
+        # number gets it backwards.  Innermost first, which is the order
+        # these two have always been written in.
+        for alt, ring_r, nudge in reversed(rings):
+            labels.append(('ring', cx + nudge + ring_r, cy - 6,
+                           '%d&#176;' % alt))
         con_labels: List[Tuple[float, float, str]] = []
         if self._constellation_lines:
-            segs, con_labels = self._constellation_layer(alm, cx, cy, R)
+            segs, con_labels = self._constellation_layer(alm, cx, cy, R,
+                                                         min_span=con_span)
             if segs:
                 p.append('<g clip-path="url(#%s)" fill="none" '
                          'class="sky-stroke-conline" '
@@ -1922,7 +2225,7 @@ class SkyPage:
         star_labels: List[Tuple[float, float, str]] = []
         for s in self._stars(alm, star_limit):
             x, y = self._dome_xy(cx, cy, R, s['az'], s['alt'])
-            r = max(1.0, min(4.0, 3.2 - 0.62 * s['mag']))
+            r = max(star_floor, min(4.0, 3.2 - 0.62 * s['mag']))
             p.append('<circle cx="%.1f" cy="%.1f" r="%.1f" class="sky-fill-ink" '
                      'opacity="%.2f">'
                      '<title>%s</title></circle>'
@@ -1931,7 +2234,7 @@ class SkyPage:
                                 name=_esc(s['name']), alt='%.1f' % s['alt'],
                                 az='%.1f' % s['az'], mag='%.2f' % s['mag'])))
             if s['named'] and s['mag'] <= star_label_mag:
-                star_labels.append((x, y - 8, _esc(s['name'])))
+                star_labels.append((x, y - star_dy, _esc(s['name'])))
         # Body marks and their labels carry data-body="<tag name>" (groups
         # classed dome-body): a consumer contract -- weewx-celestial's live
         # dome locates marks through it to reposition them between report
@@ -1943,15 +2246,15 @@ class SkyPage:
             x, y = self._dome_xy(cx, cy, R, b['az'], b['alt'])
             label = self._label(alm, name)
             p.append('<g class="dome-body" data-body="%s">'
-                     '<circle cx="%.1f" cy="%.1f" r="5.5" '
+                     '<circle cx="%.1f" cy="%.1f" r="%s" '
                      'class="sky-fill-body-%s sky-stroke-ring-%s" stroke-width="2">'
                      '<title>%s</title></circle></g>'
-                     % (_esc(name), x, y, name, name,
+                     % (_esc(name), x, y, _num(pl_r), name, name,
                         self._t('{name} — alt {alt}°, az {az}°, mag {mag}',
                                 name=_esc(label), alt='%.1f' % b['alt'],
                                 az='%.1f' % b['az'], mag='%.1f' % b['mag'])))
-            _keep(x, y, 6.5)
-            _want(x, y, _esc(label), 'bodylab', 8, must=True, body=name)
+            _keep(x, y, pl_keep)
+            _want(x, y, _esc(label), 'bodylab', pl_gap, must=True, body=name)
         if sun['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, sun['az'], sun['alt'])
             p.append('<g class="dome-body" data-body="sun">')
@@ -1959,30 +2262,30 @@ class SkyPage:
                 a = math.pi * i / 4
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'class="sky-stroke-body-sun" stroke-width="1.5"/>'
-                         % (x + 11 * math.cos(a), y + 11 * math.sin(a),
-                            x + 16 * math.cos(a), y + 16 * math.sin(a)))
-            p.append('<circle cx="%.1f" cy="%.1f" r="9" '
+                         % (x + ray0 * math.cos(a), y + ray0 * math.sin(a),
+                            x + ray1 * math.cos(a), y + ray1 * math.sin(a)))
+            p.append('<circle cx="%.1f" cy="%.1f" r="%s" '
                      'class="sky-fill-body-sun sky-stroke-ring-sun" stroke-width="1.5">'
                      '<title>%s</title></circle></g>'
-                     % (x, y,
+                     % (x, y, _num(sun_r),
                         self._t('{name} — alt {alt}°, az {az}°',
                                 name=_esc(self._label(alm, 'sun')),
                                 alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
-            _keep(x, y, 17.0)
-            _want(x, y, _esc(self._label(alm, 'sun')), 'bodylab', 19, must=True,
-                       body='sun')
+            _keep(x, y, sun_keep)
+            _want(x, y, _esc(self._label(alm, 'sun')), 'bodylab', sun_gap,
+                       must=True, body='sun')
         moon = self._body(alm, 'moon')
         if moon['alt'] > 0:
             x, y = self._dome_xy(cx, cy, R, moon['az'], moon['alt'])
             p.append('<g class="dome-body" data-body="moon">%s<title>%s</title></g>'
-                     % (self._moon_disc(alm, x, y, 8, ring=False),
+                     % (self._moon_disc(alm, x, y, moon_r, ring=False),
                         self._t('{name} — alt {alt}°, az {az}°, {pct}% illuminated',
                                 name=_esc(self._label(alm, 'moon')),
                                 alt='%.1f' % moon['alt'], az='%.1f' % moon['az'],
                                 pct='%d' % alm.moon_fullness)))
-            _keep(x, y, 8.5)
-            _want(x, y, _esc(self._label(alm, 'moon')), 'bodylab', 12, must=True,
-                       body='moon')
+            _keep(x, y, moon_keep)
+            _want(x, y, _esc(self._label(alm, 'moon')), 'bodylab', moon_gap,
+                       must=True, body='moon')
         # Satellites: a marker for any satellite above the horizon at the
         # chart's epoch -- the "sky at time T" contract.  On the pass
         # chart, whose epoch is the pass's culmination, this is what puts
@@ -2015,12 +2318,12 @@ class SkyPage:
             fill_cls, ring_cls = (('sky-fill-brass', 'sky-stroke-halo') if lit
                                   else ('sky-fill-halo', 'sky-stroke-brass'))
             p.append('<g class="dome-body" data-body="%s" data-sunlit="%d">'
-                     '<circle cx="%.1f" cy="%.1f" r="4" class="%s %s" stroke-width="2">'
+                     '<circle cx="%.1f" cy="%.1f" r="%s" class="%s %s" stroke-width="2">'
                      '<title>%s</title></circle></g>'
-                     % (_esc(name), 1 if lit else 0, x, y, fill_cls, ring_cls,
-                        title))
-            _keep(x, y, 5.0)
-            _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+                     % (_esc(name), 1 if lit else 0, x, y, _num(sat_r),
+                        fill_cls, ring_cls, title))
+            _keep(x, y, sat_keep)
+            _want(x, y, _esc(label), 'satlab', sat_gap, must=True, body=name)
         # Comets: a diamond for any configured comet above the horizon --
         # always plotted and always labeled (the config list IS the
         # filter; star_mag_limit is a census cutoff for the unconfigured
@@ -2061,10 +2364,10 @@ class SkyPage:
                      ' class="%s %s" stroke-width="2">'
                      '<title>%s</title></path></g>'
                      % (_esc(name), 1 if bright else 0, tail,
-                        x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
+                        x, y - com_r, x + com_r, y, x, y + com_r, x - com_r, y,
                         fill_cls, ring_cls, title))
-            _keep(x, y, 6.0)
-            _want(x, y, _esc(label), 'satlab', 8, must=True, body=name)
+            _keep(x, y, com_keep)
+            _want(x, y, _esc(label), 'satlab', com_gap, must=True, body=name)
         # Meteor-shower radiants: while a shower is active, a rayed mark
         # at the radiant when it stands above the horizon -- meteors
         # stream outward FROM this point, so the glyph is six short rays
@@ -2093,14 +2396,15 @@ class SkyPage:
                 rays.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                             'class="sky-stroke-brass" stroke-width="1.2" '
                             'opacity="0.8"/>'
-                            % (x + 3.5 * math.cos(a), y + 3.5 * math.sin(a),
-                               x + 9.0 * math.cos(a), y + 9.0 * math.sin(a)))
+                            % (x + rad0 * math.cos(a), y + rad0 * math.sin(a),
+                               x + rad1 * math.cos(a), y + rad1 * math.sin(a)))
             p.append('<g class="dome-body radiant" data-body="%s">%s'
-                     '<circle cx="%.1f" cy="%.1f" r="1.8" class="sky-fill-brass">'
+                     '<circle cx="%.1f" cy="%.1f" r="%s" class="sky-fill-brass">'
                      '<title>%s</title></circle></g>'
-                     % (_esc(shower.key), ''.join(rays), x, y, title))
-            _keep(x, y, 9.5)
-            _want(x, y, _esc(shower.label), 'satlab', 10, must=False,
+                     % (_esc(shower.key), ''.join(rays), x, y, _num(rad_dot),
+                        title))
+            _keep(x, y, rad_keep)
+            _want(x, y, _esc(shower.label), 'satlab', rad_gap, must=False,
                        body=shower.key)
         if track is not None:
             xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
@@ -2134,30 +2438,31 @@ class SkyPage:
                 # dome's center so it stays inside, and log its box so the
                 # remaining labels dodge it.
                 away = math.hypot(cx - x, cy - y) or 1.0
-                lx = x + 18.0 * (cx - x) / away
-                ly = y + 18.0 * (cy - y) / away
-                p.append('<circle cx="%.1f" cy="%.1f" r="2.2" class="sky-fill-brass"/>'
-                         % (x, y))
+                lx = x + trk_off * (cx - x) / away
+                ly = y + trk_off * (cy - y) / away
+                p.append('<circle cx="%.1f" cy="%.1f" r="%s" class="sky-fill-brass"/>'
+                         % (x, y, _num(trk_r)))
                 labels.append(('time', lx, ly, self._hm(ts),
                                (cx - x) / away, (cy - y) / away))
             if track['name'] not in overhead:
                 xc, yc = xy[track['culm_i']]
-                _want(xc, yc, _esc(track['label']), 'satlab', 8, must=True,
-                           body=track['name'])
+                _want(xc, yc, _esc(track['label']), 'satlab', sat_gap,
+                           must=True, body=track['name'])
         for x, y, name in star_labels:
-            _want(x, y, name, 'starlab', 6, must=False)
+            _want(x, y, name, 'starlab', 8 if f.narrow else 6, must=False)
         # Constellation names go last: background context that yields to
         # every body and star label (a collision simply drops the name --
         # its figure still shows).
         for x, y, name in con_labels:
             labels.append(('con', x, y, name))
         for scale, _query in layers:
-            p.append(self._place_labels(labels, scale, S, keep))
+            p.append(self._place_labels(labels, scale, f, S, H, keep))
         p.append('</svg>')
         return _svg_out(p, pal_name, _layer_rules(pal_name, layers))
 
     @staticmethod
-    def _place_labels(labels: List[Tuple[Any, ...]], scale: float, S: int,
+    def _place_labels(labels: List[Tuple[Any, ...]], scale: float, f: Frame,
+                      S: int, H: int,
                       keep: Optional[List[Tuple[float, float, float, float]]] = None) -> str:
         """One label layer: the collision layout run over a sky chart's
         label requests at one scale, wrapped in `<g class="dome-labels"
@@ -2180,12 +2485,19 @@ class SkyPage:
         querySelector).
 
         `keep` is the chart's body marks as boxes, counted as placed before
-        anything else, so no label lands on a mark."""
-        star_px = 10.0 * scale
-        body_px = 11.0 * scale
-        card_px = 14.0 * scale
-        grid_px = 10.0 * scale
-        con_px = 10.0 * scale
+        anything else, so no label lands on a mark.
+
+        The FRAME sets what each of these kinds of label is set at and the
+        scale multiplies it, so a narrow chart lays out phone-sized type
+        by default and label_scale keeps meaning the same thing on both
+        frames.  S and H are the chart's own width and height: a label
+        that would leave the drawing flips its anchor or stops at the
+        foot, and the numbers to stop at are the frame's, not 680 x 706."""
+        star_px = f.px['starlab'] * scale
+        body_px = f.px['bodylab'] * scale
+        card_px = f.px['cardinal'] * scale
+        grid_px = f.px['gridlab'] * scale
+        con_px = f.px['conlab'] * scale
         placed: List[Tuple[float, float, float, float]] = list(keep or [])
         out = ['<g class="dome-labels" data-label-scale="%s">' % _fmt_scale(scale)]
 
@@ -2254,9 +2566,14 @@ class SkyPage:
                 if lx + est_w > S - 4:
                     anchor = 'end'
                     lx = x - gap
-                ly = min(max(y + 4, row_h), 700.0)
+                ly = min(max(y + 4, row_h), H - 6.0)
                 fits = False
-                for _tries in range(5):
+                # More rows to try on the narrow frame: the planets crowd
+                # the ecliptic whatever the frame, and at phone type each
+                # name is half again as wide with half the sky to land in,
+                # so five steps ran out and the last few names printed on
+                # each other rather than below them.
+                for _tries in range(8 if f.narrow else 5):
                     x0 = lx if anchor == 'start' else lx - est_w
                     box = (x0, ly - px, x0 + est_w, ly + 2)
                     if clear(box):
@@ -2264,7 +2581,7 @@ class SkyPage:
                         break
                     if not must:
                         break
-                    ly = min(ly + row_h, 700.0)
+                    ly = min(ly + row_h, H - 6.0)
                 if not fits and not must:
                     continue
                 placed.append(box)
@@ -2279,7 +2596,8 @@ class SkyPage:
     @_panel_guard(needs=TIER_ENGINE)
     def pass_chart_html(self, alm, palette: str = 'night',
                         label_scale: float = 1.0,
-                        label_layers: Optional[Sequence[Tuple[Any, Any]]] = None) -> str:
+                        label_layers: Optional[Sequence[Tuple[Any, Any]]] = None,
+                        narrow: Any = False) -> str:
         """The Next Visible Pass panel: the whole sky as it will stand at the
         soonest upcoming visible pass's culmination, the pass's arc drawn
         across it -- one chart, one epoch, so the arc crosses the stars
@@ -2292,9 +2610,10 @@ class SkyPage:
         visible pass in its elements' validity window -- the satellite
         panel's rows then tell that story.  The data-body/dome-track
         hooks (the weewx-celestial consumer contract) appear here exactly
-        as on the dome, and so do label_scale and label_layers (see
-        dome_svg); the head line is HTML outside the SVG, sized by the
-        page's own CSS, and takes part in neither."""
+        as on the dome, and so do label_scale, label_layers and narrow
+        (see dome_svg); the head line is HTML outside the SVG, sized by
+        the page's own CSS, and takes part in none of the three."""
+        f = _frame(narrow)
         pal_name, pal = _resolve_palette(palette)
         layers = _label_layers(label_scale, label_layers)
         track = self._satellite_track(alm)
@@ -2314,16 +2633,41 @@ class SkyPage:
                                       PASS_STAR_MAG_LIMIT, PASS_STAR_LABEL_MAG,
                                       track=track, grad_id='skygp-%s' % pal_name,
                                       clip_id='domecp-%s' % pal_name,
-                                      aria=self._t('Pass sky chart'))
+                                      aria=self._t('Pass sky chart'), f=f)
 
     # ── rise/set ribbons ─────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
-    def ribbons_svg(self, alm, palette: str = 'night') -> str:
+    def ribbons_svg(self, alm, palette: str = 'night',
+                    narrow: Any = False) -> str:
+        """Today's rise-to-set bar for every body, over the twilight bands,
+        with each body's transit ticked and its times written beside it.
+
+        narrow=True draws the phone frame (see Frame), and this is the one
+        panel whose LAYOUT the frame changes rather than its scale: a
+        360-unit row cannot hold a name column, a day's worth of bar and a
+        '12:45 PM → 12:59 PM' time column side by side, so the narrow row
+        puts the name and the times on a line of their own and gives the
+        bar the full width underneath.  The hour scale is numbered every
+        six hours; every hour rule still draws."""
         import weeutil.weeutil
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         eod = sod + 86400
-        X0, X1, ROW, TOP = 118, 952, 30, 34
+        # The plot's edges and the row's shape.  On the narrow frame a row
+        # is a head line plus a band strip: `strip_top` is where that strip
+        # starts within the row, `strip_h` how deep it is.
+        if f.narrow:
+            # X0/X1 stand a half hour-label in from the rim: '00' and '24'
+            # are centered on them, and at 15 units that is nine units
+            # either side.
+            W, X0, X1, ROW, TOP = NARROW_W, 12, 348, 46, 36
+            hour_step, bar_h, bar_r, tick_h = 6, 12.0, 5, 9
+            strip_top, strip_h, dot_r = 24.0, 22.0, 4.5
+        else:
+            W, X0, X1, ROW, TOP = 1080, 118, 952, 30, 34
+            hour_step, bar_h, bar_r, tick_h = 3, 10.0, 4, 8
+            strip_top, strip_h, dot_r = 0.0, 0.0, 4.0
         # Configured comets with elements ride the same rows (brass bars);
         # one without elements is simply absent, the dome convention.
         bodies = [self._body(alm, n) for n in CHART_BODIES]
@@ -2342,15 +2686,18 @@ class SkyPage:
         # The right-hand column is as wide as its widest entry needs: a
         # 12-hour '12:45 PM → 12:59 PM' overruns the viewBox at the 24-hour
         # layout's X1 (11px mono, ~0.62 em a glyph, entities one glyph).
+        # The narrow frame writes those times on the row's own head line
+        # instead, so nothing there has to come out of the bar's width.
         rights = [_right(b) for b in bodies]
-        widest = max((len(re.sub(r'&#?\w+;', 'x', r)) for r in rights), default=0)
-        X1 = min(X1, int(1080 - 20 - 6.82 * widest))
+        if not f.narrow:
+            widest = max((len(re.sub(r'&#?\w+;', 'x', r)) for r in rights), default=0)
+            X1 = min(X1, int(W - 20 - f.mono * widest))
 
         def X(ts: float) -> float:
             return X0 + (X1 - X0) * (min(max(ts, sod), eod) - sod) / 86400.0
 
-        p = [_svg_open('viewBox="0 0 1080 %d" role="img" aria-label="%s"'
-                       % (H, self._t('Rise and set timeline')), pal_name)]
+        p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
+                       % (W, H, self._t('Rise and set timeline')), pal_name, f)]
         tw = self._twilight(alm)
         sun = bodies[0]
         edges = [(sod, 'night'), (tw['astro_dawn'], 'astro'), (tw['nautical_dawn'], 'naut'),
@@ -2358,22 +2705,52 @@ class SkyPage:
                  (tw['civil_dusk'], 'naut'), (tw['nautical_dusk'], 'astro'),
                  (tw['astro_dusk'], 'night')]
         edges = [(ts, shade) for ts, shade in edges if ts is not None]
-        for i, (ts, shade) in enumerate(edges):
-            end = edges[i + 1][0] if i + 1 < len(edges) else eod
-            p.append('<rect x="%.1f" y="%d" width="%.1f" height="%d" '
-                     'class="sky-fill-tw-%s"/>'
-                     % (X(ts), TOP, max(0.0, X(end) - X(ts)), plot_h, shade))
+
+        def _bands(y: float, h: float) -> None:
+            for i, (ts, shade) in enumerate(edges):
+                end = edges[i + 1][0] if i + 1 < len(edges) else eod
+                p.append('<rect x="%.1f" y="%s" width="%.1f" height="%s" '
+                         'class="sky-fill-tw-%s"/>'
+                         % (X(ts), _num(y), max(0.0, X(end) - X(ts)),
+                            _num(h), shade))
+
+        # One block of twilight behind every row on the wide frame; on the
+        # narrow frame, a strip of it behind each bar.  The narrow row
+        # writes the body's name and its times on a line of their own, and
+        # a label over a twilight BAND needs a casing under it (see
+        # _band_text) where one on the panel surface does not -- so the
+        # bands stop short of that line, and the head text is graded
+        # against the panel, which is the ground the page's own contrast
+        # standard covers.
+        #
+        # The hour RULES are a different thing and still span the whole
+        # plot, so a rule and its casing do cross the head line.  That is
+        # deliberate: one continuous time axis is what makes twelve
+        # stacked rows read as a single chart, and a 1px gridline behind
+        # text is not the band-under-a-label problem this casing exists
+        # for.  Clipping the rules to the strips would cost nine rules per
+        # row instead of nine per chart.
+        #
+        # The strips are laid down before the rules, so the rules cross
+        # them rather than hide under them.
+        if f.narrow:
+            for i in range(len(bodies)):
+                _bands(TOP + i * ROW + strip_top, strip_h)
+        else:
+            _bands(TOP, plot_h)
         # These cross the twilight bands, not the panel surface -- in `line`
         # at 0.35 they measured 1.02-1.13:1 on the night plate, the dome's
         # 2.1.3 defect exactly.  See _band_rule (2.2).
         for h in range(0, 25, 3):
             x = X0 + (X1 - X0) * h / 24.0
             p.append(_band_rule(x, TOP, x, TOP + plot_h, 'primary'))
+            if h % hour_step:
+                continue
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%02d</text>'
-                     % (x, TOP + plot_h + 18, h % 24))
+                     % (x, TOP + plot_h + (20 if f.narrow else 18), h % 24))
         for i, b in enumerate(bodies):
             y = TOP + i * ROW
-            cy = y + ROW / 2.0
+            cy = y + (strip_top + strip_h / 2.0 if f.narrow else ROW / 2.0)
             # Comets ride the same rows in brass; they are not palette
             # bodies and so carry no identity or rim class of their own.
             # Pale bodies (palette 'ring' entries) get a 1px edge on their
@@ -2391,11 +2768,23 @@ class SkyPage:
             dot_cls = ('%s sky-stroke-rim-%s' % (fill_cls, name)
                        if name in CHART_BODIES else fill_cls)
             label = self._label(alm, name)
-            p.append('<circle cx="14" cy="%.1f" r="4" class="%s" stroke-width="1"/>'
-                     % (cy, dot_cls))
-            p.append('<text x="26" y="%.1f" class="rowlab">%s</text>' % (cy + 4, _esc(label)))
-            segs: List[Tuple[float, float]] = []
             right = rights[i]
+            if f.narrow:
+                # The head line: swatch and name at the left, the body's
+                # times at the right, both on the panel above the strip.
+                head = y + 16.0
+                p.append('<circle cx="14" cy="%.1f" r="%s" class="%s" stroke-width="1"/>'
+                         % (head - 5.0, _num(dot_r), dot_cls))
+                p.append('<text x="24" y="%.1f" class="rowlab">%s</text>'
+                         % (head, _esc(label)))
+                p.append('<text x="%d" y="%.1f" text-anchor="end" '
+                         'class="mono timelab">%s</text>' % (X1, head, right))
+            else:
+                p.append('<circle cx="14" cy="%.1f" r="%s" class="%s" stroke-width="1"/>'
+                         % (cy, _num(dot_r), dot_cls))
+                p.append('<text x="26" y="%.1f" class="rowlab">%s</text>'
+                         % (cy + 4, _esc(label)))
+            segs: List[Tuple[float, float]] = []
             if b['circumpolar']:
                 segs = [(sod, eod)]
             elif not b['neverup']:
@@ -2416,7 +2805,7 @@ class SkyPage:
                 # carries -- through 2.2 it was the fill alone, which on
                 # the paper plate measured 1.01:1 for Mars.
                 p.append(_band_bar(
-                    xa, cy - 5, xz - xa, 10, 4, fill_cls,
+                    xa, cy - bar_h / 2.0, xz - xa, bar_h, bar_r, fill_cls,
                     inner='<title>%s</title>'
                     % self._t('{name} above the horizon ({duration})',
                               name=_esc(label),
@@ -2424,47 +2813,76 @@ class SkyPage:
             if b['transit'] is not None and sod <= b['transit'] <= eod:
                 xt = X(b['transit'])
                 p.append(_band_tick(
-                    xt, cy - 8, xt, cy + 8, 'sky-stroke-ink', 2,
+                    xt, cy - tick_h, xt, cy + tick_h, 'sky-stroke-ink', 2,
                     inner='<title>%s</title>'
                     % self._t('{name} transit {time}', name=_esc(label),
                               time=self._hm(b['transit']))))
-            p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>' % (X1 + 12, cy + 4, right))
+            if not f.narrow:
+                p.append('<text x="%d" y="%.1f" class="mono timelab">%s</text>'
+                         % (X1 + 12, cy + 4, right))
         xn = X(alm.time_ts)
         p.append(_band_tick(xn, TOP - 8, xn, TOP + plot_h, 'sky-stroke-brass',
                             1.5, cls='nowpulse'))
+        # The now label is centered on the tick, and near either midnight
+        # the tick is at the rim -- on the wide frame the row-label gutter
+        # absorbs that, on the narrow one the label would run off the
+        # drawing, so it slides in far enough to hold itself.
+        now_text = self._t('now {time}', time=self._hm(alm.time_ts))
+        nx = xn
+        if f.narrow:
+            half = f.mono * len(now_text) / 2.0
+            nx = min(max(xn, half + 2), W - half - 2)
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono nowlab">%s</text>'
-                 % (xn, TOP - 14, self._t('now {time}', time=self._hm(alm.time_ts))))
+                 % (nx, TOP - 14, now_text))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── orrery ───────────────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
-    def orrery_svg(self, alm, palette: str = 'night') -> str:
+    def orrery_svg(self, alm, palette: str = 'night',
+                   narrow: Any = False) -> str:
+        """The solar system from above the north ecliptic pole, orbit
+        spacing logarithmic, each body at its heliocentric longitude.
+
+        narrow=True draws the phone frame (see Frame): every body and every
+        ring, at 360 units across with the names set for a hand.  Nothing
+        is thinned here -- a body's name is this panel's whole content, so
+        the rings give up the room and the type does not."""
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
-        S, cx = 480, 240
+        # The square, the innermost and outermost orbit radii, how far a
+        # comet's marker may stray from them, and the room a name label
+        # takes beside its body.
+        if f.narrow:
+            S, cx, r0, rspan = NARROW_W, 180, 30.0, 126.0
+            lab_gap, c_lo, c_hi, step, row = 10.0, 12.0, 168.0, 18, 17
+        else:
+            S, cx, r0, rspan = 480, 240, 44.0, 176.0
+            lab_gap, c_lo, c_hi, step, row = 8.0, 16.0, 228.0, 13, 12
         lo, hi = math.log(0.387), math.log(30.07)
 
         def orbit_r(a: float) -> float:
-            return 44 + 176 * (math.log(a) - lo) / (hi - lo)
+            return r0 + rspan * (math.log(a) - lo) / (hi - lo)
 
         p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
-                       % (S, S, self._t('Solar system plan view')), pal_name)]
+                       % (S, S, self._t('Solar system plan view')), pal_name, f)]
         for a in SEMI_MAJOR_AU.values():
             p.append('<circle cx="%d" cy="%d" r="%.1f" fill="none" '
                      'class="sky-stroke-line" stroke-width="1" opacity="0.8"/>'
                      % (cx, cx, orbit_r(a)))
-        p.append('<line x1="%d" y1="%d" x2="%d" y2="%d" class="sky-stroke-muted" '
+        p.append('<line x1="%s" y1="%d" x2="%d" y2="%d" class="sky-stroke-muted" '
                  'stroke-width="1" stroke-dasharray="2 5" opacity="0.6"/>'
-                 % (cx + 44, cx, S - 12, cx))
+                 % (_num(cx + r0), cx, S - 12, cx))
         p.append('<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
                  % (S - 8, cx - 8))
         # The rim paints only where the plate gives the sun a ring (the
         # paper plate does; navy needs none), so the stroke is written
         # either way and the class decides.
-        p.append('<circle cx="%d" cy="%d" r="8" '
+        p.append('<circle cx="%d" cy="%d" r="%s" '
                  'class="sky-fill-orrery-sun sky-stroke-rim-sun" stroke-width="1.5">'
                  '<title>%s</title></circle>'
-                 % (cx, cx, _esc(self._label(alm, 'sun'))))
+                 % (cx, cx, _num(7.0 if f.narrow else 8.0),
+                    _esc(self._label(alm, 'sun'))))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
         labels: List[List[Any]] = []
@@ -2473,13 +2891,13 @@ class SkyPage:
             # Label away from center, flipped when its estimated width would
             # leave the viewBox (a body near 0 degrees sits at the right rim
             # for years at a time), then clamped vertically.
-            est_w = 8 + 7.0 * len(disp)
+            est_w = lab_gap + f.glyph * len(disp)
             anchor = 'start' if x >= cx else 'end'
             if anchor == 'start' and x + est_w > S - 6:
                 anchor = 'end'
             elif anchor == 'end' and x - est_w < 6:
                 anchor = 'start'
-            lx = x + (8 if anchor == 'start' else -8)
+            lx = x + (lab_gap if anchor == 'start' else -lab_gap)
             ly = min(max(y + 4, 14.0), S - 8.0)
             x0 = lx if anchor == 'start' else lx - est_w
             labels.append([lx, ly, anchor, _esc(disp), x0, x0 + est_w])
@@ -2519,7 +2937,7 @@ class SkyPage:
                 continue
             bright_mag = self._comet_pos(alm, name)['mag']
             h = math.radians(hlong)
-            r = min(max(orbit_r(r_au), 16.0), 228.0)
+            r = min(max(orbit_r(r_au), c_lo), c_hi)
             x, y = cx + r * math.cos(h), cx - r * math.sin(h)
             disp = self._label(alm, name)
             bright = bright_mag is not None and bright_mag <= COMET_NAKED_EYE_MAG
@@ -2539,24 +2957,34 @@ class SkyPage:
                         fill_cls, ring_cls, title))
             queue_label(x, y, disp)
         # Neighbors sharing a rim (Saturn/Neptune near 0 degrees) collide;
-        # push the later label down in 13 px steps until it clears.
+        # push the later label down a row at a time until it clears.
         placed: List[List[Any]] = []
         for lab in labels:
             for _tries in range(6):
-                if not any(lab[4] < o[5] and lab[5] > o[4] and abs(lab[1] - o[1]) < 12
+                if not any(lab[4] < o[5] and lab[5] > o[4] and abs(lab[1] - o[1]) < row
                            for o in placed):
                     break
-                lab[1] = min(lab[1] + 13, S - 8.0)
+                lab[1] = min(lab[1] + step, S - 8.0)
             placed.append(lab)
             p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="bodylab">%s</text>'
                      % (lab[0], lab[1], lab[2], lab[3]))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── analemma ─────────────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
-    def analemma_svg(self, alm, palette: str = 'night') -> str:
+    def analemma_svg(self, alm, palette: str = 'night',
+                     narrow: Any = False) -> str:
+        """The sun at local standard noon, week by week -- the figure-eight,
+        with today's noon sun marked on it.
+
+        narrow=True draws the phone frame (see Frame): the same locus and
+        the same weekly dots at 360 units across, with at most five
+        numbers on each axis and the month names thinned to the two lobes,
+        January at the bottom and June at the top.  Five month names at
+        phone type would have printed over the curve they name."""
         import calendar
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         year = time.localtime(alm.time_ts).tm_year
         # Local standard (not DST) noon, each week of the year.
@@ -2574,35 +3002,79 @@ class SkyPage:
                                       tm_now.tm_mday, 12, 0, 0)) + time.timezone
         a = alm(almanac_time=noon_today)
         today = {'ts': noon_today, 'alt': a.sun.alt, 'az': a.sun.az}
-        S = 480
+        # The plot's edges, how many gridlines apart a NUMBER is written
+        # (every gridline draws on either frame), which months are named,
+        # and how far a label stands off the thing it names.
+        months: Tuple[int, ...]
+        if f.narrow:
+            W, H, PX0, PX1, PY0, PY1 = NARROW_W, 334, 44, 348, 18, 292
+            lab_max, months, gap, today_gap = 5, (1, 6), 16, 20
+            dot_r, today_r, skip_x, skip_y = 2.5, 6.5, 34, 22
+        else:
+            W, H, PX0, PX1, PY0, PY1 = 480, 480, 54, 456, 20, 426
+            lab_max, months, gap, today_gap = 0, (1, 3, 6, 9, 11), 13, 17
+            dot_r, today_r, skip_x, skip_y = 2.0, 5.5, 30, 18
         azs = [q['az'] for q in pts + [today]]
         alts = [q['alt'] for q in pts + [today]]
         az0, az1 = min(azs) - 4, max(azs) + 4
         al0 = math.floor(min(alts) / 10.0) * 10 - 4
         al1 = math.ceil(max(alts) / 10.0) * 10 + 4
 
+        al_lines = list(range(int(al0) + 4, int(al1), 10))
+        az_lines = list(range(int(az0) + 4, int(az1), 10))
+        if f.narrow:
+            # The altitude gutter holds its widest number, measured rather
+            # than assumed -- as the equation of time's does.  A winter
+            # noon sun at high latitude gives "-10" and the degree sign,
+            # four glyphs, against a gutter guessed at 44.
+            widest = max((len('%d\u00b0' % al) for al in al_lines), default=1)
+            PX0 = max(PX0, int(6 + f.mono * widest))
+
+        def _step(n: int) -> int:
+            """How many gridlines apart a NUMBER goes on an axis with `n`
+            of them.  The analemma's two axes are sized by the sun's own
+            swing at this latitude, so neither has a fixed count: asking
+            for "every other" writes one lone number on the azimuth axis
+            at Palo Alto, where the whole figure is twelve degrees wide.
+            The narrow frame asks for at most lab_max numbers instead, and
+            the wide frame (lab_max 0) numbers every line as it always
+            has."""
+            return max(1, -(-n // lab_max)) if lab_max else 1
+
         def X(az: float) -> float:
-            return 54 + (S - 78) * (az - az0) / (az1 - az0)
+            return PX0 + (PX1 - PX0) * (az - az0) / (az1 - az0)
 
         def Y(al: float) -> float:
-            return 20 + (S - 74) * (al1 - al) / (al1 - al0)
+            return PY0 + (PY1 - PY0) * (al1 - al) / (al1 - al0)
 
         p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
-                       % (S, S, self._t('Analemma')), pal_name)]
-        for al in range(int(al0) + 4, int(al1), 10):
-            p.append('<line x1="54" y1="%.1f" x2="%d" y2="%.1f" '
+                       % (W, H, self._t('Analemma')), pal_name, f)]
+        al_step, az_step = _step(len(al_lines)), _step(len(az_lines))
+        for i, al in enumerate(al_lines):
+            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" '
                      'class="sky-stroke-line" stroke-width="1" opacity="0.55"/>'
-                     % (Y(al), S - 24, Y(al)))
-            p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%d&#176;</text>'
-                     % (Y(al) + 4, al))
-        for az in range(int(az0) + 4, int(az1), 10):
-            p.append('<line x1="%.1f" y1="20" x2="%.1f" y2="%d" '
+                     % (PX0, Y(al), PX1, Y(al)))
+            if i % al_step == 0:
+                p.append('<text x="%d" y="%.1f" text-anchor="end" '
+                         'class="mono gridlab">%d&#176;</text>'
+                         % (PX0 - 6, Y(al) + 4, al))
+        for i, az in enumerate(az_lines):
+            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" '
                      'class="sky-stroke-line" stroke-width="1" opacity="0.35"/>'
-                     % (X(az), X(az), S - 54))
-            p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%d&#176;</text>'
-                     % (X(az), S - 36, az))
+                     % (X(az), PY0, X(az), PY1))
+            if i % az_step == 0:
+                # Centered on its own gridline, and the last gridline can
+                # land within a label's half-width of the rim; hold it
+                # inside, as every other narrow label is held.
+                lx = X(az)
+                if f.narrow:
+                    half = f.mono * len('%d\u00b0' % az) / 2.0
+                    lx = min(max(lx, half + 2), W - half - 2)
+                p.append('<text x="%.1f" y="%d" text-anchor="middle" '
+                         'class="mono gridlab">%d&#176;</text>'
+                         % (lx, PY1 + 18, az))
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
-                 % (X((az0 + az1) / 2), S - 18, self._t('azimuth')))
+                 % (X((az0 + az1) / 2), PY1 + 36, self._t('azimuth')))
         path = ' '.join('%s%.1f %.1f' % ('M' if i == 0 else 'L', X(q['az']), Y(q['alt']))
                         for i, q in enumerate(pts)) + ' Z'
         p.append('<path d="%s" fill="none" class="sky-stroke-ink" '
@@ -2614,12 +3086,22 @@ class SkyPage:
         az_c = sum(q['az'] for q in pts) / len(pts)
         al_c = sum(q['alt'] for q in pts) / len(pts)
 
-        def _outward(q, dist: float) -> Tuple[float, float, str]:
+        def _outward(q, dist: float, text: str = '') -> Tuple[float, float, str]:
             dx, dy = X(q['az']) - X(az_c), Y(q['alt']) - Y(al_c)
             n = math.hypot(dx, dy) or 1.0
             lx = X(q['az']) + dist * dx / n
-            ly = min(max(Y(q['alt']) + dist * dy / n + 3, 14.0), S - 60.0)
-            return lx, ly, ('start' if dx >= 0 else 'end')
+            ly = min(max(Y(q['alt']) + dist * dy / n + 3, 14.0), PY1 - 6.0)
+            anchor = 'start' if dx >= 0 else 'end'
+            if f.narrow:
+                # The figure reaches within a label's width of the rim on
+                # this frame; slide the name back inside rather than let
+                # the drawing cut it off.  The wide frame's own 4-degree
+                # padding already leaves the room, and its numbers are
+                # frozen, so this is the narrow frame's alone.
+                est = 0.62 * f.px['gridlab'] * len(text)
+                lx = (min(lx, W - 4 - est) if anchor == 'start'
+                      else max(lx, 4 + est))
+            return lx, ly, anchor
 
         # Months to label are picked by number — comparing strftime('%b')
         # output against English abbreviations loses every label on a
@@ -2630,33 +3112,33 @@ class SkyPage:
             tm = time.localtime(q['ts'])
             first = tm.tm_mon not in month_seen
             month_seen.add(tm.tm_mon)
-            p.append('<circle cx="%.1f" cy="%.1f" r="2" class="sky-fill-muted">'
+            p.append('<circle cx="%.1f" cy="%.1f" r="%s" class="sky-fill-muted">'
                      '<title>%s</title></circle>'
-                     % (X(q['az']), Y(q['alt']),
+                     % (X(q['az']), Y(q['alt']), _num(dot_r),
                         self._t('{date} — alt {alt}°, az {az}°', date=self._date(q['ts']),
                                 alt='%.1f' % q['alt'], az='%.1f' % q['az'])))
-            if first and tm.tm_mon in (1, 3, 6, 9, 11):
-                if (abs(X(q['az']) - X(today['az'])) < 30
-                        and abs(Y(q['alt']) - Y(today['alt'])) < 18):
+            if first and tm.tm_mon in months:
+                if (abs(X(q['az']) - X(today['az'])) < skip_x
+                        and abs(Y(q['alt']) - Y(today['alt'])) < skip_y):
                     continue
-                lx, ly, anchor = _outward(q, 13)
+                lx, ly, anchor = _outward(q, gap, time.strftime('%b', tm))
                 p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono gridlab">%s</text>'
                          % (lx, ly, anchor, time.strftime('%b', tm)))
-        p.append('<circle cx="%.1f" cy="%.1f" r="5.5" '
+        p.append('<circle cx="%.1f" cy="%.1f" r="%s" '
                  'class="sky-fill-brass sky-stroke-halo" stroke-width="1.5">'
                  '<title>%s</title></circle>'
-                 % (X(today['az']), Y(today['alt']),
+                 % (X(today['az']), Y(today['alt']), _num(today_r),
                     self._t('{date} — alt {alt}°, az {az}°', date=self._date(today['ts']),
                             alt='%.1f' % today['alt'], az='%.1f' % today['az'])))
-        lx, ly, anchor = _outward(today, 17)
+        lx, ly, anchor = _outward(today, today_gap, self._t('today'))
         p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="todaylab">%s</text>'
                  % (lx, ly, anchor, self._t('today')))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── equation of time ─────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_ENGINE)
-    def eot_svg(self, alm, palette: str = 'night') -> str:
+    def eot_svg(self, alm, palette: str = 'night', narrow: Any = False) -> str:
         """The equation of time across the year: sundial minus clock (the
         USNO sign -- positive above the zero line means the sundial runs
         ahead), sampled at the analemma's own instants, local standard
@@ -2667,8 +3149,15 @@ class SkyPage:
         mislabels the seconds-precision value by up to ~90 s (late
         December).  The fixed ±18-minute frame holds the yearly extremes
         (+16m26s early November, −14m14s mid-February) with margin, so
-        the plate looks the same every year."""
+        the plate looks the same every year.
+
+        narrow=True draws the phone frame (see Frame): the same curve at
+        360 units across, with the minute scale numbered every ten rather
+        than every five and every third month named.  Every gridline and
+        every month tick still draws -- what the narrow frame drops is
+        words that would have overprinted each other, never data."""
         import calendar
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         year = time.localtime(alm.time_ts).tm_year
         # Local standard (not DST) noon, each week of the year.
@@ -2680,41 +3169,60 @@ class SkyPage:
             if seconds is None:
                 continue
             pts.append({'ts': ts, 'eot': seconds / 60.0})
-        W, H = 480, 300
+        # The plot's edges, the minute values that get a NUMBER (every
+        # gridline is drawn on either frame), which months are named, and
+        # the room the today value's own label needs to swing left in.
+        if f.narrow:
+            W, H, PX0, PX1, PY0, PY1 = NARROW_W, 240, 52, 348, 16, 190
+            lab_step, mon_step, val_w = 10, 3, 101
+        else:
+            W, H, PX0, PX1, PY0, PY1 = 480, 300, 54, 456, 16, 250
+            lab_step, mon_step, val_w = 5, 2, 110
+        # The minute scale's numbers, built before the gutter is cut,
+        # because on the narrow frame the gutter is cut FROM them: "+10 m"
+        # in English is "+10 min" in German and Dutch, and a gutter sized
+        # for the English string clips the German one off the drawing.
+        # Every narrow gutter and clamp in this file is measured from the
+        # string it will actually hold, for the same reason.
+        m_labels = {m: (_keep_units(self._t('{m} m', m='%+d' % m)) if m else '0')
+                    for m in range(-15, 16, 5) if m % lab_step == 0}
+        if f.narrow:
+            PX0 = max(PX0, int(6 + f.mono * max(len(t) for t in m_labels.values())))
         t0, t1 = float(noon0), float(noon0 + 52 * 7 * 86400)
         M0, M1 = -18.0, 18.0
 
         def X(ts: float) -> float:
-            return 54 + (W - 78) * (ts - t0) / (t1 - t0)
+            return PX0 + (PX1 - PX0) * (ts - t0) / (t1 - t0)
 
         def Y(minutes: float) -> float:
-            return 16 + (H - 66) * (M1 - minutes) / (M1 - M0)
+            return PY0 + (PY1 - PY0) * (M1 - minutes) / (M1 - M0)
 
         p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
-                       % (W, H, self._t('Equation of time')), pal_name)]
+                       % (W, H, self._t('Equation of time')), pal_name, f)]
         for m in range(-15, 16, 5):
             strong = (m == 0)
-            p.append('<line x1="54" y1="%.1f" x2="%d" y2="%.1f" class="%s" '
+            p.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="%s" '
                      'stroke-width="1" opacity="%s"/>'
-                     % (Y(m), W - 24, Y(m),
+                     % (PX0, Y(m), PX1, Y(m),
                         'sky-stroke-ink' if strong else 'sky-stroke-line',
                         '0.7' if strong else '0.5'))
-            p.append('<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">%s</text>'
-                     % (Y(m) + 4, _keep_units(self._t('{m} m', m='%+d' % m))) if m else
-                     '<text x="48" y="%.1f" text-anchor="end" class="mono gridlab">0</text>'
-                     % (Y(0) + 4))
+            if m % lab_step:
+                continue
+            p.append('<text x="%d" y="%.1f" text-anchor="end" '
+                     'class="mono gridlab">%s</text>'
+                     % (PX0 - 6, Y(m) + 4, m_labels[m]))
         # Month ticks and labels, by month number (never by comparing
         # strftime output -- the analemma's locale lesson); the label text
         # itself is strftime output, so it follows the station's locale.
         for mon in range(1, 13):
             ts_m = calendar.timegm((year, mon, 1, 12, 0, 0)) + time.timezone
             x = X(ts_m)
-            p.append('<line x1="%.1f" y1="16" x2="%.1f" y2="%d" '
+            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" '
                      'class="sky-stroke-line" stroke-width="1" opacity="0.3"/>'
-                     % (x, x, H - 50))
-            if mon % 2:
+                     % (x, PY0, x, PY1))
+            if mon % mon_step == 1:
                 p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
-                         % (x, H - 32, time.strftime('%b', time.localtime(ts_m))))
+                         % (x, PY1 + 18, time.strftime('%b', time.localtime(ts_m))))
         path = ' '.join('%s%.1f %.1f' % ('M' if i == 0 else 'L', X(q['ts']), Y(q['eot']))
                         for i, q in enumerate(pts))
         p.append('<path d="%s" fill="none" class="sky-stroke-ink" '
@@ -2727,31 +3235,40 @@ class SkyPage:
             raise ValueError('equation_of_time unavailable')  # -> panel guard
         today = {'ts': noon_today, 'eot': now_seconds / 60.0}
         tx, ty = X(today['ts']), Y(today['eot'])
-        p.append('<circle cx="%.1f" cy="%.1f" r="3.5" class="sky-fill-brass"/>'
-                 % (tx, ty))
+        p.append('<circle cx="%.1f" cy="%.1f" r="%s" class="sky-fill-brass"/>'
+                 % (tx, ty, _num(4.5 if f.narrow else 3.5)))
         # Today's value beside the point, in the almanac convention
         # (16 m 26 s style), nudged to stay inside the frame.
         total = int(round(abs(today['eot']) * 60.0))
         value = _keep_units(self._t('{sign}{m} m {s} s',
                                     sign='-' if today['eot'] < 0 else '+',
                                     m=total // 60, s=total % 60))
-        anchor = 'start' if tx < W - 110 else 'end'
+        anchor = 'start' if tx < W - val_w else 'end'
         lx = tx + (8 if anchor == 'start' else -8)
-        ly = min(max(ty + 4, 14.0), H - 56.0)
+        ly = min(max(ty + 4, 14.0), PY1 - 6.0)
         p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="mono nowlab">%s</text>'
                  % (lx, ly, anchor, value))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── sun path ─────────────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
-    def sunpath_svg(self, alm, palette: str = 'night') -> str:
+    def sunpath_svg(self, alm, palette: str = 'night',
+                    narrow: Any = False) -> str:
         """The sun's altitude/azimuth arc across today, midnight to midnight,
         over twilight-depth bands below the horizon; the moon's path dashed.
         The azimuth axis is the fixed full circle (N through E, S, W back to
         N) so the arc's seasonal swing reads at a glance and a circumpolar
-        sun needs no special casing."""
+        sun needs no special casing.
+
+        narrow=True draws the phone frame (see Frame): the same two arcs
+        and the same bands at 360 units across, with the sun's hour
+        numbers every six hours rather than every three.  The moon's rise,
+        set and transit times keep their labels -- they are the panel's
+        answer to "when", and they dodge each other as before, at the
+        wider pitch the bigger type needs."""
         import weeutil.weeutil
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         sod = weeutil.weeutil.startOfDay(alm.time_ts)
         FLOOR = -24.0
@@ -2762,7 +3279,20 @@ class SkyPage:
             moon_pts.append((i, a.moon.alt, a.moon.az))
         alts = [alt for _i, alt, _az in sun_pts + moon_pts if alt >= FLOOR]
         top = min(94.0, max(alts) + 8.0) if alts else 30.0
-        S, PX0, PX1, PY0, PY1 = 480, 46, 464, 18, 430
+        # The plot's edges, the cardinals' own size (they are set inline,
+        # so the letters under the axis cannot drift from the frame), how
+        # often the sun's arc is numbered, and the sizes and stand-offs of
+        # the marks that ride the two curves.
+        if f.narrow:
+            W, H, PX0, PX1, PY0, PY1 = NARROW_W, 336, 36, 352, 16, 300
+            card_px, hour_step, dot_r, hour_up = 17.0, 24, 2.4, 10
+            dodge_x, dodge_y, row, end_off = 34, 16, 17, 7
+            sun_r, ray0, ray1, moon_r = 8.0, 10.0, 15.0, 8.0
+        else:
+            W, H, PX0, PX1, PY0, PY1 = 480, 480, 46, 464, 18, 430
+            card_px, hour_step, dot_r, hour_up = 12.0, 12, 1.9, 7
+            dodge_x, dodge_y, row, end_off = 26, 11, 12, 5
+            sun_r, ray0, ray1, moon_r = 7.0, 9.0, 13.0, 7.0
 
         def X(az: float) -> float:
             return PX0 + (PX1 - PX0) * az / 360.0
@@ -2771,7 +3301,7 @@ class SkyPage:
             return PY0 + (PY1 - PY0) * (top - alt) / (top - FLOOR)
 
         p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
-                       % (S, S, self._t('Sun path today')), pal_name)]
+                       % (W, H, self._t('Sun path today')), pal_name, f)]
         # Day above the horizon, then the twilight depths below it.
         bands = [(top, 0.0, 'day'), (0.0, -6.0, 'civil'), (-6.0, -12.0, 'naut'),
                  (-12.0, -18.0, 'astro'), (-18.0, FLOOR, 'night')]
@@ -2800,7 +3330,8 @@ class SkyPage:
         c_n, c_e, c_s, c_w = self._cardinals(alm)
         for az, label in ((0, c_n), (90, c_e), (180, c_s), (270, c_w), (360, c_n)):
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono cardinal" '
-                     'style="font-size:12px">%s</text>' % (X(az), PY1 + 20, _esc(label)))
+                     'style="font-size:%gpx">%s</text>'
+                     % (X(az), PY1 + (24 if f.narrow else 20), card_px, _esc(label)))
 
         # Both arcs cross the twilight bands, not the panel, so they go
         # through _band_curve: on the paper plate the sun's own yellow is
@@ -2837,14 +3368,14 @@ class SkyPage:
         for i, alt, az in sun_pts[:-1]:
             if i % 4 or alt < FLOOR:
                 continue
-            p.append(_band_dot(X(az), Y(alt), 1.9, 'sky-fill-ink', opacity='0.9'))
-            if i % 12 == 0 and alt > FLOOR + 4:
-                sun_labels.append((X(az), Y(alt) - 7))
+            p.append(_band_dot(X(az), Y(alt), dot_r, 'sky-fill-ink', opacity='0.9'))
+            if i % hour_step == 0 and alt > FLOOR + 4:
+                sun_labels.append((X(az), Y(alt) - hour_up))
                 # bandlab, not plain gridlab: these follow the arc down
                 # through the twilight bands, where the panel-surface gray
                 # reads 3.59:1 on the night plate and 1.03 on the paper
                 # one.  Same reasoning as .skylab on the dome (2.2).
-                p.append(_band_text(X(az), Y(alt) - 7, 'middle',
+                p.append(_band_text(X(az), Y(alt) - hour_up, 'middle',
                                     'mono gridlab bandlab', '%02d' % (i // 4)))
 
         # ── times on the moon's curve ────────────────────────────────────────
@@ -2860,7 +3391,7 @@ class SkyPage:
 
         def _dodge(x: float, y: float, dy: float) -> float:
             for lx, ly in sun_labels:
-                if abs(x - lx) < 26 and abs(y - ly) < 11:
+                if abs(x - lx) < dodge_x and abs(y - ly) < dodge_y:
                     return ly + dy
             return y
 
@@ -2871,8 +3402,9 @@ class SkyPage:
             p.append('<g><title>%s</title>%s%s</g>'
                      % (self._t('Moon at {time} — the day’s track is open here: a lunar day runs about 50 minutes longer than a calendar day',
                                 time='00:00' if i == 0 else '24:00'),
-                        _band_dot(x, y, 2.2, 'sky-fill-trace-moon'),
-                        _band_text(x + (5 if i == 0 else -5), y - 5,
+                        _band_dot(x, y, 2.2 * (1.3 if f.narrow else 1.0),
+                                  'sky-fill-trace-moon'),
+                        _band_text(x + (end_off if i == 0 else -end_off), y - end_off,
                                    'start' if i == 0 else 'end',
                                    'mono moonlab bandlab',
                                    '00' if i == 0 else '24')))
@@ -2891,13 +3423,13 @@ class SkyPage:
             # panels that read '4:47 PM'.
             hm = self._hm(event_ts)
             if kind == 'transit':
-                if any(abs(x - X(eaz)) < 34 for _i, _a, eaz in ends):
+                if any(abs(x - X(eaz)) < dodge_x + 8 for _i, _a, eaz in ends):
                     continue
                 p.append('<g><title>%s</title>%s%s</g>'
                          % (self._t('Moon transit {time} — altitude {alt}°',
                                     time=hm, alt='%.1f' % alt),
                             _band_tick(x, y - 3, x, y - 8, moon_ink, 1.3),
-                            _band_text(x, _dodge(x, y - 12, -12), 'middle',
+                            _band_text(x, _dodge(x, y - row, -row), 'middle',
                                        'mono moonlab bandlab', hm)))
             else:
                 title = (self._t('Moonrise {time}', time=hm) if kind == 'rise'
@@ -2906,14 +3438,14 @@ class SkyPage:
                          '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'class="%s" stroke-width="1.3"/>%s</g>'
                          % (title, x, y - 4, x, y + 4, moon_ink,
-                            _band_text(x, _dodge(x, y + 15, 12), 'middle',
+                            _band_text(x, _dodge(x, y + row + 3, row), 'middle',
                                        'mono moonlab bandlab',
                                        '%s%s' % (glyph, hm))))
         moon = self._body(alm, 'moon')
         if moon['alt'] >= FLOOR:
             x, y = X(moon['az']), Y(moon['alt'])
             p.append('<g>%s<title>%s</title></g>'
-                     % (self._moon_disc(alm, x, y, 7, ring=False),
+                     % (self._moon_disc(alm, x, y, moon_r, ring=False),
                         self._t('Moon now — alt {alt}°, az {az}°',
                                 alt='%.1f' % moon['alt'], az='%.1f' % moon['az'])))
         sun = self._body(alm, 'sun')
@@ -2923,16 +3455,16 @@ class SkyPage:
                 a = math.pi * k / 4
                 p.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
                          'class="sky-stroke-body-sun" stroke-width="1.5"/>'
-                         % (x + 9 * math.cos(a), y + 9 * math.sin(a),
-                            x + 13 * math.cos(a), y + 13 * math.sin(a)))
-            p.append('<circle cx="%.1f" cy="%.1f" r="7" '
+                         % (x + ray0 * math.cos(a), y + ray0 * math.sin(a),
+                            x + ray1 * math.cos(a), y + ray1 * math.sin(a)))
+            p.append('<circle cx="%.1f" cy="%.1f" r="%s" '
                      'class="sky-fill-body-sun sky-stroke-ring-sun" stroke-width="1.5">'
                      '<title>%s</title></circle>'
-                     % (x, y,
+                     % (x, y, _num(sun_r),
                         self._t('Sun now — alt {alt}°, az {az}°',
                                 alt='%.1f' % sun['alt'], az='%.1f' % sun['az'])))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── day length through the year ──────────────────────────────────────────
     @staticmethod
@@ -2951,19 +3483,35 @@ class SkyPage:
         return 'night'
 
     @_panel_guard(needs=TIER_EXTRAS)
-    def daylength_svg(self, alm, palette: str = 'night') -> str:
+    def daylength_svg(self, alm, palette: str = 'night',
+                      narrow: Any = False) -> str:
         """Sunrise, sunset and the twilight depths for every week of the
         year, columns of local CLOCK time -- the DST steps are real and
         deliberate.  The solid curves are sunrise and sunset, the dashed
-        curve is solar noon (the transit), the brass line is today."""
+        curve is solar noon (the transit), the brass line is today.
+
+        narrow=True draws the phone frame (see Frame): all 53 weekly
+        columns and all three curves at 360 units across, with the hour
+        scale numbered every six hours and every other month named.  Every
+        hour rule and every month rule still draws."""
         import calendar
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         year = time.localtime(alm.time_ts).tm_year
         # Local standard noon Jan 1, stepped weekly (as the analemma does).
         noon0 = calendar.timegm((year, 1, 1, 12, 0, 0)) + time.timezone
         WEEKS = 53
-        X0, X1, TOP, PH = 64, 1016, 24, 300
-        H = TOP + PH + 48
+        # The plot's edges, and how often the hour scale and the month
+        # scale are written out (every rule draws on either frame).
+        if f.narrow:
+            # TOP leaves the today label a full ascent above the plot, and
+            # X1 a half month-name in from the rim.
+            W, X0, X1, TOP, PH = NARROW_W, 34, 348, 30, 230
+            hour_step, mon_step = 6, 2
+        else:
+            W, X0, X1, TOP, PH = 1080, 64, 1016, 24, 300
+            hour_step, mon_step = 3, 1
+        H = TOP + PH + (44 if f.narrow else 48)
         colw = (X1 - X0) / float(WEEKS)
 
         def hod(ts: float) -> float:
@@ -3000,8 +3548,9 @@ class SkyPage:
             set_h.append(hod(sset) if sset is not None else None)
             noon_h.append(hod(noon) if noon is not None else None)
 
-        p = [_svg_open('viewBox="0 0 1080 %d" role="img" aria-label="%s"'
-                       % (H, self._t('Day length through the year')), pal_name)]
+        p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
+                       % (W, H, self._t('Day length through the year')),
+                       pal_name, f)]
         for w, (ts, edges, rise, sset) in enumerate(cols):
             x = XW(w)
             for i, (h, shade) in enumerate(edges):
@@ -3022,6 +3571,8 @@ class SkyPage:
         # `line` they had through 2.1.3 (2.2).
         for h in range(0, 25, 3):
             p.append(_band_rule(X0, Y(h), X1, Y(h), 'primary'))
+            if h % hour_step:
+                continue
             p.append('<text x="%d" y="%.1f" text-anchor="end" class="mono gridlab">%02d</text>'
                      % (X0 - 8, Y(h) + 4, h % 24))
         for mon in range(1, 13):
@@ -3029,9 +3580,18 @@ class SkyPage:
             wf = (ts_m - noon0) / (7 * 86400.0)
             if wf > 0.2:
                 p.append(_band_rule(XW(wf), TOP, XW(wf), TOP + PH, 'secondary'))
+            if mon_step > 1 and mon % mon_step != 1:
+                continue
+            mon_name = time.strftime('%b', time.localtime(ts_m))
+            mx = min(XW(wf + 2.2), X1 - 10.0)
+            if f.narrow:
+                # A month's abbreviation is whatever the station's locale
+                # makes it; hold the centered name inside the drawing by
+                # its own width rather than by a fixed inset.
+                half = f.mono * len(mon_name) / 2.0
+                mx = min(max(mx, half + 2), W - half - 2)
             p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
-                     % (min(XW(wf + 2.2), X1 - 10.0), TOP + PH + 20,
-                        time.strftime('%b', time.localtime(ts_m))))
+                     % (mx, TOP + PH + 20, mon_name))
 
         # The three traces and the "today" line are drawn over the twilight
         # COLUMNS, not the panel, so they go through the band helpers: on
@@ -3059,31 +3619,62 @@ class SkyPage:
         wf_now = min(max((alm.time_ts - noon0) / (7 * 86400.0) + 0.5, 0.0), float(WEEKS))
         p.append(_band_tick(XW(wf_now), TOP - 8, XW(wf_now), TOP + PH,
                             'sky-stroke-brass', 1.5))
+        today_text = self._t('today')
+        tx = XW(wf_now)
+        if f.narrow:
+            # In the first or last week of the year the brass line stands
+            # at the rim, and a centered label would run off the drawing.
+            half = f.glyph * len(today_text) / 2.0
+            tx = min(max(tx, half + 2), W - half - 2)
         p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">%s</text>'
-                 % (XW(wf_now), TOP - 12, self._t('today')))
+                 % (tx, TOP - 12, today_text))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
 
     # ── the lunar month ──────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
-    def lunation_svg(self, alm, palette: str = 'night') -> str:
+    def lunation_svg(self, alm, palette: str = 'night',
+                     narrow: Any = False) -> str:
         """The current lunation, previous new moon to next, as a strip of
         thirty phase discs with the principal phases dated and today's disc
-        ringed in brass."""
+        ringed in brass.
+
+        narrow=True draws the phone frame (see Frame): fifteen discs rather
+        than thirty, each twice the size, because a crescent drawn six
+        pixels across says nothing at all -- and the principal phases'
+        names and dates stagger onto two levels, since 'first quarter' set
+        for a hand is wider than the quarter of a lunation it labels.  The
+        coarser sampling is the one thing the frame costs: today's brass
+        ring is on the nearest of fifteen discs, so it can stand up to a
+        day off the true phase where the wide strip is within half of
+        one.  Each disc still carries its own date in its tooltip, and the
+        four principal phases are dated exactly."""
+        f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
         prev_new = _raw(alm.previous_new_moon, 'unix_epoch')
         next_new = _raw(alm.next_new_moon, 'unix_epoch')
         if prev_new is None or next_new is None or next_new <= prev_new:
             raise ValueError('lunation anchors unavailable')
         span = float(next_new - prev_new)
-        N, M, W = 30, 40, 1000
-        y_disc, r = 66, 13
+        # The strip: how many discs, where they start and how far they
+        # run, the disc's own size, and -- on the narrow frame -- the two
+        # levels the principal phases' labels alternate between, and how
+        # close to the ends a label may be centered.
+        if f.narrow:
+            N, M, W, VB = 15, 24, 312, NARROW_W
+            y_disc, r, y_today, y_tick = 52, 9.0, 26, (64, 72)
+            levels = ((90, 108), (128, 146))
+        else:
+            N, M, W, VB = 30, 40, 1000, 1080
+            y_disc, r, y_today, y_tick = 66, 13.0, 40, (86, 96)
+            levels = ((115, 133), (115, 133))
+        H = 160 if f.narrow else 152
 
         def X(ts: float) -> float:
             return M + W * (ts - prev_new) / span
 
-        p = [_svg_open('viewBox="0 0 1080 152" role="img" aria-label="%s"'
-                       % self._t('The lunar month'), pal_name)]
+        p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
+                       % (VB, H, self._t('The lunar month')), pal_name, f)]
         today_i = int(round((alm.time_ts - prev_new) / span * (N - 1)))
         today_i = min(max(today_i, 0), N - 1)
         for i in range(N):
@@ -3100,25 +3691,71 @@ class SkyPage:
                     (_raw(aq.next_full_moon, 'unix_epoch'), self._t('full')),
                     (_raw(aq.next_last_quarter_moon, 'unix_epoch'), self._t('last quarter')),
                     (next_new, self._t('new')))
-        for ts_q, name in quarters:
+        for q_i, (ts_q, name) in enumerate(quarters):
             if ts_q is None or not prev_new <= ts_q <= next_new:
                 continue
             x = X(ts_q)
-            p.append('<line x1="%.1f" y1="86" x2="%.1f" y2="96" '
+            # Alternate levels on the narrow frame (one level on the
+            # wide): 'first quarter' at phone type is wider than the
+            # quarter-lunation it sits in, so neighbors that would collide
+            # side by side are written one above the other instead.  The
+            # end labels are pulled in off the rim so they stay inside the
+            # drawing; their ticks stay put.
+            y_name, y_date = levels[q_i % 2]
+            date = self._date(ts_q)
+            lx = x
+            if f.narrow:
+                # Measured from the two strings this tick actually
+                # carries, not from a guess: "new" is "Neumond" in German
+                # and "nieuwe maan" in Dutch, three times as wide, and the
+                # first and last ticks sit on the drawing's own edges.
+                half = max(f.glyph * len(name), f.mono * len(date)) / 2.0
+                lx = min(max(x, half + 2), VB - half - 2)
+            p.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" '
                      'class="sky-stroke-muted" stroke-width="1" opacity="0.7"/>'
-                     % (x, x))
-            p.append('<text x="%.1f" y="115" text-anchor="middle" class="rowlab">%s</text>'
-                     % (x, name))
-            p.append('<text x="%.1f" y="133" text-anchor="middle" class="mono gridlab">%s</text>'
-                     % (x, self._date(ts_q)))
+                     % (x, y_tick[0], x, y_tick[1]))
+            p.append('<text x="%.1f" y="%d" text-anchor="middle" class="rowlab">%s</text>'
+                     % (lx, y_name, name))
+            p.append('<text x="%.1f" y="%d" text-anchor="middle" class="mono gridlab">%s</text>'
+                     % (lx, y_date, date))
         x_t = M + W * today_i / (N - 1.0)
         p.append('<circle cx="%.1f" cy="%d" r="%.1f" fill="none" '
                  'class="sky-stroke-brass" stroke-width="1.5"/>'
                  % (x_t, y_disc, r + 4.5))
-        p.append('<text x="%.1f" y="40" text-anchor="middle" class="todaylab">%s</text>'
-                 % (x_t, self._t('today')))
+        p.append('<text x="%.1f" y="%d" text-anchor="middle" class="todaylab">%s</text>'
+                 % (x_t, y_today, self._t('today')))
         p.append('</svg>')
-        return _svg_out(p, pal_name)
+        return _svg_out(p, pal_name, narrow_type=f.narrow)
+
+    def asset(self, name: str) -> str:
+        """A page asset's href with this skin's version on it --
+        `sky.css?v=2.7` -- so a reader's browser cannot serve the previous
+        release's copy against this release's markup.
+
+        It matters as of 2.7 because the page's STRUCTURE now depends on
+        its stylesheet: the rules that choose between the wide and the
+        narrow drawing live there, and a browser reusing a cached 2.6.2
+        sky.css against a 2.7 page shows BOTH drawings, stacked.  Before
+        this release a stale stylesheet cost a color; now it costs the
+        layout.
+
+        The file on the server is not the question.  WeeWX's `copy_once`
+        rewrites it on the first report cycle after every restart --
+        unconditionally, with `shutil.copy`; it does not skip a file that
+        is already there -- so the server's copy is current.  What a
+        browser does with its OWN cached copy is a separate matter, and
+        this page sends no caching policy of its own, which leaves it to
+        the server's default and to heuristics.  Versioning the link is
+        what settles it: a release the reader has not seen asks for a URL
+        their cache has never held.
+
+        A skin embedding these panels wants the same thing for whichever
+        stylesheet carries the rules it copied.  The version is whatever
+        the report's SKIN_VERSION says, reduced to characters that are
+        safe in a URL and an attribute; with none set, the name is
+        returned unchanged and nothing breaks."""
+        safe = re.sub(r'[^0-9A-Za-z._-]', '', self._skin_version)
+        return '%s?v=%s' % (name, safe) if safe else name
 
     # ── chips and table ──────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
