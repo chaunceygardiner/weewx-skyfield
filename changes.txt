@@ -1,6 +1,17 @@
 weewx-skyfield change history
 -----------------------------
 
+2.7.1 (2026/09/20)
+------------------
+- The Sky page's Next Visible Pass chart is drawn at a readable size.
+  It is the same size of drawing as the sky dome, but it sat in the
+  page's fixed-width side column, which drew it at 58 percent and put
+  every label on it -- the altitude rings, the star and constellation
+  names, the satellite's name, the pass times -- at 5.8 pixels.  A wider
+  monitor did not help, because that column does not grow.  It now sits
+  directly below the dome, where the page is wide enough to draw it, and
+  reads at the same size the dome does.  Nothing is left off the chart.
+
 2.7 (2026/09/20)
 ----------------
 - The Sky page reads on a phone.  Every chart is now drawn twice -- the

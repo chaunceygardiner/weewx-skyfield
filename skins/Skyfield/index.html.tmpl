@@ -70,6 +70,20 @@
       $gettext("Hover or tap any mark for its coordinates.")</p>
     </section>
 
+## The pass chart appears only when some configured satellite has a visible
+## pass in its elements' validity window: the sky as it will stand at that
+## pass's culmination, the one single-epoch home for the pass's arc (the
+## dome shows only the current sky).
+#set $passchart = $sky_page.pass_chart_html($almanac, palette=$palette)
+#if $passchart
+    <section class="sec-passchart">
+      <h2 class="eyebrow">$gettext("The Next Visible Pass · the sky at its peak")</h2>
+      <div class="sky-desk">$passchart</div>
+      <div class="sky-phone">$sky_page.pass_chart_html($almanac, palette=$palette, narrow=True)</div>
+      <p class="caption">$gettext("The whole sky as it will stand at the pass's highest point, on the date above — the dashed arc is the satellite's path, its rise and set times at the ends.  Only stars bright enough for a twilight sky are drawn: a visible pass happens while your sky is half dark.")</p>
+    </section>
+#end if
+
     <section class="sec-ribbons">
       <h2 class="eyebrow">$gettext("Rise & Set · today")</h2>
       <div class="sky-desk">$sky_page.ribbons_svg($almanac, palette=$palette)</div>
@@ -130,20 +144,6 @@
         $sky_page.satellites_html($almanac, palette=$palette)
       </div>
       <p class="caption">$gettext("Each row is the satellite's next visible pass — visible means the satellite is sunlit while your sky is dark, peaking at least 10° up.  The soonest of these passes gets its own chart below.  Orbital elements refresh from CelesTrak every few hours.")</p>
-    </section>
-#end if
-
-## The pass chart appears only when some configured satellite has a visible
-## pass in its elements' validity window: the sky as it will stand at that
-## pass's culmination, the one single-epoch home for the pass's arc (the
-## dome shows only the current sky).
-#set $passchart = $sky_page.pass_chart_html($almanac, palette=$palette)
-#if $passchart
-    <section class="sec-passchart">
-      <h2 class="eyebrow">$gettext("The Next Visible Pass · the sky at its peak")</h2>
-      <div class="sky-desk">$passchart</div>
-      <div class="sky-phone">$sky_page.pass_chart_html($almanac, palette=$palette, narrow=True)</div>
-      <p class="caption">$gettext("The whole sky as it will stand at the pass's highest point, on the date above — the dashed arc is the satellite's path, its rise and set times at the ends.  Only stars bright enough for a twilight sky are drawn: a visible pass happens while your sky is half dark.")</p>
     </section>
 #end if
 
