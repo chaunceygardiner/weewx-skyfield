@@ -1,8 +1,8 @@
 weewx-skyfield change history
 -----------------------------
 
-2.x (in progress)
------------------
+2.7.2 (in progress)
+-------------------
 - On the dark Sky page the lines between rows and sections can be seen.
   The rules between the planet and satellite rows, between the table's
   rows, under the header and over the footer were drawn in the color of
