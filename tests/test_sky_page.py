@@ -3004,8 +3004,8 @@ class TestTheme:
         root = re.search(r':root\{(.*?)\}', css, re.S)
         light = re.search(r':root\.theme-light\{(.*?)\}', css, re.S)
         assert root is not None and light is not None
-        dark_vars = set(re.findall(r'--([a-z]+):', root.group(1)))
-        light_vars = set(re.findall(r'--([a-z]+):', light.group(1)))
+        dark_vars = set(re.findall(r'--([a-z-]+):', root.group(1)))
+        light_vars = set(re.findall(r'--([a-z-]+):', light.group(1)))
         assert dark_vars and dark_vars == light_vars
         assert 'color-scheme: dark' in root.group(1)
         assert 'color-scheme: light' in light.group(1)

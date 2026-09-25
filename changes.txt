@@ -1,6 +1,20 @@
 weewx-skyfield change history
 -----------------------------
 
+2.x (in progress)
+-----------------
+- On the dark Sky page the lines between rows and sections can be seen.
+  The rules between the planet and satellite rows, between the table's
+  rows, under the header and over the footer were drawn in the color of
+  the cards' own outlines, which scores nothing against either the card
+  or the page (APCA Lc 0) -- the lines were there and invisible.  Each
+  now scores on the dark page what the same line scores on the light
+  one, against the ground it sits on: Lc 26 on a card, Lc 15 on the
+  page.  The light theme is unchanged.  A skin of your own that copies
+  sky.css picks this up as two new tokens, --divider for lines on a
+  card and --page-divider for lines on the page, both #C9CFD8 on the
+  light theme.
+
 2.7.1 (2026/09/20)
 ------------------
 - The Sky page's Next Visible Pass chart is drawn at a readable size.

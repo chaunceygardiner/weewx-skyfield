@@ -8,7 +8,7 @@ assertion on the markup can see any of that -- the source can be perfectly
 correct and the page still draw navy stars on a light theme -- so this
 loads the real fragments into Chromium and reads computed styles back.
 
-Five claims, each of which was a live risk while 2.4 was being written:
+Nine claims, each of which was a live risk when it was added:
 
   1. A consumer that does nothing gets the palette it asked for.
   2. The WEAKEST possible consumer rule -- :where(.sky-fill-ink), which
@@ -35,6 +35,11 @@ Five claims, each of which was a live risk while 2.4 was being written:
      in the style block that is not zero-specificity.  8b: two charts on
      one page with the same plate and scales but different queries each
      follow their own query, not the other's.
+  9. Every line BETWEEN rows or sections -- the rosters' rows, the table's
+     rows, the header's rule and the footer's -- scores on the night plate
+     (APCA) what it scores on paper, each against the ground it actually
+     sits on, and the paper lines are still the paper design.  Through
+     2.7.1 the night ones were the box-outline color, Lc 0 on both grounds.
 
 Run it with the WeeWX venv python (it renders the panels); it re-invokes
 itself under tools/pwenv for the browser half, and does nothing where no
@@ -86,6 +91,10 @@ def render(out_dir):
              'ribbons_night': page.ribbons_svg(alm),
              'ribbons_light': page.ribbons_svg(alm, palette='light'),
              'chips_night': page.chips_html(alm),
+             # Claim 9: the page's dividers in their real containers.
+             'satellites_night': page.satellites_html(alm),
+             'table_night': page.table_html(alm),
+             'footer': page.footer_html(),
              # The pass chart is the SINGLE-STATE case, and so the one the
              # partner defaults exist for: its satellite is sunlit at
              # culmination (that is what makes the pass visible), so
@@ -350,6 +359,62 @@ def check(work_dir):
                 expect('8b. %dx%d %s hides layer %s' % (width, height, label, hides),
                        got.get(hides), 'none')
         page.set_viewport_size({'width': 1280, 'height': 720})
+
+        # 9. Dividers.  A line between rows is not held to a bar; it is
+        #    held to its paper twin, scored against the ground under it,
+        #    which only the cascade knows -- so the ground is the nearest
+        #    ancestor that paints a background, read back from the browser
+        #    like the line itself.  The shell is the template's own
+        #    nesting: the header and footer on the page, the rosters and
+        #    the table in a section card.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import contrast
+        shell = ('<head><meta charset="utf-8">'
+                 '<style>' + skin + '</style></head><body><div class="page">'
+                 '<header><h1>Sky</h1></header><div class="main"><div class="primary">'
+                 '<section class="sec-chips"><div class="chips">' + frags['chips_night']
+                 + '</div></section><section class="sec-satellites"><div class="chips">'
+                 + frags['satellites_night'] + '</div></section>'
+                 '<section class="sec-table"><div class="tablewrap">' + frags['table_night']
+                 + '</div></section></div></div><footer>' + frags['footer']
+                 + '</footer></div></body></html>')
+        lines = (('planet roster row', '.sec-chips .chip', 'Bottom'),
+                 ('satellite roster row', '.sec-satellites .chip', 'Bottom'),
+                 ('table row', 'tbody td', 'Bottom'),
+                 ('header rule', 'header', 'Bottom'),
+                 ('footer rule', 'footer', 'Top'))
+        scored = {}
+        for theme in ('', 'theme-light'):
+            page.set_content('<!DOCTYPE html><html class="%s">' % theme + shell)
+            for label, selector, side in lines:
+                got = page.eval_on_selector(selector, '''(el, side) => {
+                    const cs = getComputedStyle(el);
+                    let g = el.parentElement;
+                    while (g && getComputedStyle(g).backgroundColor
+                                  === 'rgba(0, 0, 0, 0)') { g = g.parentElement; }
+                    return {line: cs['border' + side + 'Color'],
+                            style: cs['border' + side + 'Style'],
+                            width: cs['border' + side + 'Width'],
+                            ground: g ? getComputedStyle(g).backgroundColor : null};
+                }''', side)
+                plate = 'light' if theme else 'night'
+                if got['style'] != 'solid' or got['width'] != '1px' or got['ground'] is None:
+                    failures.append('9. %s %s: not a drawn line on a painted ground: %s'
+                                    % (plate, label, got))
+                    continue
+                under = contrast.flatten(got['ground'])
+                over = contrast.flatten(got['line'], under + (1.0,))
+                scored[(label, plate)] = (got['line'], abs(contrast.apca(over, under)))
+        for label, _selector, _side in lines:
+            if (label, 'night') not in scored or (label, 'light') not in scored:
+                continue
+            (night_line, night_lc), (light_line, light_lc) = (
+                scored[(label, 'night')], scored[(label, 'light')])
+            expect('9. %s on paper is the paper design' % label,
+                   light_line, _hex_to_rgb('#C9CFD8'))
+            if abs(night_lc - light_lc) > .5:
+                failures.append('9. %s: night %s Lc %.1f, paper %s Lc %.1f'
+                                % (label, night_line, night_lc, light_line, light_lc))
 
         browser.close()
 

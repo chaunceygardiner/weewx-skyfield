@@ -4,6 +4,14 @@
 :root{
   --night:#0A0F22; --vault:#111834; --ink:#E9E4D4; --muted:#C0C5D9;
   --brass:#E0C27F; --line:#2A3358;
+  /* The lines BETWEEN things: --divider between rows on a card (the
+     planet and satellite rosters, the table), --page-divider under the
+     header and over the footer, on the page ground.  Not --line, which is
+     the outline of a box and scores APCA Lc 0 against both grounds here.
+     A night divider scores what its paper twin scores on its own ground:
+     #C9CFD8 is Lc 25.9 on the white card and 14.6 on the paper page;
+     #676F8D is Lc 26.0 on --vault and #495172 is Lc 14.7 on --night. */
+  --divider:#676F8D; --page-divider:#495172;
   color-scheme: dark;
 }
 /* The light theme (theme = light, or auto with the sun up): the paper-atlas
@@ -13,7 +21,7 @@
    governs) flips with it. */
 :root.theme-light{
   --night:#EFECE2; --vault:#FFFFFF; --ink:#1D2C4E; --muted:#5C6672;
-  --brass:#A44A08; --line:#C9CFD8;
+  --brass:#A44A08; --line:#C9CFD8; --divider:#C9CFD8; --page-divider:#C9CFD8;
   color-scheme: light;
 }
 *{box-sizing:border-box}
@@ -27,7 +35,7 @@ body{
       font-variant-numeric: tabular-nums}
 .smallcaps{font-variant-caps: small-caps; letter-spacing:.14em}
 header{display:flex; justify-content:space-between; align-items:flex-start;
-       gap:24px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:22px}
+       gap:24px; flex-wrap:wrap; border-bottom:1px solid var(--page-divider); padding-bottom:22px}
 h1{font-family: Georgia, 'Times New Roman', serif; font-variant-caps: small-caps;
    letter-spacing:.16em; font-weight:400; font-size:clamp(1.6rem, 4vw, 2.4rem);
    margin:0; color:var(--ink); text-wrap:balance}
@@ -101,7 +109,7 @@ section{background:var(--vault); border:1px solid var(--line); padding:20px 22px
   header{padding-bottom:16px}
 }
 .chips{display:flex; flex-direction:column; gap:9px}
-.chip{display:flex; gap:10px; align-items:flex-start; border-bottom:1px solid var(--line);
+.chip{display:flex; gap:10px; align-items:flex-start; border-bottom:1px solid var(--divider);
       padding:7px 2px}
 .chip:last-child{border-bottom:none}
 /* The chip and table swatches.  Their COLOR arrives inline from the panel,
@@ -173,12 +181,12 @@ table{border-collapse:collapse; width:100%; font-size:.85rem}
 th{font-variant-caps:small-caps; letter-spacing:.1em; font-weight:400; color:var(--muted);
    text-align:right; padding:6px 10px; border-bottom:1px solid var(--brass)}
 th:first-child{text-align:left}
-td{padding:6px 10px; text-align:right; border-bottom:1px solid var(--line);
+td{padding:6px 10px; text-align:right; border-bottom:1px solid var(--divider);
    font-family:ui-monospace, Menlo, Consolas, monospace; font-variant-numeric:tabular-nums}
 td.tname{text-align:left; font-family:Georgia, serif; font-variant-caps:small-caps;
          letter-spacing:.06em}
 td .dot{margin-right:8px; margin-top:0; vertical-align:baseline}
-footer{color:var(--muted); font-size:.82rem; border-top:1px solid var(--line);
+footer{color:var(--muted); font-size:.82rem; border-top:1px solid var(--page-divider);
        padding-top:16px; text-align:center}
 footer .sep{color:var(--brass); padding:0 6px}
 footer a{color:inherit; text-underline-offset:3px; text-decoration-color:var(--brass)}
