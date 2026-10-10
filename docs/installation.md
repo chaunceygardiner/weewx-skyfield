@@ -140,7 +140,12 @@ station already has elements less than three hours old — then by weewxd, which
 checks for missing or stale elements at every startup — a satellite just added to the
 configuration is live seconds after the restart — and refreshes about every three hours
 thereafter, on a worker thread that never blocks reports; on a failed fetch the old file is
-kept and the retry backs off gently.  Each satellite's elements live
+kept and the retry backs off gently.  An HTTP 403, 404 or 429 gets no quick retries at all:
+CelesTrak answers 403 to an address that has asked too often and 404 for an object it does not
+carry, neither changes on a retry, and repeating the request is what gets an address blocked
+outright, so the extension logs the answer's own words and waits a full three hours before
+asking again -- for that satellite after a 404, for every satellite after a 403 or 429, since
+those are about the address.  Each satellite's elements live
 in their own file, `wxskyfield_sat_<norad>.tle`, in a `wxskyfield` directory beside the
 station's SQLite database (under `SQLITE_ROOT`), and survive restarts.  Elements whose epoch
 is more than seven days older than the almanac's time are *not used*: every tag for that
@@ -181,7 +186,9 @@ same `wxskyfield` directory as the satellite TLEs.  It follows the satellites' f
 at a gentler cadence: fetched at install unless the cached file is less than two days old, at
 any weewxd startup that finds it missing or stale, then about every two days, on a worker
 thread that never blocks reports — written atomically, the old file kept on any failure,
-backoff on retry.  Set
+backoff on retry, and a 403, 404 or 429 waiting the full two days instead, as for the
+satellites.
+Set
 `comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
 ever: an air-gapped station maintains the one `wxskyfield_comets.txt` file by any means it
 likes (it is the MPC file verbatim).  Unlike satellite elements there is no age cutoff —

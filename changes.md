@@ -1,6 +1,18 @@
 # weewx-skyfield change history
 
-## 2.7.2 (in progress)
+## 2.8 (2026/10/09)
+- A 403, 404 or 429 from CelesTrak or the Minor Planet Center gets no
+  quick retries.  Every failed fetch used to retry in five minutes, doubling up
+  to the normal cadence, for as long as it failed -- which is right for a
+  timeout or a 500, and wrong for a 403 or 404: CelesTrak sends 403 to an
+  address that has asked too often, and says that an address which keeps
+  repeating the request is blocked outright.  Now the fetch waits one
+  full cadence -- three hours, two days for comets -- before asking
+  again: for that one satellite after a 404, which is about a catalog
+  number CelesTrak does not carry, and for every satellite after a 403
+  or 429, which are about the address.  The cached elements are kept,
+  and the answer's own words are logged as an error, once per attempt,
+  so the reason is in the log instead of a warning every few minutes.
 - On the dark Sky page the lines between rows and sections can be seen.
   The rules between the planet and satellite rows, between the table's
   rows, under the header and over the footer were drawn in the color of

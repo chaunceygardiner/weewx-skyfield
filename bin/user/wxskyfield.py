@@ -17,6 +17,7 @@ the almanac alone.
 
 import gzip
 import io
+import html
 import logging
 import math
 import os
@@ -24,6 +25,7 @@ import re
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from datetime import datetime
@@ -61,7 +63,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.7.1'
+WXSKYFIELD_VERSION = '2.8'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -210,9 +212,14 @@ class WxSkyfield(StdService):
         fetcher is atomic) and backs off: retry in five minutes, doubling
         per consecutive failure up to the normal three-hour cadence, so a
         recovered network refreshes quickly without hammering CelesTrak.
-        In-memory backoff state resetting on restart (to try-now) is
-        correct.  Never raises -- and never touches the engine: weewxd's
-        shutdown does not wait for daemon threads."""
+        An HTTP 403, 404 or 429 gets none of that (see http_refusal): a
+        404 is about one catalog number, so that satellite waits one full
+        cadence; a 403 or 429 is about this address, so EVERY satellite waits
+        one full cadence and the pass ends there, which is at most eight
+        requests a day from a blocked address, and a lifted block heals
+        on its own.  In-memory backoff state resetting on restart (to
+        try-now) is correct.  Never raises -- and never touches the
+        engine: weewxd's shutdown does not wait for daemon threads."""
         for norad in norads:
             try:
                 assert self.sky.sat_dir is not None
@@ -222,6 +229,29 @@ class WxSkyfield(StdService):
                 self._sat_retry_delay.pop(norad, None)
                 log.info('Fetched satellite elements for %d.' % norad)
             except Exception as e:
+                refusal = http_refusal(e)
+                if refusal is not None:
+                    if refusal.code == 404:
+                        self._sat_retry_ts[norad] = time.time() + SAT_REFRESH_SECS
+                        self._sat_retry_delay.pop(norad, None)
+                        on_file = ('keeping the cached elements'
+                                   if os.path.exists(self.sky.sat_path(norad))
+                                   else 'nothing on file for it')
+                        log.error('CelesTrak has no elements for satellite %d (%s);'
+                                  ' check the NORAD number.  Asking again in %d hours;'
+                                  ' %s.' % (norad, refusal.text, SAT_REFRESH_SECS // 3600,
+                                            on_file))
+                        continue
+                    for each in set(self.sky.satellites.values()):
+                        self._sat_retry_ts[each] = time.time() + SAT_REFRESH_SECS
+                        self._sat_retry_delay.pop(each, None)
+                    log.error('CelesTrak answered %d for satellite %d (%s): it blocks'
+                              ' an address that asks too often, and repeating the'
+                              ' request gets the address blocked outright.  Asking'
+                              ' again in %d hours, for every satellite; keeping what'
+                              ' is on file.'
+                              % (refusal.code, norad, refusal.text, SAT_REFRESH_SECS // 3600))
+                    return
                 delay = min(self._sat_retry_delay.get(norad, SAT_RETRY_BASE_SECS),
                             float(SAT_REFRESH_SECS))
                 self._sat_retry_ts[norad] = time.time() + delay
@@ -264,8 +294,9 @@ class WxSkyfield(StdService):
     def _comet_fetch_worker(self) -> None:
         """Fetch the CometEls file.  A failure keeps the old file (the
         fetcher is atomic) and backs off: retry in five minutes, doubling
-        per consecutive failure up to the normal cadence.  Never raises,
-        never touches the engine."""
+        per consecutive failure up to the normal cadence; an HTTP 403,
+        404 or 429 waits one full cadence instead, as for the satellites.
+        Never raises, never touches the engine."""
         try:
             assert self.sky.comet_dir is not None
             os.makedirs(self.sky.comet_dir, exist_ok=True)
@@ -274,6 +305,16 @@ class WxSkyfield(StdService):
             self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
             log.info('Fetched comet elements into %s.' % self.sky.comet_path())
         except Exception as e:
+            refusal = http_refusal(e)
+            if refusal is not None:
+                self._comet_retry_ts = time.time() + COMET_REFRESH_SECS
+                self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
+                log.error('The MPC answered %d for the comet elements (%s).  Asking'
+                          ' again in %d days; %s.'
+                          % (refusal.code, refusal.text, COMET_REFRESH_SECS // 86400,
+                             'keeping the cached elements'
+                             if os.path.exists(self.sky.comet_path()) else 'nothing on file'))
+                return
             delay = min(self._comet_retry_delay, float(COMET_REFRESH_SECS))
             self._comet_retry_ts = time.time() + delay
             self._comet_retry_delay = delay * 2
@@ -1336,6 +1377,46 @@ def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
             name = lines[i - 1] if i > 0 else 'NORAD %d' % norad
             return name, line, lines[i + 1]
     raise ValueError('no two-line element set found')
+
+
+# An element source answers 403 or 404 for reasons a quick retry cannot
+# change.
+# CelesTrak's 403 is its block on an address that asked too often (the
+# page it sends says so, and says that a client which keeps repeating the
+# request has the address blocked outright, which stops every satellite
+# at once); its 404 is an object it does not carry; a 429 is the standard
+# rate-limit answer, about the address like a 403.  So those get no
+# five-minute retries: the fetch waits one full cadence, which is the
+# rate CelesTrak calls polite, with the answer's own words in the log.
+HTTP_REFUSAL_CODES = (403, 404, 429)
+HTTP_REFUSAL_EXCERPT_CHARS = 200
+
+
+class HttpRefusal(NamedTuple):
+    code: int
+    text: str   # "HTTP 403 Forbidden: <the page's words>", for the log
+
+
+def http_refusal(e: BaseException) -> Optional[HttpRefusal]:
+    """For an HTTP 403, 404 or 429 raised by urlopen, the status and the
+    answer's text -- scripts and styles dropped (an unclosed one to the
+    end, since a 16 KB read can stop inside it), tags stripped, entities
+    decoded, whitespace collapsed, cut to HTTP_REFUSAL_EXCERPT_CHARS --
+    for the log; None for any other failure.  Reading the body cannot
+    raise: a body that will not read leaves the status alone."""
+    if not isinstance(e, urllib.error.HTTPError) or e.code not in HTTP_REFUSAL_CODES:
+        return None
+    try:
+        text = e.read(16384).decode('utf-8', 'replace')
+    except Exception:
+        text = ''
+    text = re.sub(r'(?is)<(script|style)\b.*?(?:</\1\s*>|\Z)', ' ', text)
+    text = re.sub(r'<[^>]*>', ' ', text)
+    text = ' '.join(html.unescape(text).split())
+    if len(text) > HTTP_REFUSAL_EXCERPT_CHARS:
+        text = text[:HTTP_REFUSAL_EXCERPT_CHARS].rstrip() + '...'
+    status = 'HTTP %d %s' % (e.code, e.reason)
+    return HttpRefusal(e.code, '%s: %s' % (status, text) if text else status)
 
 
 def fetch_satellite_elements(norad: int, path: str, timeout: float = 15.0) -> None:

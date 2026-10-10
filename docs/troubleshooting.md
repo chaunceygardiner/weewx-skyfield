@@ -205,6 +205,9 @@ again.  Restart WeeWX to see whether a fix took.
 |---|---|
 | `Fetched satellite elements for N.` / `Fetched comet elements into …` | A refresh succeeded. |
 | `Could not fetch satellite elements for N (…); keeping the …` | A fetch failed; the previous file is kept and the retry backs off.  Harmless in isolation — a transient CelesTrak timeout recovers on its own. |
+| `CelesTrak answered 403 for satellite N (HTTP 403 …) … for every satellite …` (or 429) | CelesTrak blocks an address that asks too often, and its page, quoted in the message, says why — usually several installs behind one address, each asking.  Every cached file is kept and no satellite is asked for again for three hours; the block lifts within two hours of the asking stopping.  Fix the cause: let one install fetch and copy the files to the rest with `satellite_downloads = false`.  (A 403 from something between you and CelesTrak, such as a captive portal, costs the same three hours; the quoted page shows which it was.) |
+| `CelesTrak has no elements for satellite N (HTTP 404 …); check the NORAD number.` | A catalog number CelesTrak does not carry: a typo in `[[Satellites]]`, or an object that has decayed.  Asked again every three hours; fix the number and restart. |
+| `The MPC answered 403 for the comet elements (…)` / `… 404 …` / `… 429 …` | The cached file, if there is one, is kept and the fetch waits the full two days before trying again. |
 | `Satellite N has no usable elements (missing, unreadable, …)` | Every tag for that satellite now reads `N/A`.  Logged once at the crossing, not per tag. |
 | `Satellite N has usable elements again.` | Recovered. |
 | `Comet X (…) has no elements in the cached CometEls…` | The MPC dropped it, or the cache is missing.  Tags read `N/A`. |
