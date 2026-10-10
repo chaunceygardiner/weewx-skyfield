@@ -15,6 +15,7 @@ sanity checked against PyEphem and published almanac data.  They serve as
 regression values.
 """
 
+import ast
 import contextlib
 import io
 import json
@@ -24,6 +25,7 @@ import re
 import shutil
 import sys
 import time
+import types
 
 from typing import List, Tuple
 
@@ -172,6 +174,17 @@ def make_config(**skyfield_options):
     return config
 
 
+def make_service(tmp_path, **skyfield_options):
+    """A started WxSkyfield service with its element cache under tmp_path,
+    and the stub engine it bound its events on."""
+    config = make_config(**skyfield_options)
+    config['DatabaseTypes'] = {'SQLite': {'SQLITE_ROOT': str(tmp_path)}}
+    with saved_almanacs():
+        engine = StubEngine()
+        service = wxskyfield.WxSkyfield(engine, config)
+    return engine, service
+
+
 class TestService:
     def test_service_registers_almanac(self):
         with saved_almanacs():
@@ -255,25 +268,42 @@ class TestService:
 
 class TestTerminatePropagation:
     """weewxd stops by raising Terminate from its SIGTERM signal handler --
-    inside whatever the main thread is executing at that instant.  This
-    extension's main-thread exposure is Sky.__init__, which the service
-    runs at engine startup; its broad exception handlers must hand
-    Terminate back (a shutdown request, not a failure -- the one exemption
-    from the never-raise contract), or weewx cannot shut down.  Almanac
-    tags run on the report thread, which never receives signals."""
+    inside whatever the main thread is executing at that instant -- and
+    Terminate subclasses Exception, so a broad handler on a main-thread
+    path would catch the shutdown as its own failure, log it, and leave
+    weewxd running until systemd kills it.  The main-thread paths here
+    are Sky.__init__, which the service runs at engine startup, and the
+    two element refreshers, bound to STARTUP and NEW_ARCHIVE_RECORD;
+    their broad handlers must hand Terminate back (a shutdown request,
+    not a failure -- the one exemption from the never-raise contract).
+    Almanac tags run on the report thread, which never receives signals.
+
+    The guard asks the RUNNING weewxd for its class rather than matching
+    the name, so these tests install a stand-in as weewxd.Terminate for
+    their duration; one test checks the real weewxd's class is seen."""
 
     class Terminate(Exception):
-        """Stands in for weewxd's Terminate, which is recognized by name
-        (weewxd runs as __main__, so the real class cannot be imported)."""
+        """Stands in for weewxd's Terminate."""
 
-    def test_sky_init_lets_terminate_through(self, monkeypatch):
-        def raise_terminate(*args, **kwargs):
-            raise self.Terminate
-        monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', raise_terminate)
+    class Impostor(Exception):
+        """A class that merely shares the name, installed nowhere."""
+    Impostor.__name__ = 'Terminate'
+
+    @pytest.fixture
+    def weewxd_terminate(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, 'weewxd',
+                            types.SimpleNamespace(Terminate=self.Terminate))
+        return self.Terminate
+
+    def raise_terminate(self, *args, **kwargs):
+        raise self.Terminate
+
+    def test_sky_init_lets_terminate_through(self, monkeypatch, weewxd_terminate):
+        monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', self.raise_terminate)
         with pytest.raises(self.Terminate):
             wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
 
-    def test_ordinary_exception_still_swallowed(self, monkeypatch):
+    def test_ordinary_exception_still_swallowed(self, monkeypatch, weewxd_terminate):
         """The reraise guard must not change error handling for real
         failures: Sky.__init__ still logs and leaves valid=False."""
         def raise_valueerror(*args, **kwargs):
@@ -281,6 +311,174 @@ class TestTerminatePropagation:
         monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', raise_valueerror)
         s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
         assert not s.is_valid()
+
+    def test_a_class_that_only_shares_the_name_is_a_failure(self, monkeypatch, weewxd_terminate):
+        """A library exception that happens to be called Terminate is not
+        the shutdown: it is logged away like any other failure."""
+        def raise_impostor(*args, **kwargs):
+            raise self.Impostor('not weewxd')
+        monkeypatch.setattr(wxskyfield.skyfield.api.load, 'timescale', raise_impostor)
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
+        assert not s.is_valid()
+
+    @pytest.fixture
+    def real_weewxd(self):
+        """The venv's own weewxd (weewxd.py only runs main() as
+        __main__), a hard import since the suite requires the venv --
+        a skip here would report the guard verified when it was not --
+        and gone from sys.modules again afterwards, so no later test
+        sees the real class where it expects the stand-in."""
+        fresh = 'weewxd' not in sys.modules
+        import weewxd
+        yield weewxd
+        if fresh:
+            sys.modules.pop('weewxd', None)
+
+    def test_real_weewxd_terminate_is_recognized(self, real_weewxd):
+        """The guard reads the class off the running weewxd, so a rename
+        upstream would silently disarm it: pin the real one."""
+        weewxd = real_weewxd
+        assert issubclass(weewxd.Terminate, Exception)
+        with pytest.raises(weewxd.Terminate):
+            wxskyfield.reraise_if_terminate(weewxd.Terminate())
+        wxskyfield.reraise_if_terminate(ValueError('boom'))
+
+    def test_the_guard_only_trusts_a_class(self, monkeypatch):
+        """A module whose Terminate is not an exception class (a function,
+        a string) is skipped rather than tripped over."""
+        monkeypatch.setitem(sys.modules, 'weewxd', types.SimpleNamespace(Terminate='x'))
+        monkeypatch.setitem(sys.modules, '__main__', types.SimpleNamespace(Terminate=int))
+        wxskyfield.reraise_if_terminate(self.Terminate())
+
+    @pytest.fixture(scope='class')
+    @classmethod
+    def service(cls, tmp_path_factory):
+        """One service for the four refresher tests: each patches a probe
+        on the instance (restored per test) and the handler under test
+        never gets as far as starting a thread, so nothing carries over."""
+        _engine, service = make_service(tmp_path_factory.mktemp('terminate'),
+                                        Satellites={'iss': str(ISS_NORAD)},
+                                        Comets={'halley': '1P'})
+        return service
+
+    @pytest.mark.parametrize('handler, probe, thread', [
+        ('refresh_satellite_elements', 'stale_satellites', '_sat_thread'),
+        ('refresh_comet_elements', 'comet_stale', '_comet_thread'),
+    ])
+    def test_refresh_lets_terminate_through(self, service, monkeypatch, caplog,
+                                            weewxd_terminate, handler, probe, thread):
+        """A SIGTERM landing while the refresher is deciding what is stale
+        propagates out of the handler with nothing logged and no thread
+        started."""
+        monkeypatch.setattr(service, probe, self.raise_terminate)
+        with caplog.at_level(logging.DEBUG, logger=wxskyfield.log.name):
+            with pytest.raises(self.Terminate):
+                getattr(service, handler)(None)
+        assert caplog.records == []
+        assert getattr(service, thread) is None
+
+    @pytest.mark.parametrize('handler, probe, thread', [
+        ('refresh_satellite_elements', 'stale_satellites', '_sat_thread'),
+        ('refresh_comet_elements', 'comet_stale', '_comet_thread'),
+    ])
+    def test_refresh_still_logs_ordinary_failures(self, service, monkeypatch, caplog,
+                                                  weewxd_terminate, handler, probe, thread):
+        def raise_oserror(*args, **kwargs):
+            raise OSError('disk gone')
+        monkeypatch.setattr(service, probe, raise_oserror)
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            getattr(service, handler)(None)
+        assert [r.getMessage() for r in caplog.records] == [
+            '%s: could not start the element fetch: disk gone' % handler]
+        assert getattr(service, thread) is None
+
+    MAIN_THREAD_ROOTS = ('WxSkyfield.__init__', 'WxSkyfield.refresh_satellite_elements',
+                         'WxSkyfield.refresh_comet_elements')
+    BROAD = ('Exception', 'BaseException')
+
+    @staticmethod
+    def is_broad(handler) -> bool:
+        """A bare except, Exception/BaseException as a name or an
+        attribute (builtins.Exception), or a tuple holding one."""
+        def broad_name(node) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in TestTerminatePropagation.BROAD
+            if isinstance(node, ast.Attribute):
+                return node.attr in TestTerminatePropagation.BROAD
+            return False
+        t = handler.type
+        if t is None or broad_name(t):
+            return True
+        return isinstance(t, ast.Tuple) and any(broad_name(elt) for elt in t.elts)
+
+    def test_every_main_thread_handler_asks_first(self):
+        """Every broad handler reachable on the main thread hands
+        Terminate back before anything else.  A convention guard over the
+        source: the tests above prove the behavior, this one catches a
+        handler added without the call, or the call moved below a line of
+        the handler's own work.  The walk starts at the service's
+        constructor and its two event handlers and follows every call it
+        can resolve -- a module-level function, a class (its __init__),
+        self.method and Class.method -- so a handler added to something
+        those call (the catalog scan at startup, say) is covered without
+        anyone listing it.  A thread's target= is not a call and is not
+        followed, which is right: the workers run on their own threads."""
+        with open(wxskyfield.__file__) as f:
+            tree = ast.parse(f.read())
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+        methods = {'%s.%s' % (c.name, m.name): m for c in classes.values()
+                   for m in c.body if isinstance(m, ast.FunctionDef)}
+
+        def callees(qualname):
+            cls = qualname.split('.')[0] if '.' in qualname else None
+            node = methods.get(qualname) or functions.get(qualname)
+            for call in ast.walk(node):
+                if not isinstance(call, ast.Call):
+                    continue
+                f = call.func
+                if isinstance(f, ast.Name):
+                    if f.id in functions:
+                        yield f.id
+                    elif f.id in classes and '%s.__init__' % f.id in methods:
+                        yield '%s.__init__' % f.id
+                elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                    owner = cls if f.value.id in ('self', 'cls') else f.value.id
+                    if owner and '%s.%s' % (owner, f.attr) in methods:
+                        yield '%s.%s' % (owner, f.attr)
+
+        reached, todo = set(), list(self.MAIN_THREAD_ROOTS)
+        while todo:
+            name = todo.pop()
+            if name in reached:
+                continue
+            reached.add(name)
+            todo.extend(callees(name))
+        # The walk resolves calls: the engine's constructor and the
+        # staleness probes are on the path, the workers are not.
+        assert {'Sky.__init__', 'WxSkyfield.stale_satellites', 'WxSkyfield.comet_stale',
+                'register_almanac', 'parse_satellites'} <= reached
+        assert not {'WxSkyfield._fetch_worker', 'WxSkyfield._comet_fetch_worker'} & reached
+
+        checked = 0
+        for name in sorted(reached):
+            node = methods.get(name) or functions[name]
+            for handler in ast.walk(node):
+                if not isinstance(handler, ast.ExceptHandler) or not self.is_broad(handler):
+                    continue
+                first = handler.body[0]
+                where = '%s line %d' % (name, handler.lineno)
+                assert (isinstance(first, ast.Expr) and
+                        isinstance(first.value, ast.Call) and
+                        isinstance(first.value.func, ast.Name) and
+                        first.value.func.id == 'reraise_if_terminate' and
+                        [a.id for a in first.value.args
+                         if isinstance(a, ast.Name)] == [handler.name]), where
+                checked += 1
+        # Sky.__init__'s handlers plus the two refreshers: a drop here
+        # means a handler was narrowed or removed, which is fine, but
+        # look.
+        assert checked >= 7, checked
 
 
 class TestRegistration:
@@ -2184,12 +2382,7 @@ class TestSatelliteFetcher:
     def make_service(self, tmp_path, **skyfield_options):
         options = dict(Satellites={'iss': str(ISS_NORAD)})
         options.update(skyfield_options)
-        config = make_config(**options)
-        config['DatabaseTypes'] = {'SQLite': {'SQLITE_ROOT': str(tmp_path)}}
-        with saved_almanacs():
-            engine = StubEngine()
-            service = wxskyfield.WxSkyfield(engine, config)
-        return engine, service
+        return make_service(tmp_path, **options)
 
     def test_fetch_writes_validated_payload(self, tmp_path, monkeypatch):
         payload = read_tle(ISS_NORAD)
@@ -2613,12 +2806,7 @@ class TestCometFetcher:
     def make_service(self, tmp_path, **skyfield_options):
         options = dict(Satellites={}, Comets={'halley': '1P'})
         options.update(skyfield_options)
-        config = make_config(**options)
-        config['DatabaseTypes'] = {'SQLite': {'SQLITE_ROOT': str(tmp_path)}}
-        with saved_almanacs():
-            engine = StubEngine()
-            service = wxskyfield.WxSkyfield(engine, config)
-        return engine, service
+        return make_service(tmp_path, **options)
 
     def test_service_binds_startup_and_archive_events(self, tmp_path):
         engine, service = self.make_service(tmp_path)

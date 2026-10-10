@@ -1,5 +1,18 @@
 # weewx-skyfield change history
 
+## 2.8.1 (2026/10/10)
+- WeeWX can always stop.  weewxd shuts down by raising its Terminate
+  exception inside whatever the main thread is running at that instant,
+  and Terminate is an ordinary Exception, so the satellite and comet
+  element refreshers -- which run on the main thread at startup and at
+  every archive record -- could catch the shutdown as a failure of their
+  own, log it and carry on, leaving weewxd running until systemd killed it
+  90 seconds later.  The window was a few microseconds per archive record,
+  but it was there.  Both now hand Terminate back before doing anything
+  else, as the engine's startup already did, and the check recognizes the
+  running weewxd's own class rather than any exception that happens to
+  share its name.
+
 ## 2.8 (2026/10/09)
 - A 403, 404 or 429 from CelesTrak or the Minor Planet Center gets no
   quick retries.  Every failed fetch used to retry in five minutes, doubling up

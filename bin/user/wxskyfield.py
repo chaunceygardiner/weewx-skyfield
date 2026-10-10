@@ -63,7 +63,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.8'
+WXSKYFIELD_VERSION = '2.8.1'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -71,15 +71,24 @@ if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] 
 
 def reraise_if_terminate(e: BaseException) -> None:
     """weewxd stops by raising Terminate from its SIGTERM signal handler --
-    inside whatever the main thread is executing at that instant.  This
-    extension's main-thread exposure is Sky.__init__, which the service runs
-    at engine startup; every broad exception handler there must call this
-    first and hand the exception back, or weewx cannot shut down.  (Almanac
-    tags are evaluated during report generation, on a child thread that
-    never receives signals.)  weewxd runs as __main__, so its Terminate
-    class cannot be imported here and is recognized by name."""
-    if type(e).__name__ == 'Terminate':
-        raise e
+    inside whatever the main thread is executing at that instant -- and
+    Terminate subclasses Exception, so a broad handler on a main-thread
+    path catches the shutdown as its own failure, logs it, and weewxd runs
+    on until systemd kills it.  This extension's main-thread exposure is
+    Sky.__init__, which the service runs at engine startup, and the two
+    element refreshers, which run at STARTUP and at every archive record;
+    every broad exception handler on those paths must call this first,
+    before touching any state of its own, and hand the exception back.
+    (Almanac tags are evaluated during report generation, on a child
+    thread that never receives signals.)  The class is the running
+    weewxd's own, not a name match: weewxd.py runs as a script on these
+    stations, so the class is __main__.Terminate; the console script
+    would import it as weewxd.Terminate; and an `import weewxd` here
+    would mint a third class that is neither."""
+    for name in ('__main__', 'weewxd'):
+        cls = getattr(sys.modules.get(name), 'Terminate', None)
+        if isinstance(cls, type) and issubclass(cls, BaseException) and isinstance(e, cls):
+            raise e
 
 
 # The WeeWX 5.2 requirement is enforced by register_almanac, which declines
@@ -173,7 +182,8 @@ class WxSkyfield(StdService):
         slow CelesTrak can never delay startup or the archive cycle.
         Bound to STARTUP -- a just-added satellite gets its elements
         right away, not one archive interval in -- and to every
-        NEW_ARCHIVE_RECORD.  Never raises."""
+        NEW_ARCHIVE_RECORD.  Never raises, except to hand weewxd's
+        Terminate back: this runs on the main thread."""
         try:
             if self._sat_thread is not None and self._sat_thread.is_alive():
                 return
@@ -185,6 +195,7 @@ class WxSkyfield(StdService):
                                                 name='wxskyfield-tle')
             self._sat_thread.start()
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('refresh_satellite_elements: could not start the element fetch: %s' % e)
 
     def stale_satellites(self, now: float) -> List[int]:
@@ -265,7 +276,8 @@ class WxSkyfield(StdService):
         so a slow MPC can never delay startup or the archive cycle.
         Bound to STARTUP and NEW_ARCHIVE_RECORD like the satellite
         refresher; the cadence is days, not hours -- two-body comet
-        elements stay serviceable for months.  Never raises."""
+        elements stay serviceable for months.  Never raises, except to
+        hand weewxd's Terminate back: this runs on the main thread."""
         try:
             if self._comet_thread is not None and self._comet_thread.is_alive():
                 return
@@ -276,6 +288,7 @@ class WxSkyfield(StdService):
                                                   name='wxskyfield-comets')
             self._comet_thread.start()
         except Exception as e:
+            reraise_if_terminate(e)
             log.error('refresh_comet_elements: could not start the element fetch: %s' % e)
 
     def comet_stale(self, now: float) -> bool:
