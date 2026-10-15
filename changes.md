@@ -1,5 +1,34 @@
 # weewx-skyfield change history
 
+## 2.10 (2026/10/14)
+- ACTION REQUIRED, if you use satellites on Skyfield 1.47 or 1.48:
+  upgrade Skyfield (`pip install --upgrade skyfield` in WeeWX's
+  environment).  Satellites now need 1.49 or later, because their
+  elements arrive in the OMM format, which earlier Skyfield cannot read.
+  On 1.47 or 1.48 satellites stop working after this upgrade, though it
+  can take up to 7 days for them to stop; everything else works as
+  before.
+- The install now stops before changing anything on a Skyfield older than
+  1.47, which the almanac has always needed, rather than installing an
+  almanac that then declines to run.
+- Satellite elements are fetched from CelesTrak as OMM in CSV form rather
+  than as TLEs.  A TLE has room for only five digits of catalog number,
+  and the catalog passed 99999 in July 2026, so a satellite launched since
+  could not be followed at all.  Satellites numbered up to 339999 now
+  work, the highest SGP4 takes; a number past it is refused at startup
+  and skipped at install, with the reason.
+- Each satellite's elements are cached as `wxskyfield_sat_<norad>.csv`,
+  CelesTrak's answer exactly as it came.  The upgrade adds no request to
+  CelesTrak: an old `.tle` file serves until that satellite's elements
+  are next due, when the fetch writes the `.csv` and deletes the `.tle`.
+  The installer does the same.
+- A station that runs with `satellite_downloads = false` and supplies its
+  own files may supply either form: `.csv` (CelesTrak's, or Space-Track's
+  OMM CSV, whose extra columns are ignored) or `.tle`, whose catalog
+  number may now be written in the Alpha-5 form (`E8493` is 148493).
+  Where both are there, the one with the later epoch is used.  With
+  downloads off the extension never deletes either.
+
 ## 2.9 (2026/10/14)
 - The extension now stops asking CelesTrak at the first answer that is
   not a good one, as CelesTrak's usage policy requires.  2.8 stopped only

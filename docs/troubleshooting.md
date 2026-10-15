@@ -166,8 +166,11 @@ is doing when it pauses.
 | `Fetching satellite orbital elements for … from CelesTrak…` / `Fetching comet orbital elements from the Minor Planet Center…` | Normal, and why the install pauses.  The comet file is the slower one. |
 | `Satellite elements for … are current; not fetching.` / `Comet elements in … are current; not fetching.` | Nothing to do: what is cached is younger than the interval weewxd refreshes on.  Usual on an upgrade. |
 | `CelesTrak has no current elements for X (N) -- check the NORAD number…` | A typo in `[[Satellites]]`, or an object that has decayed.  Retrying cannot fix it: correct or remove the entry.  See [Satellites](installation.md#satellites). |
-| `Could not fetch elements for X now (…); weewxd will fetch them itself.` | A network or CelesTrak problem, and true as stated: weewxd fetches missing elements at startup and about every three hours after. |
+| `Could not fetch elements for X now (…); weewxd asks CelesTrak again when it starts.` | A network or CelesTrak problem, and true as stated: weewxd fetches missing elements at startup and about every three hours after.  The satellites after X are not asked for (`not asking for … either`), as CelesTrak's usage policy requires. |
 | `Skipping satellite X: '…' is not a NORAD catalog number.` | The value in `[[Satellites]]` is not a number.  weewxd logs its own version of this at startup. |
+| `Skipping satellite X: SGP4, which computes satellite positions, takes catalog numbers from 1 to 339999.` | The number is past what SGP4 can take, or zero.  weewxd refuses it at startup too. |
+| `weewx-skyfield requires Skyfield 1.47 or later, found …` / `… which is not installed.` | The install stops before changing anything.  Upgrade or install Skyfield — see [Upgrading Skyfield](installation.md#upgrading-skyfield) — and run the install again. |
+| `Not fetching satellite elements: satellites need Skyfield 1.49 or later, found …` | Skyfield 1.47 or 1.48.  Everything but the satellites works; they stop within 7 days.  Upgrade Skyfield to keep them. |
 
 ## Startup messages
 
@@ -176,13 +179,14 @@ is doing when it pauses.
 | `Skyfield almanac registered; reports will use Skyfield…` | Working.  This is the line to look for. |
 | `WxSkyfield status: disabled...enable it in the Skyfield section of weewx.conf.` | `enable = false` in `[Skyfield]`. |
 | `This version of WeeWX (…) does not support almanac extensions` | WeeWX older than 5.2.  The extension declines gracefully and the built-in almanac stays in place. |
-| `weewx-skyfield requires Skyfield 1.47 or later, found …` | Upgrade Skyfield — see [Upgrading Skyfield](installation.md#upgrading-skyfield).  Debian 12 ships 1.45, which is too old. |
+| `weewx-skyfield requires Skyfield 1.47 or later, found …` | Skyfield was downgraded after the install, which checks the same thing.  Upgrade it — see [Upgrading Skyfield](installation.md#upgrading-skyfield).  Debian 12 ships 1.45, which is too old. |
+| `Satellites need Skyfield 1.49 or later, found …` | Skyfield 1.47 or 1.48, which cannot read the OMM format satellite elements are fetched in.  Nothing is fetched, and satellite tags stop working within 7 days.  Upgrade Skyfield. |
 | `Could not load …  The Skyfield almanac will not run.` | The ephemeris file could not be read.  Reinstall the extension. |
 | `Could not build the skyfield timescale…` | Skyfield could not initialize; usually a broken or partial Skyfield install. |
 | `init: Could not load the Hipparcos star catalog: … Star support disabled.` | Everything except star tags keeps working. |
 | `Loaded N stars to magnitude M from the full Hipparcos catalog.` | Normal: the dome's star field. |
 | `Ignoring unrecognized [Skyfield] option: …` | A typo, or a leftover from an older release — the pre-2.0 `stars` option lands here.  See [Configuration](configuration.md#the-skyfield-section). |
-| `Ignoring [Skyfield] [[Satellites]] entry …` | The tag name shadows a planet, star, `hip_` or `sat_` name, or the NORAD number is not a number. |
+| `Ignoring [Skyfield] [[Satellites]] entry …` | The tag name shadows a planet, star, `hip_` or `sat_` name, or the NORAD number is not a number, or is past 339999, the highest SGP4 takes. |
 | `Ignoring [Skyfield] [[Comets]] entry …` | Same, for a comet's name or designation. |
 
 ## Report messages
@@ -204,6 +208,9 @@ again.  Restart WeeWX to see whether a fix took.
 | Message | Meaning |
 |---|---|
 | `Fetched satellite elements for N.` / `Fetched comet elements into …` | A refresh succeeded. |
+| `Deleted …/wxskyfield_sat_N.tle, superseded by …/wxskyfield_sat_N.csv.` | Once per satellite after upgrading to 2.10: the first fetch in the new format replaced the TLE an older release cached. |
+| `Could not delete …/wxskyfield_sat_N.tle, which the fetched …/wxskyfield_sat_N.csv supersedes: …` | Usually permissions.  Harmless — the fresher CSV is used — but delete the file by hand. |
+| `satellite_elements: could not load …: …` | A cached or supplied element file is not elements for that satellite.  A broken file costs only itself: the satellite's other file, if there is one, still serves. |
 | `Could not fetch satellite elements for N (…).  Asking CelesTrak nothing more until the next round, in 3 hours, for every satellite; …` | A fetch failed, and what came back is quoted: a status with the server's own words, or the failure itself (a timeout, a refused connection, an answer that was not elements).  Every cached file is kept and no satellite is asked for again for three hours, as CelesTrak's usage policy requires.  A 403 or 429 means this address is asking too often — usually several installs behind one address, each asking; let one fetch and copy the files to the rest with `satellite_downloads = false`.  A 5xx means CelesTrak is under load.  A 301 means the URL is outdated: update the extension.  Restarting weewxd asks again at once. |
 | `CelesTrak has no elements for satellite N (HTTP 404 …); check the NORAD number.  Not asking for it again until weewxd restarts; …` | A catalog number CelesTrak does not carry: a typo in `[[Satellites]]`, or an object that has decayed.  The other satellites are still fetched.  Fix the number and restart. |
 | `Could not fetch the comet elements from the MPC (…).  Asking again in 2 days; …` | Any failure, whatever came back: the cached file, if there is one, is kept and the fetch waits the full two days before trying again. |

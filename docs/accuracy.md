@@ -114,7 +114,7 @@ means the *ephemeris* is not the limiting factor.  Refraction at the horizon var
 real atmosphere in ways no model captures; every published rise and set time, from any
 source, carries tens of seconds of that uncertainty.
 
-**Satellites** are propagated by SGP4 from published TLEs, which age quickly: a reboost or
+**Satellites** are propagated by SGP4 from published orbital elements, which age quickly: a reboost or
 maneuver makes week-old elements minutes wrong.  That is why elements more than seven days
 older than the almanac's time are refused outright rather than used — an honest `N/A` beats
 a confident wrong pass time.

@@ -14,6 +14,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+import csv
 import os
 import sys
 import time
@@ -101,7 +102,7 @@ INSTALLER_CONFIG = configobj.ConfigObj(StringIO(CONFIG))
 DEFAULT_SATELLITES = dict(INSTALLER_CONFIG['Skyfield']['Satellites'])
 DEFAULT_COMETS = dict(INSTALLER_CONFIG['Skyfield']['Comets'])
 
-CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%s&FORMAT=TLE'
+CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%s&FORMAT=CSV'
 COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
 
 # How long a cached element file stays current.  These are wxskyfield.py's
@@ -114,6 +115,18 @@ COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
 # along.
 SAT_REFRESH_SECS = 3 * 3600
 COMET_REFRESH_SECS = 2 * 86400
+
+# The oldest Skyfield the extension runs on, the oldest that reads OMM, the
+# age past which satellite elements go unused, and the highest catalog
+# number SGP4 takes: wxskyfield.py's SKYFIELD_MIN_VERSION,
+# SKYFIELD_OMM_VERSION, SAT_MAX_ELEMENT_AGE_SECS and SAT_MAX_CATALOG_NUMBER,
+# which say why, written a second time for the same reason as the clocks.
+SKYFIELD_MIN_VERSION = (1, 47)
+SKYFIELD_OMM_VERSION = (1, 49)
+SAT_MAX_ELEMENT_AGE_SECS = 7 * 86400
+UPGRADING_URL = ('https://chaunceygardiner.github.io/weewx-skyfield/'
+                 'installation.html#upgrading-skyfield')
+SAT_MAX_CATALOG_NUMBER = 339999
 
 
 class RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -140,6 +153,31 @@ class NoSuchSatellite(ValueError):
     other failure, a 404 with other words among them, stops the asking."""
 
 
+def carries_elements(payload, catnr):
+    """Whether CelesTrak's CSV answer holds elements weewxd can use,
+    tested as wxskyfield.py's satellite_from_text tests them (the
+    installer cannot import wxskyfield): the row for this catalog number,
+    a value in every column, and Skyfield building the satellite from it.
+    A file this passes is one weewxd will load, so the TLE it replaces is
+    never deleted for a CSV that serves nothing."""
+    try:
+        import skyfield.api
+        for row in csv.DictReader(StringIO(payload.lstrip('\ufeff'))):
+            try:
+                number = int(str(row.get('NORAD_CAT_ID') or '').strip())
+            except ValueError:
+                continue
+            if number != catnr:
+                continue
+            if any(value is None for value in row.values()):
+                return False
+            skyfield.api.EarthSatellite.from_omm(skyfield.api.load.timescale(), row)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def is_current(path, max_age_secs):
     """True if path exists and is younger than max_age_secs.  A missing
     file, or one whose mtime cannot be read, is not current."""
@@ -147,6 +185,30 @@ def is_current(path, max_age_secs):
         return time.time() - os.path.getmtime(path) < max_age_secs
     except OSError:
         return False
+
+
+def skyfield_requirement():
+    """Why this station's Skyfield will not do, or None when it will."""
+    try:
+        import skyfield
+        found = tuple(skyfield.VERSION[:2])
+    except ImportError:
+        return ('weewx-skyfield requires Skyfield %d.%d or later, which is not '
+                'installed.  Install it first: %s' % (SKYFIELD_MIN_VERSION + (UPGRADING_URL,)))
+    if found < SKYFIELD_MIN_VERSION:
+        return ('weewx-skyfield requires Skyfield %d.%d or later, found %d.%d.  '
+                'Upgrade it first: %s' % (SKYFIELD_MIN_VERSION + found + (UPGRADING_URL,)))
+    return None
+
+
+def skyfield_reads_omm():
+    """Whether this Skyfield can read the OMM format satellite elements
+    are fetched in (EarthSatellite.from_omm, SKYFIELD_OMM_VERSION), asked as
+    wxskyfield.py asks it; and the version found, for the message."""
+    import skyfield
+    import skyfield.api
+    return (hasattr(skyfield.api.EarthSatellite, 'from_omm'),
+            tuple(skyfield.VERSION[:2]))
 
 
 def loader():
@@ -166,12 +228,18 @@ def loader():
     if major_minor is not None and major_minor < (5, 2):
         sys.exit("weewx-skyfield requires WeeWX 5.2 or later, found %s" % weewx.__version__)
 
+    # Below it the almanac declines at startup; checked here so an install
+    # stops before it leaves weewxd with no almanac at all.
+    message = skyfield_requirement()
+    if message:
+        sys.exit(message)
+
     return WxSkyfieldInstaller()
 
 class WxSkyfieldInstaller(ExtensionInstaller):
     def __init__(self):
         super(WxSkyfieldInstaller, self).__init__(
-            version = "2.9",
+            version = "2.10",
             name = 'wxskyfield',
             description = "Replaces WeeWX's built-in almanac with a Skyfield based almanac for report generation.",
             author = "John A Kline",
@@ -265,6 +333,15 @@ class WxSkyfieldInstaller(ExtensionInstaller):
         if downloads in ('false', 'no', '0'):
             return
         satellites = skyfield_dict.get('Satellites') or DEFAULT_SATELLITES
+        reads_omm, found = skyfield_reads_omm()
+        if satellites and not reads_omm:
+            engine.printer.out('Not fetching satellite elements: satellites need Skyfield '
+                               '%d.%d or later, found %d.%d.  They stop working within %d '
+                               'days; upgrade Skyfield to keep them (%s).  The rest of the '
+                               'almanac works as it is.'
+                               % (SKYFIELD_OMM_VERSION + found
+                                  + (SAT_MAX_ELEMENT_AGE_SECS // 86400, UPGRADING_URL)))
+            return
         _, sat_dir = self._cache_dir(engine)
         current = []
         wanted = []
@@ -279,13 +356,22 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                 engine.printer.out('Skipping satellite %s: %r is not a NORAD '
                                    'catalog number.' % (name, str(norad)))
                 continue
+            if not 0 < catnr <= SAT_MAX_CATALOG_NUMBER:
+                engine.printer.out('Skipping satellite %s: SGP4, which computes '
+                                   'satellite positions, takes catalog numbers from '
+                                   '1 to %d.' % (name, SAT_MAX_CATALOG_NUMBER))
+                continue
             if catnr in seen:
                 # one catalog number, one request: a second name for it
                 # shares the first's file, as in weewxd
                 continue
             seen.add(catnr)
-            path = os.path.join(sat_dir, 'wxskyfield_sat_%d.tle' % catnr)
-            if is_current(path, SAT_REFRESH_SECS):
+            path = os.path.join(sat_dir, 'wxskyfield_sat_%d.csv' % catnr)
+            # The TLE a release before 2.10 cached counts as current too,
+            # as in weewxd: an upgrade asks for nothing fetched within the
+            # cadence.
+            tle_path = os.path.join(sat_dir, 'wxskyfield_sat_%d.tle' % catnr)
+            if is_current(path, SAT_REFRESH_SECS) or is_current(tle_path, SAT_REFRESH_SECS):
                 current.append(str(name))
             else:
                 wanted.append((str(name), catnr, path))
@@ -328,17 +414,18 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                                % (', '.join(fetched), sat_dir))
 
     def _fetch_one_satellite(self, name, catnr, path):
-        """One satellite's TLE, written atomically.  Raises
-        NoSuchSatellite only for CelesTrak's 404, a catalog number it does
-        not carry; everything else raises whatever it raised, and stops
-        the asking."""
+        """One satellite's elements as OMM CSV, written atomically, and
+        the TLE beside it, which a release before 2.10 cached, deleted.
+        Raises NoSuchSatellite only for CelesTrak's 404, a catalog number
+        it does not carry; everything else raises whatever it raised, and
+        stops the asking."""
         request = urllib.request.Request(
             CELESTRAK_URL % catnr,
             headers={'User-Agent': 'weewx-skyfield/%s (+https://github.com/'
                                    'chaunceygardiner/weewx-skyfield)' % self['version']})
         try:
             with open_url(request, 10) as response:
-                payload = response.read().decode('ascii', 'replace')
+                payload = response.read().decode('utf-8', 'replace')
         except urllib.error.HTTPError as e:
             # A catalog number CelesTrak has no current elements for gets
             # 404 "No GP data found" -- what a mistyped NORAD number looks
@@ -355,8 +442,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                     raise NoSuchSatellite('CelesTrak has no current elements for '
                                           '%s (%d)' % (name, catnr))
             raise
-        lines = [line for line in payload.splitlines() if line.strip()]
-        if not any(line.startswith('1 %05d' % catnr) for line in lines):
+        if not carries_elements(payload, catnr):
             # NOT NoSuchSatellite: CelesTrak says that with a 404, caught
             # above, so a 200 carrying no element set is something else
             # answering -- a captive portal, an intercepting proxy, an
@@ -365,9 +451,13 @@ class WxSkyfieldInstaller(ExtensionInstaller):
             raise ValueError('the answer carried no elements for catalog '
                              'number %d' % catnr)
         tmp_path = '%s.tmp' % path
-        with open(tmp_path, 'w') as f:
+        with open(tmp_path, 'w', encoding='utf-8', newline='') as f:
             f.write(payload)
         os.replace(tmp_path, path)
+        try:
+            os.remove(path[:-len('.csv')] + '.tle')
+        except OSError:
+            pass
 
     def _fetch_comet_elements(self, engine):
         skyfield_dict = engine.config_dict.get('Skyfield', {})

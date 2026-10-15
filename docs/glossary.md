@@ -85,6 +85,10 @@ when it crosses it.
 
 **NORAD catalog number** — the number that identifies a satellite: 25544 is the ISS.
 
+**OMM (Orbit Mean-Elements Message)** — the standard format for satellite orbital elements
+that replaces the TLE, with room for catalog numbers past 99999.  This extension fetches it as
+CSV, one header line and one row per satellite, and caches each satellite's in its own file.
+
 **Parallactic angle** — the angle between "up" as seen by an observer and celestial north,
 which is what tells you how a chart's orientation relates to the view through a telescope.
 
@@ -122,8 +126,9 @@ seven days old.
 **Supermoon** — a full moon falling within about a day of perigee, so it appears slightly
 larger and brighter.  This extension's tag uses exactly that rule.
 
-**TLE (two-line element set)** — the compact text format satellite orbital elements come in.
-Each cached file here holds one satellite's.
+**TLE (two-line element set)** — the older text format for satellite orbital elements, which
+this extension fetched before 2.10 and still reads from a file you supply.  Its catalog-number
+field holds five characters, so numbers past 99999 need the Alpha-5 form or OMM.
 
 **Topocentric** — measured from where *you* stand on Earth's surface, rather than from its
 center.  This is what you actually see, and what most of this extension's position tags

@@ -15,6 +15,7 @@ inserts celestial observations into loop packets); this extension carries
 the almanac alone.
 """
 
+import csv
 import gzip
 import io
 import html
@@ -64,7 +65,33 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.9'
+WXSKYFIELD_VERSION = '2.10'
+
+# The oldest Skyfield this extension runs on: find_risings and
+# find_settings arrived in 1.47.  install.py keeps its own copy, held
+# equal by tests/test_installer.py.
+SKYFIELD_MIN_VERSION = (1, 47)
+# The oldest Skyfield that reads OMM, which satellites need: below it, on
+# 1.47 and 1.48, only the satellites stop.  install.py keeps a copy too.
+SKYFIELD_OMM_VERSION = (1, 49)
+
+
+def skyfield_reads_omm() -> bool:
+    """Whether this Skyfield can read OMM, the format satellite elements
+    are fetched in: EarthSatellite.from_omm arrived in 1.49.  Asked of
+    the class rather than the version, and nothing more is needed: from
+    1.49 on Skyfield imports the sgp4 library's OMM support when it
+    loads, so a Skyfield that runs at all has it.  On 1.47 and 1.48 only
+    the satellites stop."""
+    return hasattr(skyfield.api.EarthSatellite, 'from_omm')
+
+
+def sat_omm_message() -> str:
+    """Why this Skyfield cannot serve satellites, for the log."""
+    return ('Satellites need Skyfield %d.%d or later, found %d.%d: their elements'
+            ' are fetched in the OMM format, which older Skyfield cannot read'
+            % (SKYFIELD_OMM_VERSION + tuple(skyfield.VERSION[:2])))
+
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -163,7 +190,13 @@ class WxSkyfield(StdService):
             # nothing, and the main thread never touches the network.
             self._sat_thread: Optional[threading.Thread] = None
             self._sat_retry_ts: Dict[int, float] = {}
-            if satellites and self.sat_downloads:
+            if satellites and self.sat_downloads and not skyfield_reads_omm():
+                # Fetching what cannot be read would only ask CelesTrak
+                # for nothing; said once, here.
+                log.error('%s.  Not fetching them, so satellite tags stop working'
+                          ' within %d days.  Upgrade Skyfield.'
+                          % (sat_omm_message(), SAT_MAX_ELEMENT_AGE_SECS // 86400))
+            elif satellites and self.sat_downloads:
                 self.bind(weewx.STARTUP, self.refresh_satellite_elements)
                 self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_satellite_elements)
             # The comet elements get the same treatment, as a parallel
@@ -190,18 +223,21 @@ class WxSkyfield(StdService):
                 return
             self._sat_thread = threading.Thread(target=self._fetch_worker,
                                                 args=(due,), daemon=True,
-                                                name='wxskyfield-tle')
+                                                name='wxskyfield-sat')
             self._sat_thread.start()
         except Exception as e:
             reraise_if_terminate(e)
             log.error('refresh_satellite_elements: could not start the element fetch: %s' % e)
 
     def stale_satellites(self, now: float) -> List[int]:
-        """The NORAD numbers whose cache files are due for a fetch: file
-        mtime older than the refresh cadence, or no file at all (a
-        satellite added to the config later, or an install that was
-        offline) -- maximally stale, fetched at the first archive cycle.
-        A number parked after a failure (WHAT A FETCH DOES WITH EACH
+        """The NORAD numbers whose cache files are due for a fetch: the
+        newer element file's mtime older than the refresh cadence, or no
+        file at all (a satellite added to the config later, or an install
+        that was offline) -- maximally stale, fetched at the first archive
+        cycle.  The newer of the CSV and the TLE, so the first round after
+        an upgrade from a TLE release asks for nothing the station fetched
+        within the cadence: each TLE is replaced when it comes due.  A
+        number parked after a failure (WHAT A FETCH DOES WITH EACH
         ANSWER) is skipped until its time comes.  Checks
         are age-driven, not schedule-driven, so a weewxd started after a
         long stop refreshes immediately."""
@@ -209,10 +245,8 @@ class WxSkyfield(StdService):
         for norad in sorted(set(self.sky.satellites.values())):
             if now < self._sat_retry_ts.get(norad, 0.0):
                 continue
-            try:
-                mtime = os.stat(self.sky.sat_path(norad)).st_mtime
-            except OSError:
-                mtime = None
+            mtime = max((m for m in self.sky.sat_mtimes(norad) if m is not None),
+                        default=None)
             if mtime is None or now - mtime >= SAT_REFRESH_SECS:
                 due.append(norad)
         return due
@@ -231,17 +265,18 @@ class WxSkyfield(StdService):
             try:
                 assert self.sky.sat_dir is not None
                 os.makedirs(self.sky.sat_dir, exist_ok=True)
-                fetch_satellite_elements(norad, self.sky.sat_path(norad))
+                fetch_satellite_elements(norad, self.sky.sat_path(norad), self.sky.ts)
                 self._sat_retry_ts.pop(norad, None)
                 log.info('Fetched satellite elements for %d.' % norad)
+                self._retire_tle(norad)
             except Exception as e:
                 until = time.time() + SAT_REFRESH_SECS
                 answer = http_answer(e)
-                if not_carried(answer):
+                if answer is not None and not_carried(answer):
                     # until weewxd restarts: a person fixing the number
                     self._sat_retry_ts[norad] = float('inf')
                     on_file = ('keeping the cached elements'
-                               if os.path.exists(self.sky.sat_path(norad))
+                               if any(m is not None for m in self.sky.sat_mtimes(norad))
                                else 'nothing on file for it')
                     log.error('CelesTrak has no elements for satellite %d (%s);'
                               ' check the NORAD number.  Not asking for it again'
@@ -255,6 +290,23 @@ class WxSkyfield(StdService):
                           ' for every satellite; keeping what is on file.'
                           % (norad, failure_words(e), SAT_REFRESH_SECS // 3600))
                 return
+
+    def _retire_tle(self, norad: int) -> None:
+        """Delete the satellite's TLE file once its CSV has been fetched:
+        on a station with downloads on, a TLE is what a release before
+        2.10 cached, and the fresh CSV supersedes it.  Never raises --
+        the fetch it follows succeeded, and a TLE that will not go only
+        loses to the CSV's later epoch -- so it is logged and left."""
+        try:
+            os.remove(self.sky.sat_tle_path(norad))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning('Could not delete %s, which the fetched %s supersedes: %s'
+                        % (self.sky.sat_tle_path(norad), self.sky.sat_path(norad), e))
+        else:
+            log.info('Deleted %s, superseded by %s.'
+                     % (self.sky.sat_tle_path(norad), self.sky.sat_path(norad)))
 
     def refresh_comet_elements(self, event) -> None:
         """Refresh the CometEls cache file when stale, on a worker thread
@@ -765,17 +817,34 @@ REPO_URL = 'https://github.com/chaunceygardiner/weewx-skyfield'
 # ── satellites ───────────────────────────────────────────────────────────────
 # [Skyfield] [[Satellites]] maps tag names to NORAD catalog numbers
 # (iss = 25544); that one list drives both the report tags
-# ($almanac.iss.next_pass.rise) and the fetch list.  Orbital elements (TLEs)
-# are fetched per satellite from CelesTrak and cached as plain files,
-# wxskyfield_sat_<norad>.tle, in SAT_DIR_NAME under the station's SQLITE_ROOT
-# -- TLEs are already a file format Skyfield reads directly, staleness is
-# mtime, and `cat` works when debugging.  The service refreshes them on a
+# ($almanac.iss.next_pass.rise) and the fetch list.  Orbital elements are
+# fetched per satellite from CelesTrak as OMM in CSV form (a header line and
+# one row; Skyfield's EarthSatellite.from_omm reads the row) and cached
+# exactly as they arrived, wxskyfield_sat_<norad>.csv, in SAT_DIR_NAME under
+# the station's SQLITE_ROOT -- staleness is mtime, and `cat` works when
+# debugging.  Not TLEs: a TLE's catalog-number field has five digits, and
+# the catalog passed 99999 in July 2026.  The service refreshes them on a
 # worker thread at STARTUP and each NEW_ARCHIVE_RECORD (weewxd's only
 # network access in this extension -- satellite_downloads = false turns it
 # off, leaving the files for the user to maintain).
-CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%d&FORMAT=TLE'
+#
+# A satellite's elements may also be a TLE file, wxskyfield_sat_<norad>.tle:
+# what every release before 2.10 fetched, and what a station maintaining
+# its own files may still supply.  When both files are there, the one with
+# the later epoch is used (the CSV on a tie), so neither a leftover TLE nor
+# a stale CSV can shadow fresher elements beside it.  A fetch that writes
+# the CSV deletes the TLE beside it; nothing else ever deletes a TLE, since
+# with downloads off those files are the user's.
+CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?CATNR=%d&FORMAT=CSV'
 SAT_DIR_NAME = 'wxskyfield'
-SAT_FILE_FORMAT = 'wxskyfield_sat_%d.tle'
+SAT_FILE_FORMAT = 'wxskyfield_sat_%d.csv'
+SAT_TLE_FILE_FORMAT = 'wxskyfield_sat_%d.tle'
+# The highest catalog number SGP4 can be given: the sgp4 library under
+# Skyfield stores the number in the five-character Alpha-5 form, whose
+# largest value, Z9999, is 339999, and refuses anything above it.  A
+# satellite numbered past it is refused at startup rather than fetched
+# and never usable.
+SAT_MAX_CATALOG_NUMBER = 339999
 # CelesTrak identifies polite clients by software, so abuse reports can
 # reach the author; the repo URL does that.  Deliberately no per-machine
 # identifier: hostnames are often personal.
@@ -788,7 +857,7 @@ SAT_REFRESH_SECS = 3 * 3600
 # Elements whose epoch is older than this cannot be trusted for pass
 # times: plain SGP4 drift is only seconds at a week, but a reboost or
 # maneuver accumulates minutes of error per week after it -- missed-pass
-# territory.  Age is measured from the TLE epoch, never the file mtime (a
+# territory.  Age is measured from the elements' epoch, never the file mtime (a
 # "successful" fetch of stale data must not reset the clock).  Past the
 # cutoff every satellite tag reports the unified no-usable-elements state:
 # empty ValueHelpers ("N/A"), None for the plain-value tags.
@@ -811,7 +880,7 @@ SAT_TAG_RE = re.compile(r'sat_(\d+)$')
 # ── comets ───────────────────────────────────────────────────────────────────
 # One MPC CometEls.txt file (~160 KB, every comet with a current orbit -- 953
 # rows in August 2026) serves ALL configured comets, cached beside the
-# satellite TLEs under get_sat_dir.  [Skyfield] [[Comets]] maps tag names to
+# satellite elements under get_sat_dir.  [Skyfield] [[Comets]] maps tag names to
 # MPC designations (halley = 1P, hale_bopp = C/1995 O1); the friendly name is
 # the config KEY, and the value is matched against the file's readable
 # designation column after case/whitespace normalization ONLY -- no fuzzy
@@ -819,7 +888,7 @@ SAT_TAG_RE = re.compile(r'sat_(\d+)$')
 COMET_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt'
 COMET_FILE = 'wxskyfield_comets.txt'
 
-# MPC recomputes the file continuously, but unlike satellite TLEs (useless
+# MPC recomputes the file continuously, but unlike satellite elements (useless
 # after days) two-body comet elements stay serviceable for months: refresh on
 # the scale of days, not hours -- and there is no usability gate at all, only
 # the elements_epoch/elements_age diagnostics.
@@ -1342,18 +1411,61 @@ def daylight_seconds(rise: Optional[float], set_: Optional[float],
     return 86400 if up_all_day() else 0
 
 
+def omm_row(text: str, norad: int) -> Dict[str, str]:
+    """The OMM fields for the given satellite from CSV text: CelesTrak's
+    FORMAT=CSV answer (a header line and one row) or Space-Track's OMM
+    CSV (more columns, every value quoted).  The row is found by its
+    NORAD_CAT_ID, and columns Skyfield does not read are ignored.  Raises
+    ValueError when the text holds no row for this catalog number (e.g.
+    CelesTrak's "No GP data found" answer, an HTML page, a truncated
+    download, or a corrupt cache file).  A byte-order mark, which a
+    spreadsheet saving CSV may put first, is dropped."""
+    reader = csv.DictReader(io.StringIO(text.lstrip('\ufeff')))
+    if 'NORAD_CAT_ID' not in (reader.fieldnames or []):
+        raise ValueError('no OMM header line (NORAD_CAT_ID) found')
+    others: List[int] = []
+    for row in reader:
+        try:
+            catnr = int((row.get('NORAD_CAT_ID') or '').strip())
+        except ValueError:
+            continue
+        if catnr == norad:
+            return row
+        others.append(catnr)
+    if others:
+        raise ValueError('OMM is for catalog number %s, not %d'
+                         % (', '.join(str(n) for n in others), norad))
+    raise ValueError('no OMM element row found')
+
+
+# Alpha-5, the TLE convention for catalog numbers past 99999: the first
+# of the five characters is a letter standing for 10 to 33 -- A to Z
+# without I and O, which read as digits -- so E8493 is 148493.
+ALPHA5_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+
+
+def tle_catalog_number(field: str) -> int:
+    """The catalog number in a TLE's five-character field, plain or
+    Alpha-5.  Raises ValueError for anything else."""
+    field = field.strip()
+    if len(field) == 5 and field[0] in ALPHA5_LETTERS and field[1:].isdigit():
+        return (ALPHA5_LETTERS.index(field[0]) + 10) * 10000 + int(field[1:])
+    return int(field)
+
+
 def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
     """(name, line1, line2) of the two-line element set for the given
-    satellite in text -- the wire format CelesTrak's CATNR query returns
-    and the cache files hold: an optional name line, then the '1 '/'2 '
-    element lines.  Raises ValueError when the text is not a TLE for
-    this catalog number (e.g. CelesTrak's "No GP data found" answer, a
-    truncated download, or a corrupt cache file)."""
+    satellite in text, as a station maintaining its own element files
+    may supply them, and as every release before 2.10 cached them: an
+    optional name line, then the '1 '/'2 ' element lines, the catalog
+    number plain or Alpha-5.  Raises ValueError when the text is not a
+    TLE for this catalog number (e.g. a truncated file or a corrupt
+    one)."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     for i, line in enumerate(lines):
         if line.startswith('1 ') and i + 1 < len(lines) and lines[i + 1].startswith('2 '):
             try:
-                catnr = int(line[2:7])
+                catnr = tle_catalog_number(line[2:7])
             except ValueError:
                 break
             if catnr != norad:
@@ -1361,6 +1473,30 @@ def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
             name = lines[i - 1] if i > 0 else 'NORAD %d' % norad
             return name, line, lines[i + 1]
     raise ValueError('no two-line element set found')
+
+
+def satellite_from_text(text: str, norad: int, ts: Any, omm: bool) -> Any:
+    """A skyfield EarthSatellite from an element file's text: OMM CSV
+    when omm, else a TLE.  Raises ValueError when the text holds no
+    usable elements for this catalog number -- the one test both the
+    fetch (before it writes) and the cache (when it loads) apply, so a
+    file the fetch accepts is a file the tags can use."""
+    if not omm:
+        name, line1, line2 = tle_lines(text, norad)
+        return skyfield.api.EarthSatellite(line1, line2, name, ts)
+    if not skyfield_reads_omm():
+        raise ValueError(sat_omm_message())
+    row = omm_row(text, norad)
+    short = [key for key, value in row.items() if value is None]
+    if short:
+        raise ValueError('the OMM row has no value for %s' % ', '.join(short))
+    try:
+        sat = skyfield.api.EarthSatellite.from_omm(ts, row)
+    except KeyError as e:
+        raise ValueError('the OMM row has no %s column' % e)
+    if not sat.name:
+        sat.name = 'NORAD %d' % norad
+    return sat
 
 
 # WHAT A FETCH DOES WITH EACH ANSWER.  CelesTrak's usage policy: a client
@@ -1463,19 +1599,20 @@ def failure_words(e: BaseException) -> str:
     return str(e) or type(e).__name__
 
 
-def fetch_satellite_elements(norad: int, path: str, timeout: float = 15.0) -> None:
-    """Fetch the current TLE for the given NORAD catalog number from
-    CelesTrak into path.  The write is atomic (temp file, then rename)
-    and the payload is validated first, so the previous file survives
-    any failure -- serving slightly old elements always beats serving
-    none.  Raises on any failure; the caller decides when to ask again."""
+def fetch_satellite_elements(norad: int, path: str, ts: Any, timeout: float = 15.0) -> None:
+    """Fetch the current elements for the given NORAD catalog number from
+    CelesTrak, as OMM CSV, into path.  The write is atomic (temp file,
+    then rename) and the payload is validated first, by building the
+    satellite from it, so the previous file survives any failure --
+    serving slightly old elements always beats serving none.  Raises on
+    any failure; the caller decides when to ask again."""
     request = urllib.request.Request(CELESTRAK_URL % norad,
                                      headers={'User-Agent': SAT_USER_AGENT})
     with open_url(request, timeout) as response:
-        payload = response.read().decode('ascii', 'replace')
-    tle_lines(payload, norad)
+        payload = response.read().decode('utf-8', 'replace')
+    satellite_from_text(payload, norad, ts, omm=True)
     tmp_path = '%s.tmp' % path
-    with open(tmp_path, 'w') as f:
+    with open(tmp_path, 'w', encoding='utf-8', newline='') as f:
         f.write(payload)
     os.replace(tmp_path, path)
 
@@ -1506,6 +1643,11 @@ def parse_satellites(skyfield_config_dict: Dict[str, Any]) -> Dict[str, int]:
         except ValueError:
             log.error('Ignoring [Skyfield] [[Satellites]] entry %s = %r: the value'
                       ' must be the satellite\'s NORAD catalog number.' % (name, value))
+            continue
+        if not 0 < norad <= SAT_MAX_CATALOG_NUMBER:
+            log.error('Ignoring [Skyfield] [[Satellites]] entry %s = %d: SGP4, which'
+                      ' computes satellite positions, takes catalog numbers from 1 to'
+                      ' %d.' % (name, norad, SAT_MAX_CATALOG_NUMBER))
             continue
         if tag in EPHEMERIS_KEYS or tag in NAMED_STARS or HIP_TAG_RE.match(tag) \
                 or SAT_TAG_RE.match(tag) or tag in ('sun', 'earth'):
@@ -1577,12 +1719,13 @@ class Sky():
         # fetching.
         self.satellites: Dict[str, int] = satellites or {}
         self.sat_dir: Optional[str] = sat_dir
-        # Parsed elements keyed by NORAD number, tagged with the cache
-        # file's mtime so a refreshed file is picked up on the next tag
-        # evaluation; and the last usable/unusable state per satellite,
-        # so the age-cutoff warning fires once at each crossing rather
-        # than on every tag.
-        self._sat_cache: Dict[int, Tuple[Optional[float], Optional[Tuple[Any, float]]]] = {}
+        # Parsed elements keyed by NORAD number, tagged with the element
+        # files' mtimes (the CSV's, the TLE's) so a refreshed file is
+        # picked up on the next tag evaluation; and the last
+        # usable/unusable state per satellite, so the age-cutoff warning
+        # fires once at each crossing rather than on every tag.
+        self._sat_cache: Dict[int, Tuple[Tuple[Optional[float], Optional[float]],
+                                         Optional[Tuple[Any, float]]]] = {}
         self._sat_usable: Dict[int, bool] = {}
         # The configured comets (tag name -> normalized MPC designation),
         # same lazy contract as the satellites: nothing is read here.  The
@@ -1599,13 +1742,13 @@ class Sky():
         # and failed, don't retry).
         self._constellation_map: Any = None
 
-        # find_risings/find_settings arrived in Skyfield 1.47; on anything
-        # older every rise/set tag would fail at report time, so decline
-        # up front (e.g., Debian 12 packages Skyfield 1.45).
-        if tuple(skyfield.VERSION[:2]) < (1, 47):
-            log.error('init: weewx-skyfield requires Skyfield 1.47 or later, found %d.%d.'
+        # Below SKYFIELD_MIN_VERSION every rise/set tag would fail at
+        # report time, so decline up front (e.g., Debian 12 packages
+        # Skyfield 1.45).
+        if tuple(skyfield.VERSION[:2]) < SKYFIELD_MIN_VERSION:
+            log.error('init: weewx-skyfield requires Skyfield %d.%d or later, found %d.%d.'
                       '  The Skyfield almanac will not run.'
-                      % (skyfield.VERSION[0], skyfield.VERSION[1]))
+                      % (SKYFIELD_MIN_VERSION + tuple(skyfield.VERSION[:2])))
             return
 
         # The timescale is built once and reused; building it parses
@@ -1953,34 +2096,52 @@ class Sky():
         return None
 
     def sat_path(self, norad: int) -> str:
+        """The satellite's OMM CSV file, the one the fetch writes."""
         return os.path.join(self.sat_dir or '.', SAT_FILE_FORMAT % norad)
 
+    def sat_tle_path(self, norad: int) -> str:
+        """The satellite's TLE file: a station's own, or a pre-2.10 cache."""
+        return os.path.join(self.sat_dir or '.', SAT_TLE_FILE_FORMAT % norad)
+
+    def sat_mtimes(self, norad: int) -> Tuple[Optional[float], Optional[float]]:
+        """The (CSV, TLE) files' mtimes, None for a file that is not there."""
+        mtimes: List[Optional[float]] = []
+        for path in (self.sat_path(norad), self.sat_tle_path(norad)):
+            try:
+                mtimes.append(os.stat(path).st_mtime)
+            except OSError:
+                mtimes.append(None)
+        return mtimes[0], mtimes[1]
+
     def satellite_elements(self, norad: int) -> Optional[Tuple[Any, float]]:
-        """The satellite's orbital elements from its cache file, as
-        (skyfield EarthSatellite, TLE epoch timestamp) -- or None when
-        the file is missing or not a usable TLE.  Results are cached
-        against the file's mtime, so the fetch worker replacing the file
-        is picked up on the next tag evaluation, and a missing or
+        """The satellite's orbital elements, as (skyfield EarthSatellite,
+        epoch timestamp), from its CSV file or its TLE file, whichever
+        holds the later epoch (the CSV on a tie) -- or None when neither
+        is there and usable.  Results are cached against both files'
+        mtimes, so the fetch worker replacing a file, or a person copying
+        one in, is picked up on the next tag evaluation, and a missing or
         corrupt file is not re-read (or re-logged) every tag.  Never
-        raises: a broken cache file costs only this satellite."""
-        try:
-            mtime: Optional[float] = os.stat(self.sat_path(norad)).st_mtime
-        except OSError:
-            mtime = None
+        raises: a broken file costs only itself, and only this
+        satellite."""
+        mtimes = self.sat_mtimes(norad)
         cached = self._sat_cache.get(norad)
-        if cached is not None and cached[0] == mtime:
+        if cached is not None and cached[0] == mtimes:
             return cached[1]
         elements: Optional[Tuple[Any, float]] = None
-        if mtime is not None:
+        for path, mtime, omm in ((self.sat_path(norad), mtimes[0], True),
+                                 (self.sat_tle_path(norad), mtimes[1], False)):
+            if mtime is None:
+                continue
             try:
-                with open(self.sat_path(norad)) as f:
-                    name, line1, line2 = tle_lines(f.read(), norad)
-                sat = skyfield.api.EarthSatellite(line1, line2, name, self.ts)
-                elements = (sat, sat.epoch.utc_datetime().timestamp())
+                with open(path, encoding='utf-8', errors='replace') as f:
+                    sat = satellite_from_text(f.read(), norad, self.ts, omm)
+                epoch = sat.epoch.utc_datetime().timestamp()
             except Exception as e:
-                log.error('satellite_elements: could not load %s: %s'
-                          % (self.sat_path(norad), e))
-        self._sat_cache[norad] = (mtime, elements)
+                log.error('satellite_elements: could not load %s: %s' % (path, e))
+                continue
+            if elements is None or epoch > elements[1]:
+                elements = (sat, epoch)
+        self._sat_cache[norad] = (mtimes, elements)
         return elements
 
     def note_sat_usable(self, norad: int, usable: bool) -> None:
@@ -3993,7 +4154,7 @@ class SkyfieldAlmanacBinder:
 
     def _sat_passes(self, sat: Any, epoch_ts: float) -> List[Dict[str, Any]]:
         """Every pass in the elements' validity window -- a day before the
-        TLE epoch through the seven-day age cutoff; never searching times
+        elements' epoch through the seven-day age cutoff; never searching times
         the elements cannot be trusted for -- computed once per element
         set, location and horizon, and cached (the seven-day SGP4 sweep
         is milliseconds, but loopdata asks every loop packet).  The

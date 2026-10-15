@@ -25,6 +25,7 @@ import importlib.util
 import io
 import os
 import re
+import sys
 import time
 import types
 import urllib.error
@@ -231,6 +232,18 @@ class TestInstallerConfig:
             'commented out in [Skyfield] with nothing checking it against the '
             'value that governs: %s' % sorted(commented))
 
+    def test_the_copied_limits_match_the_extension(self):
+        """The oldest Skyfield and the highest catalog number, which
+        install.py also carries because it cannot import wxskyfield: kept
+        equal here, so the installer refuses exactly what weewxd would."""
+        module = install_module()
+        names = {'SKYFIELD_MIN_VERSION', 'SKYFIELD_OMM_VERSION', 'SAT_MAX_ELEMENT_AGE_SECS',
+                 'SAT_MAX_CATALOG_NUMBER'}
+        runtime = _get_module_constants(SOURCE, names)
+        assert sorted(runtime) == sorted(names)
+        for name in sorted(names):
+            assert getattr(module, name) == runtime[name], name
+
     def test_refresh_clocks_match_the_extension(self):
         """The installer skips a download whose cached file is younger
         than the extension's own refresh interval -- the file weewxd would
@@ -300,12 +313,16 @@ class TestInstallerConfig:
 
 
 def satellite_payload(catnr, name='TESTSAT'):
-    """A two-line element set the installer's validation accepts: it looks
-    only for a line 1 carrying the catalog number asked for."""
-    return ('%s\n'
-            '1 %05d U 98067A   25172.50000000  .00016717  00000-0  10270-3 0  9007\n'
-            '2 %05d  51.6416 247.4627 0006703 130.5360 325.0288 15.72125391563537\n'
-            % (name, catnr, catnr))
+    """CelesTrak's CSV answer for one satellite, in its column order: the
+    installer's validation looks for a row carrying the catalog number
+    asked for, with an epoch and a mean motion."""
+    return ('OBJECT_NAME,OBJECT_ID,EPOCH,MEAN_MOTION,ECCENTRICITY,INCLINATION,'
+            'RA_OF_ASC_NODE,ARG_OF_PERICENTER,MEAN_ANOMALY,EPHEMERIS_TYPE,'
+            'CLASSIFICATION_TYPE,NORAD_CAT_ID,ELEMENT_SET_NO,REV_AT_EPOCH,BSTAR,'
+            'MEAN_MOTION_DOT,MEAN_MOTION_DDOT\r\n'
+            '%s,1998-067A,2026-10-13T19:43:22.113408,15.48855783,.00067109,51.6325,'
+            '73.0089,259.3258,100.6975,0,U,%d,999,59014,.12830727E-3,.6592E-4,0\r\n'
+            % (name, catnr))
 
 
 def no_such_satellite_error(url):
@@ -438,7 +455,7 @@ class TestInstallTimeFetch:
         engine = engine_factory()
         module = install_module()
         for norad in module.DEFAULT_SATELLITES.values():
-            write_cache(engine, 'wxskyfield_sat_%s.tle' % norad, 60)
+            write_cache(engine, 'wxskyfield_sat_%s.csv' % norad, 60)
         write_cache(engine, 'wxskyfield_comets.txt', 3600)
 
         installer.configure(engine)
@@ -455,7 +472,7 @@ class TestInstallTimeFetch:
         engine = engine_factory()
         module = install_module()
         for norad in module.DEFAULT_SATELLITES.values():
-            write_cache(engine, 'wxskyfield_sat_%s.tle' % norad,
+            write_cache(engine, 'wxskyfield_sat_%s.csv' % norad,
                         module.SAT_REFRESH_SECS + 60)
             fake_urlopen.answers[int(norad)] = satellite_payload(int(norad))
         write_cache(engine, 'wxskyfield_comets.txt',
@@ -508,7 +525,7 @@ class TestInstallTimeFetch:
         assert 'weewxd will fetch' not in engine.output
         assert 'Fetched satellite elements for iss' in engine.output
         assert os.path.exists(os.path.join(engine.cache_dir,
-                                           'wxskyfield_sat_25544.tle'))
+                                           'wxskyfield_sat_25544.csv'))
 
     def test_an_unparseable_answer_is_transient(self, engine_factory,
                                                 installer, fake_urlopen):
@@ -623,7 +640,7 @@ class TestInstallTimeFetch:
         engine = engine_factory(skyfield={
             'Satellites': {'iss': 25544, 'tiangong': 48274},
             'Comets': {'halley': '1P'}}, dry_run=True)
-        write_cache(engine, 'wxskyfield_sat_25544.tle', 60)
+        write_cache(engine, 'wxskyfield_sat_25544.csv', 60)
         write_cache(engine, 'wxskyfield_comets.txt', 3600)
 
         installer.configure(engine)
@@ -642,3 +659,153 @@ class TestInstallTimeFetch:
         installer.configure(engine)
         assert fake_urlopen.calls == []
         assert engine.output == ''
+
+    def test_an_upgrade_asks_for_nothing_fetched_within_the_cadence(self, engine_factory,
+                                                                  installer, fake_urlopen):
+        """Over a release that cached TLEs: a TLE younger than the cadence
+        counts as current, as in weewxd, so the upgrade adds no request."""
+        engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                          'Satellites': {'iss': 25544}})
+        write_cache(engine, 'wxskyfield_sat_25544.tle', 60)
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == []
+        assert 'Satellite elements for iss' in engine.output
+
+    def test_a_fetch_retires_the_tle_beside_it(self, engine_factory, installer,
+                                               fake_urlopen):
+        """A TLE past the cadence is due; the CSV is written as CelesTrak
+        sent it, and the TLE it supersedes is deleted."""
+        engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                          'Satellites': {'iss': 25544}})
+        module = install_module()
+        tle = write_cache(engine, 'wxskyfield_sat_25544.tle', module.SAT_REFRESH_SECS + 60)
+        fake_urlopen.answers[25544] = satellite_payload(25544)
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == [25544]
+        assert 'FORMAT=CSV' in module.CELESTRAK_URL
+        with open(os.path.join(engine.cache_dir, 'wxskyfield_sat_25544.csv'), 'rb') as f:
+            assert f.read() == satellite_payload(25544).encode('ascii')
+        assert not os.path.exists(tle)
+
+    def test_a_tle_answer_is_not_elements(self, engine_factory, installer, fake_urlopen):
+        """A TLE where CSV was asked for is something else answering: it
+        stops the asking, and no file is written."""
+        engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                          'Satellites': {'iss': 25544}})
+        fake_urlopen.answers[25544] = (
+            'ISS (ZARYA)\n'
+            '1 25544U 98067A   26286.82178372  .00006592  00000-0  12831-3 0  9992\n'
+            '2 25544  51.6325  73.0089 0006711 259.3258 100.6975 15.48855783590141\n')
+
+        installer.configure(engine)
+
+        assert 'Could not fetch elements for iss now' in engine.output
+        assert not os.path.exists(os.path.join(engine.cache_dir, 'wxskyfield_sat_25544.csv'))
+
+    def test_an_answer_weewxd_would_refuse_keeps_the_tle(self, engine_factory, installer,
+                                                         fake_urlopen):
+        """The installer tests an answer as weewxd does, by building the
+        satellite: a row with an empty column, or one short of its header,
+        stops the asking, writes nothing, and leaves the TLE it would have
+        replaced serving."""
+        module = install_module()
+        good = satellite_payload(25544)
+        header, row = good.split('\r\n')[:2]
+        empty_bstar = header + '\r\n' + row.replace(',.12830727E-3,', ',,') + '\r\n'
+        short = header + '\r\n' + row.rsplit(',', 3)[0] + '\r\n'
+        for payload in (empty_bstar, short):
+            engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                              'Satellites': {'iss': 25544}})
+            tle = write_cache(engine, 'wxskyfield_sat_25544.tle', module.SAT_REFRESH_SECS + 60)
+            fake_urlopen.answers[25544] = payload
+
+            installer.configure(engine)
+
+            assert 'Could not fetch elements for iss now' in engine.output, payload
+            assert os.path.exists(tle), payload
+            assert not os.path.exists(os.path.join(engine.cache_dir,
+                                                   'wxskyfield_sat_25544.csv')), payload
+
+    def test_another_satellites_row_is_not_elements(self, engine_factory, installer,
+                                                    fake_urlopen):
+        """An answer carrying some other catalog number's row is not the
+        elements asked for: the asking stops, and nothing is written."""
+        engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                          'Satellites': {'iss': 25544}})
+        fake_urlopen.answers[25544] = satellite_payload(48274)
+
+        installer.configure(engine)
+
+        assert 'Could not fetch elements for iss now' in engine.output
+        assert 'catalog number 25544' in engine.output
+        assert not os.path.exists(os.path.join(engine.cache_dir, 'wxskyfield_sat_25544.csv'))
+
+    def test_a_six_digit_satellite_is_asked_for(self, engine_factory, installer,
+                                               fake_urlopen):
+        """The reason for the CSV: a six-digit catalog number fetches.
+        One past SGP4's ceiling is skipped, out loud, and never asked
+        for."""
+        engine = engine_factory(skyfield={'comet_downloads': 'false',
+                                          'Satellites': {'six': 190000, 'past': 340000}})
+        fake_urlopen.answers[190000] = satellite_payload(190000)
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == [190000]
+        assert 'Fetched satellite elements for six' in engine.output
+        assert ('Skipping satellite past: SGP4, which computes satellite positions, '
+                'takes catalog numbers from 1 to 339999.') in engine.output
+
+
+class TestSkyfieldRequirement:
+    """The install stops on a Skyfield older than 1.47, before weewxd is
+    left with no almanac at all; on 1.47 and 1.48, which cannot read the
+    OMM format satellite elements are fetched in, only the satellite
+    fetch is skipped."""
+
+    def test_too_old_says_so(self, monkeypatch):
+        import skyfield
+        monkeypatch.setattr(skyfield, 'VERSION', (1, 46))
+        message = install_module().skyfield_requirement()
+        assert message.startswith('weewx-skyfield requires Skyfield 1.47 or later, found 1.46.')
+        assert message.endswith('installation.html#upgrading-skyfield')
+
+    def test_not_installed_says_so(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, 'skyfield', None)
+        message = install_module().skyfield_requirement()
+        assert message.startswith('weewx-skyfield requires Skyfield 1.47 or later, which is '
+                                  'not installed.')
+
+    def test_new_enough_passes(self, monkeypatch):
+        import skyfield
+        monkeypatch.setattr(skyfield, 'VERSION', (1, 47))
+        assert install_module().skyfield_requirement() is None
+
+    def test_the_loader_stops_the_install(self, monkeypatch):
+        import skyfield
+        monkeypatch.setattr(skyfield, 'VERSION', (1, 45))
+        with pytest.raises(SystemExit, match='requires Skyfield 1.47 or later, found 1.45'):
+            install_module().loader()
+
+    def test_without_omm_only_the_satellites_are_skipped(self, engine_factory, installer,
+                                                         fake_urlopen, monkeypatch):
+        """Skyfield 1.48: nothing is asked of CelesTrak, the output says
+        why and what to do, and the comets are still fetched."""
+        import skyfield
+        import skyfield.api
+        monkeypatch.delattr(skyfield.api.EarthSatellite, 'from_omm')
+        monkeypatch.setattr(skyfield, 'VERSION', (1, 48))
+        engine = engine_factory(skyfield={'Satellites': {'iss': 25544},
+                                          'Comets': {'halley': '1P'}})
+        fake_urlopen.answers['comets'] = COMET_PAYLOAD
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == ['comets']
+        assert ('Not fetching satellite elements: satellites need Skyfield 1.49 or later, '
+                'found 1.48.  They stop working within 7 days') in engine.output
+        assert 'Fetched comet elements into' in engine.output

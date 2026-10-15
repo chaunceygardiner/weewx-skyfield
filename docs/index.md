@@ -129,12 +129,12 @@ be dropped into a skin of your own.
 - Python 3.9 or later
 - WeeWX 5.2 or later (translated body, constellation and meteor shower names need 5.3 —
   see [Translating the Sky page](i18n.md#how-it-works))
-- [Skyfield](https://rhodesmill.org/skyfield/) 1.47 or later, and NumPy
+- [Skyfield](https://rhodesmill.org/skyfield/) 1.47 or later (1.49 for satellites), and NumPy
 - PyEphem is **not** required
 
-Skyfield 1.47 is the minimum supported version; development and the test suite track the
-current Skyfield release, so upgrading is recommended — see
-[Upgrading Skyfield](installation.md#upgrading-skyfield).
+Skyfield 1.47 is the minimum.  Satellites need 1.49 or later: their elements arrive in the
+OMM format, which earlier Skyfield cannot read.  Development and the test suite track the current Skyfield
+release — see [Upgrading Skyfield](installation.md#upgrading-skyfield).
 
 ## Quick start
 

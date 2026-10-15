@@ -229,14 +229,16 @@ class TestAmericanEnglish(unittest.TestCase):
     NOT_OURS = (
         'LICENSE',
         # Real archived orbital elements: CelesTrak's TLE records for the
-        # ISS and Tiangong, and rows lifted from the Minor Planet Center's
-        # CometEls.txt.  They are in the tree so the suite computes against
-        # what a station really fetches, and correcting a character of
-        # someone else's record would defeat that.  (The comets file also
-        # carries one fabricated row of ours, C/9999 Z9; it is designations
-        # and orbital elements, with no prose in it either way.)
-        'tests/data/wxskyfield_sat_25544.tle',
-        'tests/data/wxskyfield_sat_48274.tle',
+        # ISS and Tiangong, its CSV answer for the ISS, and rows lifted from
+        # the Minor Planet Center's CometEls.txt.  They are in the tree so
+        # the suite computes against what a station really fetches, and
+        # correcting a character of someone else's record would defeat
+        # that.  (The comets file also carries one fabricated row of ours,
+        # C/9999 Z9; it is designations and orbital elements, with no prose
+        # in it either way.)
+        'tests/data/tle/wxskyfield_sat_25544.tle',
+        'tests/data/tle/wxskyfield_sat_48274.tle',
+        'tests/data/celestrak_answer_25544.csv',
         'tests/data/wxskyfield_comets.txt',
     )
 

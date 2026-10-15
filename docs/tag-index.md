@@ -229,7 +229,7 @@ satellites.  Configure them under `[Skyfield]` `[[Satellites]]` — see
 | `set` | time | 2.0 | The next set, dated for the same reason. |
 | `next_pass` | object | 2.0 | The next pass, or the one in progress — see [pass attributes](#pass-attributes). |
 | `next_visible_pass` | object | 2.0 | The next pass worth watching: sunlit against a sky with the sun below −6°, peaking at least 10° up. |
-| `elements_epoch` | time | 2.0 | The TLE's epoch.  Always live. |
+| `elements_epoch` | time | 2.0 | The orbital elements' epoch.  Always live. |
 | `elements_age` | duration | 2.0 | Age of the elements.  Past seven days, every other tag reads N/A. |
 
 ### Pass attributes

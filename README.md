@@ -11,12 +11,12 @@ The manual covers installation, every almanac tag, the Sky page, configuration,
 translations and troubleshooting — with search.
 
 **This extension requires Python 3.9 or later, WeeWX 5.2 or later, and the
-[Skyfield](https://rhodesmill.org/skyfield/) (1.47 or later) and NumPy libraries.  PyEphem is
+[Skyfield](https://rhodesmill.org/skyfield/) (1.47 or later; 1.49 for satellites) and NumPy libraries.  PyEphem is
 NOT required.**
 
-Skyfield 1.47 is the minimum supported version; development and the test suite track the
-current Skyfield release (1.55 as of August 2026), so if you have an earlier version
-installed, upgrading is recommended — see
+Skyfield 1.47 is the minimum.  Satellites need 1.49 or later: their elements arrive in the
+OMM format, which earlier Skyfield cannot read.  Development and the test suite track the current Skyfield
+release (1.55 as of August 2026) — see
 [Upgrading Skyfield](https://chaunceygardiner.github.io/weewx-skyfield/installation.html#upgrading-skyfield).
 
 ## Description
@@ -109,11 +109,11 @@ into a skin of your own.
 
 ## Installation
 
-1. Install Skyfield (1.47 or later).  For a pip/venv WeeWX install:
+1. Install Skyfield (1.49 or later).  For a pip/venv WeeWX install:
 
    ```
    source /home/weewx/weewx-venv/bin/activate
-   pip install 'skyfield>=1.47'
+   pip install 'skyfield>=1.49'
    ```
 
 2. Download `weewx-skyfield.zip` from the

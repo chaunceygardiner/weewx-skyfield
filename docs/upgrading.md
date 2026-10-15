@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 4
-description: What changed for existing weewx-skyfield users — removed options, the one tag whose units changed, satellite times that now carry their date, markup changes for skins that embed the panels, the download switches, and the companion-extension version floors.
+description: What changed for existing weewx-skyfield users — satellites needing Skyfield 1.49, satellite elements as OMM, removed options, the one tag whose units changed, satellite times that now carry their date, markup changes for skins that embed the panels, the download switches, and the companion-extension version floors.
 ---
 
 # Upgrading
@@ -78,6 +78,23 @@ map.  To restore the sparse pre-2.0 look:
 ```
 
 ## Coming from 2.x
+
+### If you use satellites on Skyfield 1.47 or 1.48 (2.10)
+
+**Satellites now need Skyfield 1.49 or later.**  Their elements arrive in the OMM format
+(below), which earlier Skyfield cannot read.  On 1.47 or 1.48 satellites stop working after
+this upgrade, though it can take up to 7 days for them to stop; everything else works as
+before.  Upgrade Skyfield — see [Upgrading Skyfield](installation.md#upgrading-skyfield).
+
+### Satellite elements are OMM now, not TLEs (2.10)
+
+Nothing to do, but worth knowing.  A TLE has room for only five digits of catalog number, and
+the catalog passed 99999 in July 2026, so the satellite elements are fetched in the OMM format,
+as CSV, and cached as `wxskyfield_sat_<norad>.csv`.  The upgrade adds no request to
+CelesTrak: each satellite's old `.tle` file serves until its elements are next due, when the
+fetch writes the `.csv` and deletes the `.tle`.  If you run with `satellite_downloads = false`
+and supply the files yourself, your `.tle` files keep working; a satellite numbered past 99999
+needs a `.csv` (or an Alpha-5 TLE).  See [Satellites](installation.md#satellites).
 
 ### If you print satellite times, one thing needs your attention
 
@@ -159,6 +176,11 @@ it.  If you have never passed a `palette` argument, there is nothing to do.
 
 | Release | Worth knowing |
 |---|---|
+| **2.10** | Satellite elements are fetched as OMM (CSV) rather than TLEs, so satellites numbered past 99999 work, up to 339999, the highest SGP4 takes.  Files you supply may be either.  Satellites need Skyfield 1.49 or later (see above). |
+| **2.9** | The satellite and comet element fetches stop at the first answer that is not a good one, as [CelesTrak's usage policy](https://celestrak.org/usage-policy.php) requires: any failure ends the round and every satellite waits the three-hour cadence, with the server's own words in the log.  A 404 saying "No GP data found" sets that one satellite aside until weewxd restarts.  Redirects are never followed.  The installer follows the same rule.  Nothing to configure. |
+| **2.8.1** | weewxd always stops when asked: a shutdown landing inside a satellite or comet refresh could be caught as a failed fetch, leaving weewxd running until systemd killed it.  Nothing to configure. |
+| **2.8** | A 403, 404 or 429 from CelesTrak or the Minor Planet Center gets no quick retries.  On the dark Sky page the lines between rows and sections can be seen; a skin that copies `sky.css` picks this up as two new tokens, `--divider` and `--page-divider`. |
+| **2.7.1** | The Next Visible Pass chart sits directly below the sky dome, drawn at the dome's size, where its labels were 5.8 pixels in the side column. |
 | **2.7** | Every chart draws in a second frame on request — `narrow=True` — laid out for a phone rather than scaled down for one: 360 units across, labels that read at 11 px or better on a 320 px screen, and detail thinned rather than shrunk where it will not fit.  The bundled Sky page now serves both and picks by viewport width.  The wide frame is unchanged, byte for byte, apart from the corrected ring numbers, so nothing else you draw today moves.  A narrow sky chart declares its own center and radius for live pages that reposition marks.  **Fixed:** the dome's and pass chart's altitude ring numbers named each other's rings from 1.0 until now — the label reading 30° sat on the 60° ring. |
 | **2.6.2** | A deviation from WeeWX's built-in almanac, which is incorrect here: `visible_change()` with `use_center=1` measures both days to the body's center, where WeeWX measures the earlier day to the upper limb and reads about 160 seconds too negative for the sun.  Earlier releases gave WeeWX's answer.  See [Accuracy and conventions](accuracy.md#differences-from-pyephem).  Nothing to configure. |
 | **2.6.1** | The English Sky page prints clock times 12-hour ("8:45 PM"), dates with their comma ("Aug 17, 2027") and durations spaced ("14 h 6 m"); the other bundled languages keep 24-hour times.  A skin that overrides one of the date, clock or duration [Texts] keys should take the renamed key (see changes.md). |

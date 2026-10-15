@@ -69,18 +69,41 @@ needs_catalog = pytest.mark.skipif(not CATALOG_PRESENT, reason='%s not present' 
 
 # Satellite element fixtures: real archived TLEs (CelesTrak's stations
 # group as captured 2025-06-21, epochs 0.26/0.88 days before TIME_TS) for
-# the ISS and Tiangong, committed as test data, plus a fabricated
-# geostationary satellite parked over the far side of the Earth --
-# deterministic never-rises.  SGP4 is pure math: canned TLE + TIME_TS +
-# Palo Alto = deterministic, so pass times pin like sun -17.6239.
+# the ISS and Tiangong, plus a fabricated geostationary satellite parked
+# over the far side of the Earth -- deterministic never-rises.  The
+# suite's satellites read them as OMM CSV, the format the extension
+# fetches: each wxskyfield_sat_<n>.csv in tests/data is its TLE in
+# tests/data/tle exported by the sgp4 library's own exporter (the same
+# element set: identical positions over the week, to 7 mm), so every pin
+# holds from either format.  The TLEs have a directory of their own
+# because the later epoch wins where both files sit together, and the
+# exporter puts Tiangong's 40 microseconds early.  190000 is the ISS's
+# elements under a six-digit catalog number, as CSV and as an Alpha-5 TLE
+# (K0000).  SGP4 is pure math: canned elements + TIME_TS + Palo Alto =
+# deterministic, so pass times pin like sun -17.6239.
 SAT_DATA_DIR = os.path.join(TEST_DIR, 'data')
-ISS_NORAD, TIANGONG_NORAD, GEOSAT_NORAD = 25544, 48274, 90000
+TLE_DATA_DIR = os.path.join(SAT_DATA_DIR, 'tle')
+ISS_NORAD, TIANGONG_NORAD, GEOSAT_NORAD, SIX_DIGIT_NORAD = 25544, 48274, 90000, 190000
 SATELLITES = {'iss': ISS_NORAD, 'tiangong': TIANGONG_NORAD}
 ISS_EPOCH_TS = 1750510380.388
+# CelesTrak's FORMAT=CSV answer for the ISS, its bytes exactly as received
+# on 2026-10-14 (CRLF line ends): what the fetch is fed.
+CELESTRAK_ANSWER = os.path.join(SAT_DATA_DIR, 'celestrak_answer_25544.csv')
+CELESTRAK_ANSWER_EPOCH = '2026-10-13T19:43:22.113408Z'
 
 
 def read_tle(norad: int) -> str:
-    with open(os.path.join(SAT_DATA_DIR, wxskyfield.SAT_FILE_FORMAT % norad)) as f:
+    with open(os.path.join(TLE_DATA_DIR, wxskyfield.SAT_TLE_FILE_FORMAT % norad)) as f:
+        return f.read()
+
+
+def read_csv(norad: int) -> str:
+    with open(os.path.join(SAT_DATA_DIR, wxskyfield.SAT_FILE_FORMAT % norad), newline='') as f:
+        return f.read()
+
+
+def celestrak_answer() -> bytes:
+    with open(CELESTRAK_ANSWER, 'rb') as f:
         return f.read()
 
 
@@ -257,13 +280,46 @@ class TestService:
             wxskyfield.WxSkyfield(StubEngine(), make_config(satellite_downloads='true'))
         assert 'unrecognized' not in caplog.text
 
-    def test_old_skyfield_declines(self, monkeypatch):
+    def test_old_skyfield_declines(self, monkeypatch, caplog):
         """Skyfield earlier than 1.47 lacks find_risings/find_settings; the
         engine must decline up front (leaving the built-in almanac in
-        place), not fail on every rise/set tag at report time."""
-        monkeypatch.setattr(wxskyfield.skyfield, 'VERSION', (1, 45))
-        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
+        place), not fail on every rise/set tag at report time; 1.47 runs."""
+        monkeypatch.setattr(wxskyfield.skyfield, 'VERSION', (1, 46))
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False)
         assert not s.is_valid()
+        assert 'requires Skyfield 1.47 or later, found 1.46' in caplog.text
+        monkeypatch.setattr(wxskyfield.skyfield, 'VERSION', (1, 47))
+        assert wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False).is_valid()
+
+    def test_skyfield_without_omm_stops_only_the_satellites(self, tmp_path, monkeypatch,
+                                                              caplog):
+        """Skyfield 1.47 and 1.48 have no EarthSatellite.from_omm: the
+        almanac runs, the satellite fetch is never bound (asking CelesTrak
+        for files that cannot be read would be asking for nothing), one
+        error says so at startup, a TLE file still serves, and a CSV file
+        names the version it needs."""
+        monkeypatch.delattr(skyfield.api.EarthSatellite, 'from_omm')
+        monkeypatch.setattr(wxskyfield.skyfield, 'VERSION', (1, 48))
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            engine, service = make_service(tmp_path, Satellites={'iss': str(ISS_NORAD)})
+        assert service.sky.is_valid()
+        assert engine.bound == []
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors == ['Satellites need Skyfield 1.49 or later, found 1.48: their'
+                          ' elements are fetched in the OMM format, which older Skyfield'
+                          ' cannot read.  Not fetching them, so satellite tags stop working'
+                          ' within 7 days.  Upgrade Skyfield.']
+        tle_sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                                 satellites=dict(SATELLITES), sat_dir=TLE_DATA_DIR)
+        assert tle_sky.satellite_elements(ISS_NORAD) is not None
+        caplog.clear()
+        csv_sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                                 satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            assert csv_sky.satellite_elements(ISS_NORAD) is None
+        assert ('could not load %s: Satellites need Skyfield 1.49 or later, found 1.48'
+                % os.path.join(SAT_DATA_DIR, 'wxskyfield_sat_25544.csv')) in caplog.text
 
 
 class TestTerminatePropagation:
@@ -1963,6 +2019,101 @@ class TestSatelliteConfig:
         with pytest.raises(ValueError):
             wxskyfield.tle_lines(read_tle(ISS_NORAD).splitlines()[1], ISS_NORAD)
 
+    def test_tle_catalog_number_alpha5(self):
+        """Alpha-5: a letter for 10 to 33, I and O skipped because they
+        read as digits.  The oracle is Space-Track's published examples
+        (as sgp4's own tests carry them) and sgp4's pure-Python
+        to_alpha5, which agrees with them at every boundary.  Not sgp4's
+        compiled sgp4init: it labels 180000 I0000 and 230000 O0000."""
+        from sgp4.alpha5 import to_alpha5
+        assert wxskyfield.tle_catalog_number('25544') == 25544
+        assert wxskyfield.tle_catalog_number(' 5544') == 5544
+        for field, number in (('A0000', 100000), ('E8493', 148493), ('J2931', 182931),
+                              ('P4018', 234018), ('W1928', 301928), ('Z9999', 339999),
+                              ('H9999', 179999), ('J0000', 180000), ('K0000', 190000),
+                              ('N9999', 229999), ('P0000', 230000)):
+            assert wxskyfield.tle_catalog_number(field) == number
+            assert to_alpha5(number) == field
+        for field in ('I0000', 'O0000', 'a0000', 'A000', 'AB000'):
+            with pytest.raises(ValueError):
+                wxskyfield.tle_catalog_number(field)
+
+    def test_tle_lines_alpha5(self):
+        """A station supplying its own TLE for a six-digit satellite can:
+        the Alpha-5 file loads, and is the ISS's elements under 190000."""
+        name, l1, l2 = wxskyfield.tle_lines(read_tle(SIX_DIGIT_NORAD), SIX_DIGIT_NORAD)
+        assert name == 'SIXDIGIT TEST' and l1.startswith('1 K0000U')
+        with pytest.raises(ValueError, match='190000, not 25544'):
+            wxskyfield.tle_lines(read_tle(SIX_DIGIT_NORAD), ISS_NORAD)
+
+    def test_omm_row_finds_its_satellite(self):
+        row = wxskyfield.omm_row(read_csv(ISS_NORAD), ISS_NORAD)
+        assert row['OBJECT_NAME'] == 'ISS (ZARYA)' and row['NORAD_CAT_ID'] == '25544'
+        with pytest.raises(ValueError, match='48274, not 25544'):
+            wxskyfield.omm_row(read_csv(TIANGONG_NORAD), ISS_NORAD)
+
+    def test_omm_row_rejects_what_is_not_omm(self):
+        """CelesTrak's miss answer, an HTML page, a TLE (the format before
+        2.10), a header with no row, and a truncated row all fail."""
+        header = read_csv(ISS_NORAD).splitlines()[0]
+        for text in ('No GP data found', '<html><body>Sign in</body></html>',
+                     read_tle(ISS_NORAD), header + '\n', ''):
+            with pytest.raises(ValueError):
+                wxskyfield.omm_row(text, ISS_NORAD)
+        truncated = read_csv(ISS_NORAD)[:-40]
+        with pytest.raises(ValueError):
+            wxskyfield.satellite_from_text(truncated, ISS_NORAD, skyfield.api.load.timescale(),
+                                           omm=True)
+
+    def test_satellite_from_text_reads_both_layouts(self):
+        """CelesTrak's answer as received (CRLF), and Space-Track's OMM
+        CSV layout (40 columns, every value quoted, 0.000... numbers),
+        carrying the same element set, build the same satellite."""
+        ts = skyfield.api.load.timescale()
+        with open(os.path.join(SAT_DATA_DIR, 'omm_spacetrack_layout_25544.csv'), newline='') as f:
+            spacetrack = f.read()
+        a = wxskyfield.satellite_from_text(celestrak_answer().decode('utf-8'), ISS_NORAD, ts, True)
+        b = wxskyfield.satellite_from_text(spacetrack, ISS_NORAD, ts, True)
+        assert a.name == b.name == 'ISS (ZARYA)'
+        assert a.epoch.utc_iso(places=6) == b.epoch.utc_iso(places=6) == CELESTRAK_ANSWER_EPOCH
+        t = ts.tt_jd(a.epoch.tt + numpy.array([0.0, 1.0, 7.0]))
+        assert numpy.abs(a.at(t).position.km - b.at(t).position.km).max() < 1e-6
+
+    def test_a_short_row_or_a_byte_order_mark(self):
+        """A row with fewer values than the header has columns is not
+        elements -- a ValueError naming what is missing, not the TypeError
+        Skyfield would raise on the gap -- and a byte-order mark before the
+        header, as a spreadsheet may write, costs nothing: the name
+        survives."""
+        ts = skyfield.api.load.timescale()
+        text = read_csv(ISS_NORAD)
+        short = text.rstrip('\r\n').rsplit(',', 2)[0] + '\r\n'
+        with pytest.raises(ValueError, match='no value for MEAN_MOTION_DOT, MEAN_MOTION_DDOT'):
+            wxskyfield.satellite_from_text(short, ISS_NORAD, ts, True)
+        sat = wxskyfield.satellite_from_text('\ufeff' + text, ISS_NORAD, ts, True)
+        assert sat.name == 'ISS (ZARYA)'
+
+    def test_a_row_missing_a_column_is_a_value_error(self):
+        """A hand-made CSV short of a column Skyfield reads is refused as
+        not elements -- a ValueError naming the column, as every other
+        unusable file is -- rather than a bare KeyError."""
+        lines = read_csv(ISS_NORAD).splitlines()
+        cols, vals = lines[0].split(','), lines[1].split(',')
+        i = cols.index('EPHEMERIS_TYPE')
+        text = '%s\n%s\n' % (','.join(cols[:i] + cols[i + 1:]), ','.join(vals[:i] + vals[i + 1:]))
+        with pytest.raises(ValueError, match='EPHEMERIS_TYPE'):
+            wxskyfield.satellite_from_text(text, ISS_NORAD, skyfield.api.load.timescale(), True)
+
+    def test_catalog_numbers_sgp4_cannot_take_are_refused(self, caplog):
+        """sgp4 stores the number as Alpha-5, whose top is Z9999 =
+        339999: a number past it, or none at all, is refused at startup
+        with the reason, never fetched."""
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            sats = wxskyfield.parse_satellites({'Satellites': {
+                'six': '190000', 'top': '339999', 'past': '340000', 'zero': '0'}})
+        assert sats == {'six': 190000, 'top': 339999}
+        assert caplog.text.count('takes catalog numbers from 1 to 339999') == 2
+
 
 def read_comet_file() -> str:
     """The archived CometEls.txt excerpt: 1P, 10P, 220P, C/1947 X1-B,
@@ -2385,31 +2536,38 @@ class TestSatelliteFetcher:
         return make_service(tmp_path, **options)
 
     def test_fetch_writes_validated_payload(self, tmp_path, monkeypatch):
-        payload = read_tle(ISS_NORAD)
+        """CelesTrak's real CSV answer is saved byte for byte, CRLF and
+        all, and loads as the satellite it names."""
+        payload = celestrak_answer()
         seen = {}
 
         def fake_urlopen(request, timeout=None):
             seen['url'] = request.full_url
             seen['ua'] = request.get_header('User-agent')
-            return FakeResponse(payload.encode('ascii'))
+            return FakeResponse(payload)
 
         monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
-        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
-        wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
-        with open(path) as f:
+        path = str(tmp_path / 'wxskyfield_sat_25544.csv')
+        wxskyfield.fetch_satellite_elements(ISS_NORAD, path, skyfield.api.load.timescale())
+        with open(path, 'rb') as f:
             assert f.read() == payload
         assert not os.path.exists(path + '.tmp')
-        # The wire format: bare gp.php?CATNR returns CSV; FORMAT=TLE is
-        # required.  And the identifying User-Agent CelesTrak asks for.
-        assert 'CATNR=25544' in seen['url'] and 'FORMAT=TLE' in seen['url']
+        s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                           satellites={'iss': ISS_NORAD}, sat_dir=str(tmp_path))
+        elements = s.satellite_elements(ISS_NORAD)
+        assert elements is not None
+        assert elements[0].epoch.utc_iso(places=6) == CELESTRAK_ANSWER_EPOCH
+        # The wire format, OMM as CSV: a TLE cannot carry a six-digit
+        # catalog number.  And the identifying User-Agent CelesTrak asks for.
+        assert 'CATNR=25544' in seen['url'] and 'FORMAT=CSV' in seen['url']
         assert seen['ua'] == wxskyfield.SAT_USER_AGENT
         assert wxskyfield.WXSKYFIELD_VERSION in seen['ua']
         assert 'github.com/chaunceygardiner/weewx-skyfield' in seen['ua']
 
     def test_fetch_failure_keeps_old_file(self, tmp_path, monkeypatch):
-        old = read_tle(ISS_NORAD)
-        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
-        with open(path, 'w') as f:
+        old = read_csv(ISS_NORAD)
+        path = str(tmp_path / 'wxskyfield_sat_25544.csv')
+        with open(path, 'w', newline='') as f:
             f.write(old)
 
         def fake_urlopen(request, timeout=None):
@@ -2417,27 +2575,32 @@ class TestSatelliteFetcher:
 
         monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
         with pytest.raises(OSError):
-            wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
-        with open(path) as f:
+            wxskyfield.fetch_satellite_elements(ISS_NORAD, path, skyfield.api.load.timescale())
+        with open(path, newline='') as f:
             assert f.read() == old
         assert not os.path.exists(path + '.tmp')
 
     def test_fetch_corrupt_payload_keeps_old_file(self, tmp_path, monkeypatch):
-        """The payload is validated BEFORE the write: a CSV answer (the
-        FORMAT-less wire format), an HTML error page, or a miss answer
-        must never replace working elements with garbage."""
-        old = read_tle(ISS_NORAD)
-        path = str(tmp_path / 'wxskyfield_sat_25544.tle')
-        with open(path, 'w') as f:
+        """The payload is validated BEFORE the write, by building the
+        satellite from it: a TLE answer (the format before 2.10), a CSV
+        short of columns, an HTML error page, a miss answer, or another
+        satellite's row must never replace working elements with
+        garbage."""
+        old = read_csv(ISS_NORAD)
+        path = str(tmp_path / 'wxskyfield_sat_25544.csv')
+        with open(path, 'w', newline='') as f:
             f.write(old)
-        for payload in (b'OBJECT_NAME,OBJECT_ID,EPOCH\nISS (ZARYA),1998-067A,x\n',
+        ts = skyfield.api.load.timescale()
+        for payload in (read_tle(ISS_NORAD).encode('ascii'),
+                        b'OBJECT_NAME,OBJECT_ID,EPOCH,NORAD_CAT_ID\nISS (ZARYA),1998-067A,x,25544\n',
+                        b'<html><body>Sign in to continue</body></html>',
                         b'No GP data found',
-                        read_tle(TIANGONG_NORAD).encode('ascii')):
+                        read_csv(TIANGONG_NORAD).encode('ascii')):
             monkeypatch.setattr(wxskyfield, 'open_url',
                                 lambda request, timeout=None, p=payload: FakeResponse(p))
             with pytest.raises(ValueError):
-                wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
-            with open(path) as f:
+                wxskyfield.fetch_satellite_elements(ISS_NORAD, path, ts)
+            with open(path, newline='') as f:
                 assert f.read() == old
             assert not os.path.exists(path + '.tmp')
 
@@ -2540,7 +2703,7 @@ class TestSatelliteFetcher:
         path = service.sky.sat_path(ISS_NORAD)
         os.makedirs(service.sky.sat_dir, exist_ok=True)
         with open(path, 'w') as f:
-            f.write(read_tle(ISS_NORAD))
+            f.write(read_csv(ISS_NORAD))
         os.utime(path, (now, now))
         assert service.stale_satellites(now) == []
         os.utime(path, (now - wxskyfield.SAT_REFRESH_SECS - 1,
@@ -2556,7 +2719,7 @@ class TestSatelliteFetcher:
         and a success clears the wait."""
         _engine, service = self.make_service(tmp_path)
 
-        def failing(norad, path):
+        def failing(norad, path, ts):
             raise OSError('offline')
 
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', failing)
@@ -2566,9 +2729,9 @@ class TestSatelliteFetcher:
             assert (service._sat_retry_ts[ISS_NORAD] - before
                     == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5))
 
-        def succeeding(norad, path):
+        def succeeding(norad, path, ts):
             with open(path, 'w') as f:
-                f.write(read_tle(norad))
+                f.write(read_csv(norad))
 
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', succeeding)
         service._fetch_worker([ISS_NORAD])
@@ -2635,12 +2798,12 @@ class TestSatelliteFetcher:
         answers = {}
         asked = []
 
-        def answering(norad, path):
+        def answering(norad, path, ts):
             asked.append(norad)
             if norad in answers:
                 raise answers[norad]
             with open(path, 'w') as f:
-                f.write(read_tle(norad))
+                f.write(read_csv(norad))
 
         def status(code, reason, body=b'<p>Your IP address has been blocked.</p>'):
             return urllib.error.HTTPError('https://example.invalid/gp.php', code, reason, None,
@@ -2718,7 +2881,7 @@ class TestSatelliteFetcher:
         _engine, service = self.make_service(tmp_path)
         fetched = []
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements',
-                            lambda norad, path: fetched.append(norad))
+                            lambda norad, path, ts: fetched.append(norad))
         service.refresh_satellite_elements(None)
         assert service._sat_thread is not None
         service._sat_thread.join(10)
@@ -2732,11 +2895,187 @@ class TestSatelliteFetcher:
         path = service.sky.sat_path(ISS_NORAD)
         os.makedirs(service.sky.sat_dir, exist_ok=True)
         with open(path, 'w') as f:
-            f.write(read_tle(ISS_NORAD))
+            f.write(read_csv(ISS_NORAD))
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements',
-                            lambda norad, p: pytest.fail('fetched fresh elements'))
+                            lambda norad, p, ts: pytest.fail('fetched fresh elements'))
         service.refresh_satellite_elements(None)
         assert service._sat_thread is None
+
+    def write_tle(self, service, norad, age_secs):
+        """A TLE cached by a release before 2.10, of the given age."""
+        os.makedirs(service.sky.sat_dir, exist_ok=True)
+        path = service.sky.sat_tle_path(norad)
+        with open(path, 'w') as f:
+            f.write(read_tle(norad))
+        when = time.time() - age_secs
+        os.utime(path, (when, when))
+        return path
+
+    def test_an_upgrade_asks_for_nothing_fetched_within_the_cadence(self, tmp_path):
+        """The first round after an upgrade from a TLE release: a TLE
+        younger than the cadence counts as current, so the upgrade adds
+        no request to CelesTrak; one older is due, as a CSV would be."""
+        _engine, service = self.make_service(tmp_path)
+        now = time.time()
+        self.write_tle(service, ISS_NORAD, 60)
+        assert service.stale_satellites(now) == []
+        self.write_tle(service, ISS_NORAD, wxskyfield.SAT_REFRESH_SECS + 60)
+        assert service.stale_satellites(now) == [ISS_NORAD]
+        # the newer of the two files decides
+        with open(service.sky.sat_path(ISS_NORAD), 'w') as f:
+            f.write(read_csv(ISS_NORAD))
+        assert service.stale_satellites(now) == []
+
+    def test_a_fetch_retires_the_tle_beside_it(self, tmp_path, monkeypatch, caplog):
+        """With downloads on, the TLE a release before 2.10 cached is
+        deleted once the CSV is written, and only then: a failed fetch
+        leaves it serving."""
+        _engine, service = self.make_service(tmp_path)
+        tle = self.write_tle(service, ISS_NORAD, wxskyfield.SAT_REFRESH_SECS + 60)
+        def failing(norad, path, ts):
+            raise OSError('offline')
+
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', failing)
+        service._fetch_worker([ISS_NORAD])
+        assert os.path.exists(tle)
+
+        def succeeding(norad, path, ts):
+            with open(path, 'w') as f:
+                f.write(read_csv(norad))
+
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', succeeding)
+        service._sat_retry_ts.clear()
+        with caplog.at_level(logging.INFO, logger=wxskyfield.log.name):
+            service._fetch_worker([ISS_NORAD])
+        assert not os.path.exists(tle)
+        assert os.path.exists(service.sky.sat_path(ISS_NORAD))
+        assert 'superseded by' in caplog.text
+
+    def test_a_tle_that_will_not_go_does_not_end_the_round(self, tmp_path, monkeypatch,
+                                                         caplog):
+        """The delete follows a fetch that succeeded: failing it is a
+        warning, not a failed fetch -- the round goes on, nobody is
+        parked -- and the TLE left behind loses to the CSV's later
+        epoch."""
+        sats = {'iss': str(ISS_NORAD), 'tiangong': str(TIANGONG_NORAD)}
+        _engine, service = self.make_service(tmp_path, Satellites=sats)
+        self.write_tle(service, ISS_NORAD, wxskyfield.SAT_REFRESH_SECS + 60)
+        asked = []
+
+        def succeeding(norad, path, ts):
+            asked.append(norad)
+            with open(path, 'w') as f:
+                f.write(read_csv(norad))
+
+        def refusing(path):
+            raise PermissionError('Permission denied: %r' % path)
+
+        monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', succeeding)
+        monkeypatch.setattr(wxskyfield.os, 'remove', refusing)
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            service._fetch_worker([ISS_NORAD, TIANGONG_NORAD])
+        assert asked == [ISS_NORAD, TIANGONG_NORAD]
+        assert service._sat_retry_ts == {}
+        assert 'Could not delete' in caplog.text
+        assert 'Could not fetch' not in caplog.text
+
+
+class TestElementFiles:
+    """Which file a satellite's elements come from: the CSV the fetch
+    writes, a TLE a station supplies or a release before 2.10 cached, or
+    both, the later epoch winning."""
+
+    def sky(self, sat_dir, satellites=None):
+        return wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                              satellites=satellites or {'iss': ISS_NORAD},
+                              sat_dir=str(sat_dir))
+
+    def write(self, sat_dir, norad, csv_text=None, tle_text=None):
+        if csv_text is not None:
+            with open(os.path.join(str(sat_dir), wxskyfield.SAT_FILE_FORMAT % norad), 'w',
+                      newline='') as f:
+                f.write(csv_text)
+        if tle_text is not None:
+            with open(os.path.join(str(sat_dir), wxskyfield.SAT_TLE_FILE_FORMAT % norad),
+                      'w') as f:
+                f.write(tle_text)
+
+    def epoch_of(self, s, norad):
+        elements = s.satellite_elements(norad)
+        assert elements is not None
+        return elements[0].epoch.utc_iso(places=6)
+
+    def test_a_tle_alone_still_serves(self, tmp_path):
+        """A station maintaining its own files in TLE form keeps working,
+        to the same pins."""
+        s = self.sky(TLE_DATA_DIR, dict(SATELLITES))
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(s)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            assert alm.tiangong.alt == pytest.approx(-78.9339, abs=ANGLE_TOL)
+            assert raw(alm.iss.elements_epoch, 'unix_epoch') == pytest.approx(ISS_EPOCH_TS,
+                                                                               abs=0.01)
+
+    def test_the_later_epoch_wins(self, tmp_path):
+        """The fixture's 2025 TLE beside the 2026 CSV CelesTrak sent, each
+        way about: the 2026 elements serve either way, so neither a
+        leftover TLE nor a stale CSV shadows fresher elements beside it."""
+        old_tle, new_csv = read_tle(ISS_NORAD), celestrak_answer().decode('utf-8')
+        self.write(tmp_path, ISS_NORAD, csv_text=new_csv, tle_text=old_tle)
+        assert self.epoch_of(self.sky(tmp_path), ISS_NORAD) == CELESTRAK_ANSWER_EPOCH
+        newer = tmp_path / 'newer'
+        newer.mkdir()
+        new_tle = ('ISS (ZARYA)\n'
+                   '1 25544U 98067A   26286.82178372  .00006592  00000-0  12831-3 0  9992\n'
+                   '2 25544  51.6325  73.0089 0006711 259.3258 100.6975 15.48855783590141\n')
+        self.write(newer, ISS_NORAD, csv_text=read_csv(ISS_NORAD), tle_text=new_tle)
+        assert self.epoch_of(self.sky(newer), ISS_NORAD) == '2026-10-13T19:43:22.113403Z'
+
+    def test_a_tie_goes_to_the_csv(self, tmp_path):
+        self.write(tmp_path, ISS_NORAD, csv_text=read_csv(ISS_NORAD),
+                   tle_text=read_tle(ISS_NORAD).replace('ISS (ZARYA)', 'FROM THE TLE'))
+        elements = self.sky(tmp_path).satellite_elements(ISS_NORAD)
+        assert elements is not None and elements[0].name == 'ISS (ZARYA)'
+
+    def test_a_broken_file_costs_only_itself(self, tmp_path, caplog):
+        """A corrupt CSV beside a good TLE: the TLE serves, and the CSV
+        is named in the log.  Reading never deletes either file."""
+        self.write(tmp_path, ISS_NORAD, csv_text='garbage\n', tle_text=read_tle(ISS_NORAD))
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            elements = self.sky(tmp_path).satellite_elements(ISS_NORAD)
+        assert elements is not None
+        assert elements[1] == pytest.approx(ISS_EPOCH_TS, abs=0.01)
+        assert 'wxskyfield_sat_25544.csv' in caplog.text
+        assert sorted(os.listdir(str(tmp_path))) == ['wxskyfield_sat_25544.csv',
+                                                    'wxskyfield_sat_25544.tle']
+
+    def test_a_copied_in_tle_is_picked_up(self, tmp_path):
+        """The cache is keyed on both files' mtimes: a TLE copied in
+        beside the CSV is read at the next evaluation, no restart."""
+        self.write(tmp_path, ISS_NORAD, csv_text=read_csv(ISS_NORAD))
+        s = self.sky(tmp_path)
+        assert s.satellite_elements(ISS_NORAD)[1] == pytest.approx(ISS_EPOCH_TS, abs=0.01)
+        self.write(tmp_path, ISS_NORAD, tle_text=(
+            'ISS (ZARYA)\n'
+            '1 25544U 98067A   26286.82178372  .00006592  00000-0  12831-3 0  9992\n'
+            '2 25544  51.6325  73.0089 0006711 259.3258 100.6975 15.48855783590141\n'))
+        assert self.epoch_of(s, ISS_NORAD) == '2026-10-13T19:43:22.113403Z'
+
+    def test_a_six_digit_satellite(self, tmp_path):
+        """190000, the ISS's elements under a six-digit number, as CSV
+        and as an Alpha-5 TLE: each serves its tags exactly where the ISS
+        is, including the sat_<number> spelling."""
+        for sat_dir in (SAT_DATA_DIR, TLE_DATA_DIR):
+            s = self.sky(sat_dir, {'iss': ISS_NORAD, 'six': SIX_DIGIT_NORAD})
+            with saved_almanacs():
+                assert wxskyfield.register_almanac(s)
+                alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                            formatter=weewx.units.get_default_formatter())
+                assert alm.six.alt == pytest.approx(alm.iss.alt, abs=1e-9), sat_dir
+                assert alm.sat_190000.az == pytest.approx(alm.iss.az, abs=1e-9), sat_dir
+                assert (raw(alm.six.next_pass.rise, 'unix_epoch')
+                        == raw(alm.iss.next_pass.rise, 'unix_epoch')), sat_dir
 
 
 class TestMeteorShowers:
@@ -3214,9 +3553,9 @@ class TestSatelliteStale:
     def test_corrupt_cache_costs_only_that_satellite(self, tmp_path, caplog):
         cache = tmp_path / 'wxskyfield'
         cache.mkdir()
-        (cache / ('wxskyfield_sat_%d.tle' % ISS_NORAD)).write_text('garbage\n')
-        (cache / ('wxskyfield_sat_%d.tle' % TIANGONG_NORAD)).write_text(
-            read_tle(TIANGONG_NORAD))
+        (cache / ('wxskyfield_sat_%d.csv' % ISS_NORAD)).write_text('garbage\n')
+        (cache / ('wxskyfield_sat_%d.csv' % TIANGONG_NORAD)).write_text(
+            read_csv(TIANGONG_NORAD))
         s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
                            satellites=dict(SATELLITES), sat_dir=str(cache))
         with saved_almanacs(), caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
@@ -3246,7 +3585,7 @@ class TestSatelliteStale:
         """The element cache is keyed on the file's mtime: a fetch (or a
         user replacing a file by hand) is picked up at the next tag
         evaluation, per tag, without a restart."""
-        path = tmp_path / ('wxskyfield_sat_%d.tle' % ISS_NORAD)
+        path = tmp_path / ('wxskyfield_sat_%d.csv' % ISS_NORAD)
         path.write_text('garbage\n')
         s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
                            satellites={'iss': ISS_NORAD}, sat_dir=str(tmp_path))
@@ -3255,7 +3594,7 @@ class TestSatelliteStale:
             alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
                                         formatter=weewx.units.get_default_formatter())
             assert alm.iss.alt is None
-            path.write_text(read_tle(ISS_NORAD))
+            path.write_text(read_csv(ISS_NORAD))
             future = time.time() + 10
             os.utime(str(path), (future, future))
             assert alm.iss.alt == pytest.approx(-17.7318, abs=ANGLE_TOL)
