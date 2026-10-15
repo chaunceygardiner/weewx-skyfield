@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import weakref
 
 from datetime import datetime
 from datetime import timezone
@@ -63,7 +64,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.8.1'
+WXSKYFIELD_VERSION = '2.9'
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -162,17 +163,14 @@ class WxSkyfield(StdService):
             # nothing, and the main thread never touches the network.
             self._sat_thread: Optional[threading.Thread] = None
             self._sat_retry_ts: Dict[int, float] = {}
-            self._sat_retry_delay: Dict[int, float] = {}
             if satellites and self.sat_downloads:
                 self.bind(weewx.STARTUP, self.refresh_satellite_elements)
                 self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_satellite_elements)
             # The comet elements get the same treatment, as a parallel
-            # trio rather than a generalization (one file, so the backoff
-            # state is a pair of scalars, and the tested satellite path
-            # stays untouched).
+            # trio rather than a generalization (one file, so the wait is
+            # a single time).
             self._comet_thread: Optional[threading.Thread] = None
             self._comet_retry_ts = 0.0
-            self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
             if comets and self.comet_downloads:
                 self.bind(weewx.STARTUP, self.refresh_comet_elements)
                 self.bind(weewx.NEW_ARCHIVE_RECORD, self.refresh_comet_elements)
@@ -203,7 +201,8 @@ class WxSkyfield(StdService):
         mtime older than the refresh cadence, or no file at all (a
         satellite added to the config later, or an install that was
         offline) -- maximally stale, fetched at the first archive cycle.
-        A number inside its failure backoff window is skipped.  Checks
+        A number parked after a failure (WHAT A FETCH DOES WITH EACH
+        ANSWER) is skipped until its time comes.  Checks
         are age-driven, not schedule-driven, so a weewxd started after a
         long stop refreshes immediately."""
         due: List[int] = []
@@ -219,17 +218,14 @@ class WxSkyfield(StdService):
         return due
 
     def _fetch_worker(self, norads: List[int]) -> None:
-        """Fetch each due element set.  A failure keeps the old file (the
-        fetcher is atomic) and backs off: retry in five minutes, doubling
-        per consecutive failure up to the normal three-hour cadence, so a
-        recovered network refreshes quickly without hammering CelesTrak.
-        An HTTP 403, 404 or 429 gets none of that (see http_refusal): a
-        404 is about one catalog number, so that satellite waits one full
-        cadence; a 403 or 429 is about this address, so EVERY satellite waits
-        one full cadence and the pass ends there, which is at most eight
-        requests a day from a blocked address, and a lifted block heals
-        on its own.  In-memory backoff state resetting on restart (to
-        try-now) is correct.  Never raises -- and never touches the
+        """Fetch each due element set, by WHAT A FETCH DOES WITH EACH
+        ANSWER: a failure keeps the old file (the fetcher is atomic); a
+        404 parks that satellite until weewxd restarts and the round goes on;
+        anything else parks every satellite one cadence and the round
+        ends there, with no request for the ones after it.  No quick
+        retries: a failing CelesTrak is asked at most once a cadence.
+        In-memory state resetting on restart (to try-now) is a person
+        acting on the error.  Never raises -- and never touches the
         engine: weewxd's shutdown does not wait for daemon threads."""
         for norad in norads:
             try:
@@ -237,39 +233,28 @@ class WxSkyfield(StdService):
                 os.makedirs(self.sky.sat_dir, exist_ok=True)
                 fetch_satellite_elements(norad, self.sky.sat_path(norad))
                 self._sat_retry_ts.pop(norad, None)
-                self._sat_retry_delay.pop(norad, None)
                 log.info('Fetched satellite elements for %d.' % norad)
             except Exception as e:
-                refusal = http_refusal(e)
-                if refusal is not None:
-                    if refusal.code == 404:
-                        self._sat_retry_ts[norad] = time.time() + SAT_REFRESH_SECS
-                        self._sat_retry_delay.pop(norad, None)
-                        on_file = ('keeping the cached elements'
-                                   if os.path.exists(self.sky.sat_path(norad))
-                                   else 'nothing on file for it')
-                        log.error('CelesTrak has no elements for satellite %d (%s);'
-                                  ' check the NORAD number.  Asking again in %d hours;'
-                                  ' %s.' % (norad, refusal.text, SAT_REFRESH_SECS // 3600,
-                                            on_file))
-                        continue
-                    for each in set(self.sky.satellites.values()):
-                        self._sat_retry_ts[each] = time.time() + SAT_REFRESH_SECS
-                        self._sat_retry_delay.pop(each, None)
-                    log.error('CelesTrak answered %d for satellite %d (%s): it blocks'
-                              ' an address that asks too often, and repeating the'
-                              ' request gets the address blocked outright.  Asking'
-                              ' again in %d hours, for every satellite; keeping what'
-                              ' is on file.'
-                              % (refusal.code, norad, refusal.text, SAT_REFRESH_SECS // 3600))
-                    return
-                delay = min(self._sat_retry_delay.get(norad, SAT_RETRY_BASE_SECS),
-                            float(SAT_REFRESH_SECS))
-                self._sat_retry_ts[norad] = time.time() + delay
-                self._sat_retry_delay[norad] = delay * 2
-                log.warning('Could not fetch satellite elements for %d (%s);'
-                            ' keeping the cached elements, next try in %d minutes.'
-                            % (norad, e, delay // 60))
+                until = time.time() + SAT_REFRESH_SECS
+                answer = http_answer(e)
+                if not_carried(answer):
+                    # until weewxd restarts: a person fixing the number
+                    self._sat_retry_ts[norad] = float('inf')
+                    on_file = ('keeping the cached elements'
+                               if os.path.exists(self.sky.sat_path(norad))
+                               else 'nothing on file for it')
+                    log.error('CelesTrak has no elements for satellite %d (%s);'
+                              ' check the NORAD number.  Not asking for it again'
+                              ' until weewxd restarts; %s.' % (norad, answer.text, on_file))
+                    continue
+                # never shortening a longer wait: a 404's lasts until restart
+                for each in set(self.sky.satellites.values()):
+                    self._sat_retry_ts[each] = max(self._sat_retry_ts.get(each, 0.0), until)
+                log.error('Could not fetch satellite elements for %d (%s).  Asking'
+                          ' CelesTrak nothing more until the next round, in %d hours,'
+                          ' for every satellite; keeping what is on file.'
+                          % (norad, failure_words(e), SAT_REFRESH_SECS // 3600))
+                return
 
     def refresh_comet_elements(self, event) -> None:
         """Refresh the CometEls cache file when stale, on a worker thread
@@ -294,7 +279,7 @@ class WxSkyfield(StdService):
     def comet_stale(self, now: float) -> bool:
         """Whether the CometEls cache file is due for a fetch: mtime older
         than the refresh cadence, or no file at all -- maximally stale.
-        Inside the failure backoff window, never due.  Age-driven, not
+        Parked after a failure, never due until its time.  Age-driven, not
         schedule-driven, like stale_satellites."""
         if now < self._comet_retry_ts:
             return False
@@ -306,34 +291,22 @@ class WxSkyfield(StdService):
 
     def _comet_fetch_worker(self) -> None:
         """Fetch the CometEls file.  A failure keeps the old file (the
-        fetcher is atomic) and backs off: retry in five minutes, doubling
-        per consecutive failure up to the normal cadence; an HTTP 403,
-        404 or 429 waits one full cadence instead, as for the satellites.
-        Never raises, never touches the engine."""
+        fetcher is atomic) and, whatever it was, waits one full cadence,
+        by WHAT A FETCH DOES WITH EACH ANSWER: one file, so nothing to
+        split.  Never raises, never touches the engine."""
         try:
             assert self.sky.comet_dir is not None
             os.makedirs(self.sky.comet_dir, exist_ok=True)
             fetch_comet_elements(self.sky.comet_path())
             self._comet_retry_ts = 0.0
-            self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
             log.info('Fetched comet elements into %s.' % self.sky.comet_path())
         except Exception as e:
-            refusal = http_refusal(e)
-            if refusal is not None:
-                self._comet_retry_ts = time.time() + COMET_REFRESH_SECS
-                self._comet_retry_delay = float(COMET_RETRY_BASE_SECS)
-                log.error('The MPC answered %d for the comet elements (%s).  Asking'
-                          ' again in %d days; %s.'
-                          % (refusal.code, refusal.text, COMET_REFRESH_SECS // 86400,
-                             'keeping the cached elements'
-                             if os.path.exists(self.sky.comet_path()) else 'nothing on file'))
-                return
-            delay = min(self._comet_retry_delay, float(COMET_REFRESH_SECS))
-            self._comet_retry_ts = time.time() + delay
-            self._comet_retry_delay = delay * 2
-            log.warning('Could not fetch comet elements (%s); keeping the'
-                        ' cached elements, next try in %d minutes.'
-                        % (e, delay // 60))
+            self._comet_retry_ts = time.time() + COMET_REFRESH_SECS
+            log.error('Could not fetch the comet elements from the MPC (%s).  Asking'
+                      ' again in %d days; %s.'
+                      % (failure_words(e), COMET_REFRESH_SECS // 86400,
+                         'keeping the cached elements'
+                         if os.path.exists(self.sky.comet_path()) else 'nothing on file'))
 
 # Named stars available as report almanac tags (e.g., $almanac.rigel.rise)
 # unless disabled (stars = false in [Skyfield]).  Maps the tag name to the
@@ -809,11 +782,9 @@ SAT_FILE_FORMAT = 'wxskyfield_sat_%d.tle'
 SAT_USER_AGENT = 'weewx-skyfield/%s (+%s)' % (WXSKYFIELD_VERSION, REPO_URL)
 # Refresh cadence.  CelesTrak regenerates element sets about every two
 # hours; three is polite, and each install's archive-cycle phase spreads
-# the fleet's fetches.  A failed fetch retries sooner -- the next archive
-# cycle, doubling from five minutes up to this same cadence -- so a
-# recovered network refreshes quickly and CelesTrak is never hammered.
+# the fleet's fetches.  A failed fetch waits this same cadence, never less
+# (see WHAT A FETCH DOES WITH EACH ANSWER, below).
 SAT_REFRESH_SECS = 3 * 3600
-SAT_RETRY_BASE_SECS = 300
 # Elements whose epoch is older than this cannot be trusted for pass
 # times: plain SGP4 drift is only seconds at a week, but a reboost or
 # maneuver accumulates minutes of error per week after it -- missed-pass
@@ -853,7 +824,6 @@ COMET_FILE = 'wxskyfield_comets.txt'
 # the scale of days, not hours -- and there is no usability gate at all, only
 # the elements_epoch/elements_age diagnostics.
 COMET_REFRESH_SECS = 2 * 86400
-COMET_RETRY_BASE_SECS = 300
 
 # Periodic-comet readable designations start "12P/", "220P/", "73P-B/" (and
 # D for defunct, I for interstellar); everything else is the "C/1995 O1
@@ -1019,10 +989,11 @@ def fetch_comet_elements(path: str, timeout: float = 30.0) -> None:
     never the CONFIGURED designations (a vanishing row is a tag-time
     concern, not a download failure).  The write is atomic (temp file +
     os.replace), so report threads never see a partial file; raises on any
-    failure, leaving the previous file in place -- callers own backoff."""
+    failure, leaving the previous file in place -- the caller decides
+    when to ask again."""
     request = urllib.request.Request(COMET_URL,
                                      headers={'User-Agent': SAT_USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with open_url(request, timeout) as response:
         payload = response.read().decode('ascii', 'replace')
     for line in payload.splitlines():
         try:
@@ -1392,33 +1363,73 @@ def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
     raise ValueError('no two-line element set found')
 
 
-# An element source answers 403 or 404 for reasons a quick retry cannot
-# change.
-# CelesTrak's 403 is its block on an address that asked too often (the
-# page it sends says so, and says that a client which keeps repeating the
-# request has the address blocked outright, which stops every satellite
-# at once); its 404 is an object it does not carry; a 429 is the standard
-# rate-limit answer, about the address like a 403.  So those get no
-# five-minute retries: the fetch waits one full cadence, which is the
-# rate CelesTrak calls polite, with the answer's own words in the log.
-HTTP_REFUSAL_CODES = (403, 404, 429)
-HTTP_REFUSAL_EXCERPT_CHARS = 200
+# WHAT A FETCH DOES WITH EACH ANSWER.  CelesTrak's usage policy: a client
+# that gets anything but a good answer stops asking, and a person looks
+# into it.  Retrying a struggling server is what earns an address its
+# firewall: on 2026-10-05 a fleet retrying CelesTrak's 500s and 503s every
+# few minutes ran past its limit, was answered 403, retried through those
+# too, and was firewalled.  So:
+#   - a 200 carrying the elements: saved, and the round goes on;
+#   - CelesTrak's 404 carrying "No GP data found" (verified live: a
+#     catalog number it does not carry, a typo or a decayed object): that
+#     satellite is not asked for again until weewxd restarts, logged as an
+#     error naming the number, and the round goes on -- one wrong number
+#     must not starve the rest.  Any other 404 is not about the number
+#     (CelesTrak's policy: an outdated URL) and is one of the rest;
+#   - anything else -- any other status, a redirect among them (CelesTrak
+#     answers 301 to an outdated URL; open_url never follows one), a 200
+#     that is not elements, no answer at all (a timeout, a refused
+#     connection, DNS) -- ends the round: no satellite is asked again
+#     until the next round, one cadence on, logged once as an error with
+#     the answer's own words.
+# The comets are one file from the Minor Planet Center: any failure waits
+# its cadence.  There are no quick retries of any kind; restarting weewxd,
+# a person acting on the error, asks again at once.
+NOT_CARRIED = 404
+NOT_CARRIED_WORDS = 'No GP data found'
+HTTP_EXCERPT_CHARS = 200
+# Each error's answer, read once: an error's body can be read only once.
+# Kept beside the error rather than on it, since an HTTPError hands
+# unknown attribute lookups to the file it wraps.
+_ANSWERS: 'weakref.WeakKeyDictionary[BaseException, HttpAnswer]' = weakref.WeakKeyDictionary()
 
 
-class HttpRefusal(NamedTuple):
-    code: int
-    text: str   # "HTTP 403 Forbidden: <the page's words>", for the log
-
-
-def http_refusal(e: BaseException) -> Optional[HttpRefusal]:
-    """For an HTTP 403, 404 or 429 raised by urlopen, the status and the
-    answer's text -- scripts and styles dropped (an unclosed one to the
-    end, since a 16 KB read can stop inside it), tags stripped, entities
-    decoded, whitespace collapsed, cut to HTTP_REFUSAL_EXCERPT_CHARS --
-    for the log; None for any other failure.  Reading the body cannot
-    raise: a body that will not read leaves the status alone."""
-    if not isinstance(e, urllib.error.HTTPError) or e.code not in HTTP_REFUSAL_CODES:
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an answer, not a direction: declining it makes urllib
+    raise it as an HTTPError like any other status."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects)
+
+
+def open_url(request: urllib.request.Request, timeout: float):
+    """Every element download opens here: the answer as it came, a
+    redirect never followed (see WHAT A FETCH DOES WITH EACH ANSWER)."""
+    return _OPENER.open(request, timeout=timeout)
+
+
+class HttpAnswer(NamedTuple):
+    code: int
+    text: str   # "HTTP 503 Service Unavailable: <the page's words>", for the log
+
+
+def http_answer(e: BaseException) -> Optional[HttpAnswer]:
+    """For any HTTP status open_url raised, the status and the answer's
+    text -- scripts and styles dropped (an unclosed one to the end, since
+    a 16 KB read can stop inside it), tags stripped, entities decoded,
+    whitespace collapsed, cut to HTTP_EXCERPT_CHARS -- for the log; None
+    for a failure with no answer (a timeout, a refused connection, DNS)
+    or with a 200 that was not elements.  Reading the body cannot raise:
+    a body that will not read leaves the status alone.  An error's body
+    can be read once, so the answer is kept (_ANSWERS) and every later
+    call gets the same words."""
+    if not isinstance(e, urllib.error.HTTPError):
+        return None
+    kept = _ANSWERS.get(e)
+    if kept is not None:
+        return kept
     try:
         text = e.read(16384).decode('utf-8', 'replace')
     except Exception:
@@ -1426,10 +1437,30 @@ def http_refusal(e: BaseException) -> Optional[HttpRefusal]:
     text = re.sub(r'(?is)<(script|style)\b.*?(?:</\1\s*>|\Z)', ' ', text)
     text = re.sub(r'<[^>]*>', ' ', text)
     text = ' '.join(html.unescape(text).split())
-    if len(text) > HTTP_REFUSAL_EXCERPT_CHARS:
-        text = text[:HTTP_REFUSAL_EXCERPT_CHARS].rstrip() + '...'
+    if len(text) > HTTP_EXCERPT_CHARS:
+        text = text[:HTTP_EXCERPT_CHARS].rstrip() + '...'
     status = 'HTTP %d %s' % (e.code, e.reason)
-    return HttpRefusal(e.code, '%s: %s' % (status, text) if text else status)
+    answer = HttpAnswer(e.code, '%s: %s' % (status, text) if text else status)
+    try:
+        _ANSWERS[e] = answer
+    except TypeError:
+        pass
+    return answer
+
+
+def not_carried(answer: Optional[HttpAnswer]) -> bool:
+    """CelesTrak's own answer for a catalog number it does not carry: a
+    404 saying "No GP data found"."""
+    return answer is not None and answer.code == NOT_CARRIED and NOT_CARRIED_WORDS in answer.text
+
+
+def failure_words(e: BaseException) -> str:
+    """What a failed fetch got, for the log: the status and its words,
+    or the failure itself, named when it says nothing."""
+    answer = http_answer(e)
+    if answer is not None:
+        return answer.text
+    return str(e) or type(e).__name__
 
 
 def fetch_satellite_elements(norad: int, path: str, timeout: float = 15.0) -> None:
@@ -1437,10 +1468,10 @@ def fetch_satellite_elements(norad: int, path: str, timeout: float = 15.0) -> No
     CelesTrak into path.  The write is atomic (temp file, then rename)
     and the payload is validated first, so the previous file survives
     any failure -- serving slightly old elements always beats serving
-    none.  Raises on any failure; callers own the backoff."""
+    none.  Raises on any failure; the caller decides when to ask again."""
     request = urllib.request.Request(CELESTRAK_URL % norad,
                                      headers={'User-Agent': SAT_USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with open_url(request, timeout) as response:
         payload = response.read().decode('ascii', 'replace')
     tle_lines(payload, norad)
     tmp_path = '%s.tmp' % path

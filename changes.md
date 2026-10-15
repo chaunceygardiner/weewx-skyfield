@@ -1,5 +1,30 @@
 # weewx-skyfield change history
 
+## 2.9 (2026/10/14)
+- The extension now stops asking CelesTrak at the first answer that is
+  not a good one, as CelesTrak's usage policy requires.  2.8 stopped only
+  for a 403, 404 or 429, and still retried everything else five minutes
+  later, doubling: a 500 or 503 from a server under load, a timeout, a
+  refused connection.  Retrying through those is how an address ends up
+  in CelesTrak's firewall.  Now any failure but a 404 ends the round: the
+  satellites after it are not asked for, and no satellite is asked again
+  for three hours, the normal cadence.  A 404 saying "No GP data found"
+  is a catalog number CelesTrak does not carry, a typo or a decayed
+  object: that satellite is not asked for again until weewxd restarts,
+  and the others are still fetched.  Any other 404, which CelesTrak's
+  policy says means an outdated URL, ends the round like the rest.  Each stop is logged once as an error with
+  the server's own words, for a person to look at.  There are no quick
+  retries of any kind; restarting weewxd asks again at once.
+- A redirect is no longer followed.  CelesTrak answers 301 to an
+  outdated URL and wants it noticed, so a 301 (or any 3xx) now ends the
+  round like any other answer instead of being followed silently.
+- The comet elements from the Minor Planet Center follow the same rule:
+  any failure waits the full two days before the next try.
+- The installer follows it too: CelesTrak's "No GP data found" skips
+  that satellite, and any other failure stops asking for the rest, which
+  weewxd asks for when it starts.  Two names for one catalog number are
+  one request, as in weewxd.
+
 ## 2.8.1 (2026/10/10)
 - WeeWX can always stop.  weewxd shuts down by raising its Terminate
   exception inside whatever the main thread is running at that instant,

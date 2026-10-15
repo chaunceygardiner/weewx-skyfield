@@ -26,6 +26,7 @@ import io
 import os
 import re
 import time
+import types
 import urllib.error
 
 import configobj
@@ -293,8 +294,8 @@ class TestInstallerConfig:
 # than after it, a cached file that is still current is not fetched at all
 # (the usual case on an upgrade, where weewxd has been keeping it fresh), and
 # a NORAD number CelesTrak does not know is reported as something to fix
-# rather than as something weewxd will retry -- because it will retry it, for
-# ever, and fail.
+# rather than as something weewxd will sort out, and any other failure stops
+# the asking, as weewxd's own rule does.
 # ---------------------------------------------------------------------------
 
 
@@ -377,7 +378,7 @@ def installer():
 
 @pytest.fixture
 def fake_urlopen(monkeypatch):
-    """Replaces urllib.request.urlopen for the installer's fetches.  The
+    """Replaces the installer's open_url, through which every fetch goes.  The
     calls are recorded, along with everything printed at the moment each
     one was made -- which is how the heads-up is shown to arrive before
     the download and not after it."""
@@ -409,7 +410,10 @@ def fake_urlopen(monkeypatch):
             return FakeResponse(self.answers[key])
 
     downloads = Downloads()
-    monkeypatch.setattr(module.urllib.request, 'urlopen', downloads)
+    # the installer's open_url builds its opener per call, from the shared
+    # urllib (each test loads install.py afresh, so its own name would miss)
+    monkeypatch.setattr(module.urllib.request, 'build_opener',
+                        lambda *handlers: types.SimpleNamespace(open=downloads))
     return downloads
 
 
@@ -510,9 +514,9 @@ class TestInstallTimeFetch:
                                                 installer, fake_urlopen):
         """A 200 carrying no element set is NOT the no-such-satellite
         fact: CelesTrak says that with a 404.  It is a captive portal, an
-        intercepting proxy or an error page answering instead -- causes a
-        retry does fix, so blaming the catalog number would send the user
-        after a number that is correct."""
+        intercepting proxy or an error page answering instead, so blaming
+        the catalog number would send the user after a number that is
+        correct; it stops the asking like any other failure."""
         engine = engine_factory(skyfield={'comet_downloads': 'false',
                                           'Satellites': {'iss': 25544}})
         fake_urlopen.answers[25544] = '<html>Sign in to continue</html>\n'
@@ -520,13 +524,14 @@ class TestInstallTimeFetch:
         installer.configure(engine)
 
         assert 'Could not fetch elements for iss now' in engine.output
-        assert 'weewxd will fetch them itself' in engine.output
+        assert 'weewxd asks CelesTrak again when it starts' in engine.output
         assert 'check the NORAD number' not in engine.output
 
     def test_a_server_error_is_not_a_bad_norad(self, engine_factory,
                                                installer, fake_urlopen):
         """CelesTrak answers 503 when it is shedding load, which says
-        nothing about the catalog number -- it must read as transient."""
+        nothing about the catalog number: the asking stops, and the number
+        is not blamed."""
         engine = engine_factory(skyfield={'comet_downloads': 'false',
                                           'Satellites': {'iss': 25544}})
         fake_urlopen.raises[25544] = urllib.error.HTTPError(
@@ -535,7 +540,7 @@ class TestInstallTimeFetch:
 
         installer.configure(engine)
 
-        assert 'weewxd will fetch them itself' in engine.output
+        assert 'weewxd asks CelesTrak again when it starts' in engine.output
         assert 'check the NORAD number' not in engine.output
 
     def test_a_norad_that_is_not_a_number_is_named(self, engine_factory,
@@ -554,12 +559,11 @@ class TestInstallTimeFetch:
         assert 'not a NORAD catalog number' in engine.output
         assert 'Fetched satellite elements for iss' in engine.output
 
-    def test_a_transient_failure_still_promises_the_retry(self, engine_factory,
-                                                          installer,
-                                                          fake_urlopen):
-        """A timeout is exactly what weewxd's own 3-hourly fetch is for,
-        so here the reassurance is true -- and again, one satellite's
-        failure does not skip the next."""
+    def test_a_failure_stops_the_rest(self, engine_factory, installer,
+                                      fake_urlopen):
+        """CelesTrak's rule, as weewxd keeps it: any failure but a 404
+        stops the asking.  The satellite after it is not asked for at
+        all, and the output says so and when it will be."""
         engine = engine_factory(skyfield={
             'comet_downloads': 'false',
             'Satellites': {'oops': 99999, 'iss': 25544}})
@@ -568,10 +572,48 @@ class TestInstallTimeFetch:
 
         installer.configure(engine)
 
-        assert 'Could not fetch elements for oops now' in engine.output
-        assert 'weewxd will fetch them itself' in engine.output
+        assert fake_urlopen.calls == [99999]
+        assert ('Could not fetch elements for oops now (timed out); not asking for iss'
+                ' either; weewxd asks CelesTrak again when it starts.') in engine.output
         assert 'check the NORAD number' not in engine.output
-        assert 'Fetched satellite elements for iss' in engine.output
+        assert 'Fetched satellite elements for iss' not in engine.output
+
+    def test_open_url_does_not_follow_a_redirect(self, assert_redirect_refused):
+        """The installer's copy of open_url refuses a redirect too."""
+        assert_redirect_refused(install_module().open_url)
+
+    def test_a_404_without_celestraks_words_is_not_a_bad_number(self, engine_factory,
+                                                               installer, fake_urlopen):
+        """Only CelesTrak's own "No GP data found" means a number it does
+        not carry; another 404 (an outdated URL, in its policy's words)
+        stops the asking and blames no number."""
+        engine = engine_factory(skyfield={
+            'comet_downloads': 'false',
+            'Satellites': {'iss': 25544, 'tiangong': 48274}})
+        fake_urlopen.raises[25544] = urllib.error.HTTPError(
+            install_module().CELESTRAK_URL % 25544, 404, 'Not Found', {},
+            io.BytesIO(b'<html>The page cannot be found</html>'))
+        fake_urlopen.answers[48274] = satellite_payload(48274)
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == [25544]
+        assert 'check the NORAD number' not in engine.output
+        assert 'not asking for tiangong either' in engine.output
+
+    def test_one_number_two_names_is_one_request(self, engine_factory, installer,
+                                                  fake_urlopen):
+        """Two names for one catalog number are one file and one request,
+        as in weewxd; after a 404 the number is not asked for again."""
+        engine = engine_factory(skyfield={
+            'comet_downloads': 'false',
+            'Satellites': {'oops': 99999, 'oops_again': 99999}})
+        fake_urlopen.raises[99999] = no_such_satellite_error(
+            install_module().CELESTRAK_URL % 99999)
+
+        installer.configure(engine)
+
+        assert fake_urlopen.calls == [99999]
 
     def test_dry_run_reports_what_it_would_do(self, engine_factory, installer,
                                               fake_urlopen):

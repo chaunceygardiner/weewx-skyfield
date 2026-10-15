@@ -2393,7 +2393,7 @@ class TestSatelliteFetcher:
             seen['ua'] = request.get_header('User-agent')
             return FakeResponse(payload.encode('ascii'))
 
-        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
         path = str(tmp_path / 'wxskyfield_sat_25544.tle')
         wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
         with open(path) as f:
@@ -2415,7 +2415,7 @@ class TestSatelliteFetcher:
         def fake_urlopen(request, timeout=None):
             raise OSError('network unreachable')
 
-        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
         with pytest.raises(OSError):
             wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
         with open(path) as f:
@@ -2433,7 +2433,7 @@ class TestSatelliteFetcher:
         for payload in (b'OBJECT_NAME,OBJECT_ID,EPOCH\nISS (ZARYA),1998-067A,x\n',
                         b'No GP data found',
                         read_tle(TIANGONG_NORAD).encode('ascii')):
-            monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen',
+            monkeypatch.setattr(wxskyfield, 'open_url',
                                 lambda request, timeout=None, p=payload: FakeResponse(p))
             with pytest.raises(ValueError):
                 wxskyfield.fetch_satellite_elements(ISS_NORAD, path)
@@ -2450,7 +2450,7 @@ class TestSatelliteFetcher:
             seen['ua'] = request.get_header('User-agent')
             return FakeResponse(payload.encode('ascii'))
 
-        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
         path = str(tmp_path / wxskyfield.COMET_FILE)
         wxskyfield.fetch_comet_elements(path)
         with open(path) as f:
@@ -2468,7 +2468,7 @@ class TestSatelliteFetcher:
         def fake_urlopen(request, timeout=None):
             raise OSError('network unreachable')
 
-        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', fake_urlopen)
+        monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
         with pytest.raises(OSError):
             wxskyfield.fetch_comet_elements(path)
         with open(path) as f:
@@ -2485,7 +2485,7 @@ class TestSatelliteFetcher:
         with open(path, 'w') as f:
             f.write(old)
         for payload in (b'<html><body>503</body></html>', b''):
-            monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen',
+            monkeypatch.setattr(wxskyfield, 'open_url',
                                 lambda request, timeout=None, p=payload: FakeResponse(p))
             with pytest.raises(ValueError):
                 wxskyfield.fetch_comet_elements(path)
@@ -2501,7 +2501,7 @@ class TestSatelliteFetcher:
         def boom(*args, **kwargs):
             raise AssertionError('network access at startup')
 
-        monkeypatch.setattr(wxskyfield.urllib.request, 'urlopen', boom)
+        monkeypatch.setattr(wxskyfield, 'open_url', boom)
         s = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
                            satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR)
         assert s.is_valid()
@@ -2546,30 +2546,25 @@ class TestSatelliteFetcher:
         os.utime(path, (now - wxskyfield.SAT_REFRESH_SECS - 1,
                         now - wxskyfield.SAT_REFRESH_SECS - 1))
         assert service.stale_satellites(now) == [ISS_NORAD]
-        # A satellite inside its failure backoff window is skipped.
+        # A satellite parked after a failure is skipped until its time.
         service._sat_retry_ts[ISS_NORAD] = now + 60
         assert service.stale_satellites(now) == []
 
-    def test_backoff_doubles_and_caps(self, tmp_path, monkeypatch):
-        """On failure, retry SOONER than the normal cadence -- five
-        minutes, doubling per consecutive failure, capped at the three-
-        hour cadence -- so a recovered network refreshes quickly and
-        CelesTrak is never hammered.  Success resets the backoff."""
+    def test_a_failure_waits_one_cadence_every_time(self, tmp_path, monkeypatch):
+        """No quick retries: a failure waits the full three-hour cadence,
+        the first time and every time after (nothing doubles up to it),
+        and a success clears the wait."""
         _engine, service = self.make_service(tmp_path)
 
         def failing(norad, path):
             raise OSError('offline')
 
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', failing)
-        delays = []
-        for _ in range(8):
+        for _ in range(3):
             before = time.time()
             service._fetch_worker([ISS_NORAD])
-            delays.append(service._sat_retry_ts[ISS_NORAD] - before)
-        assert delays[0] == pytest.approx(wxskyfield.SAT_RETRY_BASE_SECS, abs=5)
-        assert delays[1] == pytest.approx(2 * wxskyfield.SAT_RETRY_BASE_SECS, abs=5)
-        assert max(delays) <= wxskyfield.SAT_REFRESH_SECS + 5
-        assert delays[-1] == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5)
+            assert (service._sat_retry_ts[ISS_NORAD] - before
+                    == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5))
 
         def succeeding(norad, path):
             with open(path, 'w') as f:
@@ -2578,13 +2573,12 @@ class TestSatelliteFetcher:
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', succeeding)
         service._fetch_worker([ISS_NORAD])
         assert ISS_NORAD not in service._sat_retry_ts
-        assert ISS_NORAD not in service._sat_retry_delay
         assert os.path.exists(service.sky.sat_path(ISS_NORAD))
 
-    def test_refusal_excerpt(self):
-        """http_refusal turns a 403 or 404 into the status plus the
-        answer's text, tags stripped and cut short; anything else is
-        None, so the backoff keeps handling it."""
+    def test_answer_excerpt(self):
+        """http_answer turns any HTTP status into the status plus the
+        answer's text, tags stripped and cut short; a failure with no
+        answer is None, and failure_words names it instead."""
         page = (b'<html><head><title>Blocked</title><style>body { color: red }</style>'
                 b'<SCRIPT type="text/javascript">var x = "<b>no</b>";</script></head>'
                 b'<script>var early = "cut";</script>'
@@ -2593,120 +2587,129 @@ class TestSatelliteFetcher:
                 b'</body></html>')
         e = urllib.error.HTTPError('https://example.invalid/gp.php', 403, 'Forbidden',
                                    None, io.BytesIO(page))
-        assert (wxskyfield.http_refusal(e)
+        assert (wxskyfield.http_answer(e)
                 == (403, 'HTTP 403 Forbidden: Blocked 403 Your IP address has been blocked'
                          ' \u2013 it\'s <excessive>.'))
         long = b'x' * 1000
         e = urllib.error.HTTPError('https://example.invalid/gp.php', 404, 'Not Found',
                                    None, io.BytesIO(long))
-        refusal = wxskyfield.http_refusal(e)
-        assert refusal is not None and refusal.code == 404
-        text = refusal.text
-        assert text.startswith('HTTP 404 Not Found: ' + 'x' * 10)
-        assert text.endswith('...')
-        assert len(text) == len('HTTP 404 Not Found: ') + wxskyfield.HTTP_REFUSAL_EXCERPT_CHARS + 3
+        answer = wxskyfield.http_answer(e)
+        assert answer is not None and answer.code == 404
+        assert answer.text.startswith('HTTP 404 Not Found: ' + 'x' * 10)
+        assert answer.text.endswith('...')
+        assert len(answer.text) == len('HTTP 404 Not Found: ') + wxskyfield.HTTP_EXCERPT_CHARS + 3
         # A page cut off inside a script (the 16 KB read can do that):
         # the script's text does not become the "answer's words".
         cut = b'<html><body><p>Blocked for excessive requests.</p><script>var a = 1; var b'
         e = urllib.error.HTTPError('https://example.invalid/gp.php', 403, 'Forbidden',
                                    None, io.BytesIO(cut))
-        assert (wxskyfield.http_refusal(e)
+        assert (wxskyfield.http_answer(e)
                 == (403, 'HTTP 403 Forbidden: Blocked for excessive requests.'))
-        # No body at all: the status alone.
-        e = urllib.error.HTTPError('https://example.invalid/gp.php', 403, 'Forbidden',
-                                   None, None)
-        assert wxskyfield.http_refusal(e) == (403, 'HTTP 403 Forbidden')
-        # 429 is a refusal too, the standard rate-limit answer.
-        e = urllib.error.HTTPError('https://example.invalid/gp.php', 429, 'Too Many Requests',
-                                   None, io.BytesIO(b'slow down'))
-        assert wxskyfield.http_refusal(e) == (429, 'HTTP 429 Too Many Requests: slow down')
-        # Everything else is a failure to back off from, not a refusal.
-        for other in (urllib.error.HTTPError('https://example.invalid/gp.php', 500,
-                                             'Internal Server Error', None,
-                                             io.BytesIO(b'oops')),
-                      urllib.error.HTTPError('https://example.invalid/gp.php', 503,
-                                             'Service Unavailable', None, None),
-                      OSError('offline'), TimeoutError(), ValueError('bad TLE')):
-            assert wxskyfield.http_refusal(other) is None
+        # Every status is an answer: no body, the status alone.
+        for code, reason, body, text in (
+                (403, 'Forbidden', None, 'HTTP 403 Forbidden'),
+                (429, 'Too Many Requests', b'slow down', 'HTTP 429 Too Many Requests: slow down'),
+                (500, 'Internal Server Error', b'oops', 'HTTP 500 Internal Server Error: oops'),
+                (503, 'Service Unavailable', None, 'HTTP 503 Service Unavailable'),
+                (301, 'Moved Permanently', b'', 'HTTP 301 Moved Permanently')):
+            e = urllib.error.HTTPError('https://example.invalid/gp.php', code, reason, None,
+                                       None if body is None else io.BytesIO(body))
+            assert wxskyfield.http_answer(e) == (code, text)
+            assert wxskyfield.failure_words(e) == text
+        # No answer at all: None, and the failure itself in the log.
+        for other, words in ((OSError('offline'), 'offline'), (TimeoutError(), 'TimeoutError'),
+                             (ValueError('bad TLE'), 'bad TLE')):
+            assert wxskyfield.http_answer(other) is None
+            assert wxskyfield.failure_words(other) == words
 
-    def test_refusal_waits_one_cadence(self, tmp_path, monkeypatch, caplog):
-        """A 403 or 404 gets no five-minute retries, and either clears the
-        doubled delay left by earlier timeouts.  A 404 is about one
-        catalog number: that satellite waits one full cadence, the pass
-        goes on to the next, and the message says whether a cached file
-        is being kept.  A 403 is about this address: every configured
-        satellite waits one full cadence and the pass ends there, with
-        no request for the ones after it, logged once.  A 500 keeps the
-        ordinary backoff."""
-        _engine, service = self.make_service(
-            tmp_path, Satellites={'iss': str(ISS_NORAD), 'tiangong': str(TIANGONG_NORAD)})
+    def test_what_each_answer_does(self, tmp_path, monkeypatch, caplog):
+        """WHAT A FETCH DOES WITH EACH ANSWER, driven through the worker.
+        A 404 parks that one satellite until weewxd restarts, says to
+        check the number, and the round goes on to the next.  Anything
+        else -- 403, 429, 500, 503, a 301, a 400, a 200 that is not
+        elements, a timeout, no connection -- ends the round with no
+        request for the satellites after it, parks every satellite one
+        cadence, and logs once."""
+        sats = {'iss': str(ISS_NORAD), 'tiangong': str(TIANGONG_NORAD)}
+        _engine, service = self.make_service(tmp_path, Satellites=sats)
         answers = {}
         asked = []
 
         def answering(norad, path):
             asked.append(norad)
-            raise answers[norad]
+            if norad in answers:
+                raise answers[norad]
+            with open(path, 'w') as f:
+                f.write(read_tle(norad))
 
-        def refusal(code, reason):
+        def status(code, reason, body=b'<p>Your IP address has been blocked.</p>'):
             return urllib.error.HTTPError('https://example.invalid/gp.php', code, reason, None,
-                                          io.BytesIO(b'<p>Your IP address has been blocked.</p>'))
+                                          io.BytesIO(body))
 
         monkeypatch.setattr(wxskyfield, 'fetch_satellite_elements', answering)
-        answers[TIANGONG_NORAD] = urllib.error.HTTPError(
-            'https://example.invalid/gp.php', 500, 'Internal Server Error', None,
-            io.BytesIO(b'oops'))
 
-        # ---- 404: per satellite, and the pass goes on
-        service._sat_retry_delay[ISS_NORAD] = 8 * wxskyfield.SAT_RETRY_BASE_SECS
-        answers[ISS_NORAD] = refusal(404, 'Not Found')
-        del asked[:]
+        # ---- 404: that satellite until a restart, and the round goes on
+        answers[ISS_NORAD] = status(404, 'Not Found', b'No GP data found')
         before = time.time()
         with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
             service._fetch_worker([ISS_NORAD, TIANGONG_NORAD])
         assert asked == [ISS_NORAD, TIANGONG_NORAD]
-        assert (service._sat_retry_ts[ISS_NORAD] - before
-                == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5))
-        assert ISS_NORAD not in service._sat_retry_delay
-        assert (service._sat_retry_ts[TIANGONG_NORAD] - before
-                == pytest.approx(wxskyfield.SAT_RETRY_BASE_SECS, abs=5))
-        assert service._sat_retry_delay[TIANGONG_NORAD] == 2 * wxskyfield.SAT_RETRY_BASE_SECS
-        soon = before + wxskyfield.SAT_REFRESH_SECS - 60
-        assert ISS_NORAD not in service.stale_satellites(soon)
-        assert TIANGONG_NORAD in service.stale_satellites(soon)
-        assert ISS_NORAD in service.stale_satellites(before + wxskyfield.SAT_REFRESH_SECS + 60)
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert len(errors) == 1
-        message = errors[0].getMessage()
-        assert 'HTTP 404 Not Found: Your IP address has been blocked.' in message
-        assert 'check the NORAD number' in message and '403' not in message
-        assert 'Asking again in 3 hours; nothing on file for it.' in message
+        assert service._sat_retry_ts[ISS_NORAD] == float('inf')
+        assert TIANGONG_NORAD not in service._sat_retry_ts
+        assert ISS_NORAD not in service.stale_satellites(before + 365 * 86400)
+        errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors == ['CelesTrak has no elements for satellite %d (HTTP 404 Not Found: No GP'
+                          ' data found); check the NORAD number.  Not asking for it again until'
+                          ' weewxd restarts; nothing on file for it.' % ISS_NORAD]
+        # a later round that ends on another failure does not bring the
+        # 404'd satellite back in three hours
+        answers[TIANGONG_NORAD] = status(503, 'Service Unavailable', b'')
+        service._fetch_worker([TIANGONG_NORAD])
+        assert service._sat_retry_ts[ISS_NORAD] == float('inf')
+        del answers[TIANGONG_NORAD]
+        # a restart, a person acting on the error: asked for again at once
+        _engine, restarted = self.make_service(tmp_path, Satellites=sats)
+        assert ISS_NORAD in restarted.stale_satellites(time.time())
 
-        # ---- 403 or 429: every satellite, and the pass ends
-        for code, reason in ((403, 'Forbidden'), (429, 'Too Many Requests')):
+        # ---- anything else: the round ends, every satellite one cadence;
+        # a 404 with other words (an outdated URL) among them
+        for failure in (status(404, 'Not Found', b'<html>The page cannot be found</html>'),
+                        status(403, 'Forbidden'), status(429, 'Too Many Requests'),
+                        status(500, 'Internal Server Error', b'oops'),
+                        status(503, 'Service Unavailable', b''),
+                        status(301, 'Moved Permanently', b''), status(400, 'Bad Request', b''),
+                        ValueError('the answer carried no elements for catalog number 25544'),
+                        TimeoutError(), OSError('Connection refused')):
             service._sat_retry_ts.clear()
-            service._sat_retry_delay.clear()
-            service._sat_retry_delay[TIANGONG_NORAD] = 8 * wxskyfield.SAT_RETRY_BASE_SECS
-            answers[ISS_NORAD] = refusal(code, reason)
+            answers[ISS_NORAD] = failure
             del asked[:]
             caplog.clear()
             before = time.time()
             with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
                 service._fetch_worker([ISS_NORAD, TIANGONG_NORAD])
-            assert asked == [ISS_NORAD]
+            assert asked == [ISS_NORAD], failure
             for norad in (ISS_NORAD, TIANGONG_NORAD):
                 assert (service._sat_retry_ts[norad] - before
-                        == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5))
-                assert norad not in service._sat_retry_delay
+                        == pytest.approx(wxskyfield.SAT_REFRESH_SECS, abs=5)), failure
             assert service.stale_satellites(before + wxskyfield.SAT_REFRESH_SECS - 60) == []
-            assert (service.stale_satellites(before + wxskyfield.SAT_REFRESH_SECS + 60)
+            assert (sorted(service.stale_satellites(before + wxskyfield.SAT_REFRESH_SECS + 60))
                     == [ISS_NORAD, TIANGONG_NORAD])
-            errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-            assert len(errors) == 1
-            message = errors[0].getMessage()
-            assert 'CelesTrak answered %d for satellite %d' % (code, ISS_NORAD) in message
-            assert 'HTTP %d %s: Your IP address has been blocked.' % (code, reason) in message
-            assert 'for every satellite; keeping what is on file.' in message
-            assert 'NORAD' not in message
+            errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+            assert errors == ['Could not fetch satellite elements for %d (%s).  Asking CelesTrak'
+                              ' nothing more until the next round, in 3 hours, for every'
+                              ' satellite; keeping what is on file.'
+                              % (ISS_NORAD, wxskyfield.failure_words(failure))], failure
+            # the server's own words reach the log: the worker reads the
+            # answer once and logs what it read
+            if getattr(failure, 'code', None) == 403:
+                assert 'HTTP 403 Forbidden: Your IP address has been blocked.' in errors[0]
+
+    def test_open_url_does_not_follow_a_redirect(self, assert_redirect_refused):
+        """CelesTrak answers 301 to an outdated URL and wants it noticed:
+        open_url raises it as an answer and never asks where it points.
+        A real server on this machine, so urllib's own redirect handling
+        is what is tested."""
+        assert_redirect_refused(wxskyfield.open_url)
 
     def test_refresh_fetches_stale_on_worker_thread(self, tmp_path, monkeypatch):
         """The one callback serves both bindings: at STARTUP the cache is
@@ -2799,8 +2802,8 @@ class TestMeteorShowers:
 
 
 class TestCometFetcher:
-    """The comet element fetch scheduling: one file, scalar backoff, the
-    same STARTUP + NEW_ARCHIVE_RECORD shape as the satellite refresher.
+    """The comet element fetch scheduling: one file, one wait after any
+    failure, the same STARTUP + NEW_ARCHIVE_RECORD shape as the satellite refresher.
     Never touches the network."""
 
     def make_service(self, tmp_path, **skyfield_options):
@@ -2844,26 +2847,44 @@ class TestCometFetcher:
         os.utime(path, (now - wxskyfield.COMET_REFRESH_SECS - 1,
                         now - wxskyfield.COMET_REFRESH_SECS - 1))
         assert service.comet_stale(now)
-        # Inside the failure backoff window: never due.
+        # Parked after a failure: never due until its time.
         service._comet_retry_ts = now + 60
         assert not service.comet_stale(now)
 
-    def test_comet_backoff_doubles_and_caps(self, tmp_path, monkeypatch):
+    def test_comet_failure_waits_one_cadence(self, tmp_path, monkeypatch, caplog):
+        """Any failure of the comet fetch -- the MPC's 404, a 500, a 503,
+        no answer at all -- waits the full two-day cadence, every time,
+        logged once as an error with what came back; a success clears
+        the wait."""
         _engine, service = self.make_service(tmp_path)
+        answer = {}
 
-        def failing(path):
-            raise OSError('offline')
+        def answering(path):
+            raise answer['e']
 
-        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', failing)
-        delays = []
-        for _ in range(12):
+        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', answering)
+        for e, words in ((urllib.error.HTTPError('https://example.invalid/CometEls.txt', 404,
+                                                 'Not Found', None, io.BytesIO(b'gone')),
+                          'HTTP 404 Not Found: gone'),
+                         (urllib.error.HTTPError('https://example.invalid/CometEls.txt', 500,
+                                                 'Internal Server Error', None, None),
+                          'HTTP 500 Internal Server Error'),
+                         (urllib.error.HTTPError('https://example.invalid/CometEls.txt', 503,
+                                                 'Service Unavailable', None, io.BytesIO(b'busy')),
+                          'HTTP 503 Service Unavailable: busy'),
+                         (OSError('offline'), 'offline')):
+            answer['e'] = e
+            caplog.clear()
             before = time.time()
-            service._comet_fetch_worker()
-            delays.append(service._comet_retry_ts - before)
-        assert delays[0] == pytest.approx(wxskyfield.COMET_RETRY_BASE_SECS, abs=5)
-        assert delays[1] == pytest.approx(2 * wxskyfield.COMET_RETRY_BASE_SECS, abs=5)
-        assert max(delays) <= wxskyfield.COMET_REFRESH_SECS + 5
-        assert delays[-1] == pytest.approx(wxskyfield.COMET_REFRESH_SECS, abs=5)
+            with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+                service._comet_fetch_worker()
+            assert (service._comet_retry_ts - before
+                    == pytest.approx(wxskyfield.COMET_REFRESH_SECS, abs=5)), words
+            assert not service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS - 60)
+            assert service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS + 60)
+            errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+            assert errors == ['Could not fetch the comet elements from the MPC (%s).  Asking'
+                              ' again in 2 days; nothing on file.' % words]
 
         def succeeding(path):
             with open(path, 'w') as f:
@@ -2873,40 +2894,6 @@ class TestCometFetcher:
         service._comet_fetch_worker()
         assert service._comet_retry_ts == 0.0
         assert os.path.exists(service.sky.comet_path())
-
-    def test_comet_refusal_waits_one_cadence(self, tmp_path, monkeypatch, caplog):
-        """The MPC's 403 or 404 makes the comet fetch wait one full
-        cadence, logged once as an error; a 500 keeps the backoff."""
-        _engine, service = self.make_service(tmp_path)
-        answer = {}
-
-        def answering(path):
-            raise answer['e']
-
-        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', answering)
-        answer['e'] = urllib.error.HTTPError('https://example.invalid/CometEls.txt', 404,
-                                             'Not Found', None, io.BytesIO(b'gone'))
-        service._comet_retry_delay = 8 * float(wxskyfield.COMET_RETRY_BASE_SECS)
-        before = time.time()
-        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
-            service._comet_fetch_worker()
-        assert service._comet_retry_ts - before == pytest.approx(wxskyfield.COMET_REFRESH_SECS, abs=5)
-        assert service._comet_retry_delay == float(wxskyfield.COMET_RETRY_BASE_SECS)
-        assert not service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS - 60)
-        assert service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS + 60)
-        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-        assert len(errors) == 1
-        message = errors[0].getMessage()
-        assert 'The MPC answered 404 for the comet elements (HTTP 404 Not Found: gone).' in message
-        assert 'Asking again in 2 days; nothing on file.' in errors[0].getMessage()
-        # A 500 on a fresh service backs off instead.
-        _engine, service = self.make_service(tmp_path)
-        answer['e'] = urllib.error.HTTPError('https://example.invalid/CometEls.txt', 500,
-                                             'Internal Server Error', None, None)
-        before = time.time()
-        service._comet_fetch_worker()
-        assert service._comet_retry_ts - before == pytest.approx(
-            wxskyfield.COMET_RETRY_BASE_SECS, abs=5)
 
     def test_refresh_fetches_on_worker_thread(self, tmp_path, monkeypatch):
         _engine, service = self.make_service(tmp_path)

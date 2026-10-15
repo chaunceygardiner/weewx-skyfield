@@ -116,14 +116,28 @@ SAT_REFRESH_SECS = 3 * 3600
 COMET_REFRESH_SECS = 2 * 86400
 
 
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an answer, not a direction (CelesTrak answers 301 to an
+    outdated URL and wants it noticed): declining it makes urllib raise it
+    as an HTTPError like any other status.  wxskyfield.py's own copy;
+    install.py cannot import the module it installs."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def open_url(request, timeout):
+    """Every download the install makes opens here, a redirect never
+    followed."""
+    return urllib.request.build_opener(RefuseRedirects).open(request, timeout=timeout)
+
+
 class NoSuchSatellite(ValueError):
     """CelesTrak's 404 "No GP data found": it has no current elements for
     the catalog number asked about -- what a mistyped NORAD number looks
-    like, and a decayed object too.  Its own class because a retry cannot
-    fix it: unlike a timeout or a DNS failure, it must not be reported as
-    something weewxd will sort out later.  Nothing else earns this class;
-    an answer that merely fails to parse is somebody else's error page and
-    is reported as transient."""
+    like, and a decayed object too.  Its own class because it is about
+    one number: that satellite is skipped and named as something to fix,
+    and the rest are still asked for.  Nothing else earns this class; any
+    other failure, a 404 with other words among them, stops the asking."""
 
 
 def is_current(path, max_age_secs):
@@ -157,7 +171,7 @@ def loader():
 class WxSkyfieldInstaller(ExtensionInstaller):
     def __init__(self):
         super(WxSkyfieldInstaller, self).__init__(
-            version = "2.8.1",
+            version = "2.9",
             name = 'wxskyfield',
             description = "Replaces WeeWX's built-in almanac with a Skyfield based almanac for report generation.",
             author = "John A Kline",
@@ -200,19 +214,19 @@ class WxSkyfieldInstaller(ExtensionInstaller):
         has and that are still current are not refetched, so an upgrade
         over a running station -- whose caches weewxd has been keeping
         fresh -- usually touches the network not at all.  Every failure
-        degrades gracefully -- weewxd fetches on its own schedule -- and
+        degrades gracefully -- weewxd asks again when it starts -- and
         the install itself never fails here.  Never modifies the
         configuration (always returns False)."""
         try:
             self._fetch_satellite_elements(engine)
         except Exception as e:
             engine.printer.out('Could not fetch satellite elements now (%s); '
-                               'weewxd will fetch them itself.' % e)
+                               'weewxd asks CelesTrak again when it starts.' % e)
         try:
             self._fetch_comet_elements(engine)
         except Exception as e:
             engine.printer.out('Could not fetch comet elements now (%s); '
-                               'weewxd will fetch them itself.' % e)
+                               'weewxd asks the MPC again when it starts.' % e)
         try:
             self._fix_cache_ownership(engine)
         except Exception:
@@ -254,6 +268,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
         _, sat_dir = self._cache_dir(engine)
         current = []
         wanted = []
+        seen = set()
         for name, norad in satellites.items():
             try:
                 catnr = int(str(norad))
@@ -264,6 +279,11 @@ class WxSkyfieldInstaller(ExtensionInstaller):
                 engine.printer.out('Skipping satellite %s: %r is not a NORAD '
                                    'catalog number.' % (name, str(norad)))
                 continue
+            if catnr in seen:
+                # one catalog number, one request: a second name for it
+                # shares the first's file, as in weewxd
+                continue
+            seen.add(catnr)
             path = os.path.join(sat_dir, 'wxskyfield_sat_%d.tle' % catnr)
             if is_current(path, SAT_REFRESH_SECS):
                 current.append(str(name))
@@ -282,23 +302,25 @@ class WxSkyfieldInstaller(ExtensionInstaller):
         self._announce(engine, 'Fetching satellite orbital elements for %s '
                                'from CelesTrak...' % names)
         os.makedirs(sat_dir, exist_ok=True)
+        # CelesTrak's rule, as weewxd keeps it: a 404 is about one catalog
+        # number, so that satellite is skipped and the rest are asked; any
+        # other failure -- another status, a redirect, an answer that is
+        # not elements, no answer at all -- stops the asking here, and the
+        # satellites after it wait for weewxd.
         fetched = []
-        for name, catnr, path in wanted:
+        for i, (name, catnr, path) in enumerate(wanted):
             try:
                 self._fetch_one_satellite(name, catnr, path)
             except NoSuchSatellite as e:
-                # CelesTrak's 404: it has nothing for this number, so the
-                # next try will fail the same way.  Say what to fix rather
-                # than promising weewxd will sort it out.
                 engine.printer.out('%s -- check the NORAD number in '
                                    '[Skyfield] [[Satellites]].' % e)
             except Exception as e:
-                # Timeout, DNS, a CelesTrak outage, an answer that is not
-                # elements at all: transient, and weewxd retries.  Caught
-                # per satellite so one failure does not skip the rest of
-                # the list.
-                engine.printer.out('Could not fetch elements for %s now (%s); '
-                                   'weewxd will fetch them itself.' % (name, e))
+                rest = [n for n, _, _ in wanted[i + 1:]]
+                engine.printer.out('Could not fetch elements for %s now (%s)%s; '
+                                   'weewxd asks CelesTrak again when it starts.'
+                                   % (name, e, '; not asking for %s either' % ', '.join(rest)
+                                      if rest else ''))
+                break
             else:
                 fetched.append(name)
         if fetched:
@@ -307,25 +329,31 @@ class WxSkyfieldInstaller(ExtensionInstaller):
 
     def _fetch_one_satellite(self, name, catnr, path):
         """One satellite's TLE, written atomically.  Raises
-        NoSuchSatellite only for CelesTrak's 404, the one failure a retry
-        cannot fix; everything else raises whatever it raised, to be
-        reported as transient."""
+        NoSuchSatellite only for CelesTrak's 404, a catalog number it does
+        not carry; everything else raises whatever it raised, and stops
+        the asking."""
         request = urllib.request.Request(
             CELESTRAK_URL % catnr,
             headers={'User-Agent': 'weewx-skyfield/%s (+https://github.com/'
                                    'chaunceygardiner/weewx-skyfield)' % self['version']})
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with open_url(request, 10) as response:
                 payload = response.read().decode('ascii', 'replace')
         except urllib.error.HTTPError as e:
             # A catalog number CelesTrak has no current elements for gets
             # 404 "No GP data found" -- what a mistyped NORAD number looks
-            # like, and a decayed object too.  Every other status is
-            # CelesTrak having a bad moment (503 is common), which is
-            # exactly what retrying is for.
+            # like, and a decayed object too.  A 404 with other words (an
+            # outdated URL, in CelesTrak's policy) and every other status (a
+            # 5xx a struggling server, a 403 or 429 this address asking too
+            # often, a 3xx an outdated URL) are reasons to stop asking.
             if e.code == 404:
-                raise NoSuchSatellite('CelesTrak has no current elements for '
-                                      '%s (%d)' % (name, catnr))
+                try:
+                    words = e.read(4096).decode('utf-8', 'replace')
+                except Exception:
+                    words = ''
+                if 'No GP data found' in words:
+                    raise NoSuchSatellite('CelesTrak has no current elements for '
+                                          '%s (%d)' % (name, catnr))
             raise
         lines = [line for line in payload.splitlines() if line.strip()]
         if not any(line.startswith('1 %05d' % catnr) for line in lines):
@@ -333,8 +361,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
             # above, so a 200 carrying no element set is something else
             # answering -- a captive portal, an intercepting proxy, an
             # HTML error page.  Blaming the catalog number there would
-            # send the user after a correct number and tell them a retry
-            # cannot help, when a retry is exactly what fixes it.
+            # send the user after a correct number.
             raise ValueError('the answer carried no elements for catalog '
                              'number %d' % catnr)
         tmp_path = '%s.tmp' % path
@@ -366,7 +393,7 @@ class WxSkyfieldInstaller(ExtensionInstaller):
             COMET_URL,
             headers={'User-Agent': 'weewx-skyfield/%s (+https://github.com/'
                                    'chaunceygardiner/weewx-skyfield)' % self['version']})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with open_url(request, 30) as response:
             payload = response.read().decode('ascii', 'replace')
         # Light validation (the installer cannot import wxskyfield): at
         # least one fixed-width row whose perihelion-distance column is a

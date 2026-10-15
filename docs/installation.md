@@ -72,11 +72,11 @@ later — see [Translations](i18n.md#how-it-works).
    tags work from the first report cycle rather than the next refresh.  It says what it is
    downloading before each one — the comet file is the slow one — and elements the station
    already has, still current, are not fetched again, so a reinstall or an upgrade over a
-   running station usually goes straight through.  A download that fails is not fatal: on a
-   network or CelesTrak hiccup the message says weewxd will fetch them itself, and it will.
-   A message naming a satellite and its NORAD number is the other case — CelesTrak has no
-   current elements for it, so check that number in `[[Satellites]]`, because retrying will
-   not fix it.
+   running station usually goes straight through.  A download that fails is not fatal, but
+   it stops the asking, as CelesTrak's usage policy requires: the satellites after it are not
+   asked for, and weewxd asks again when it starts.  A message naming a satellite and its
+   NORAD number is the one exception — CelesTrak has no current elements for it, so check
+   that number in `[[Satellites]]`; the rest are still fetched.
 
 4. Restart WeeWX.
 
@@ -139,13 +139,21 @@ fetched from [CelesTrak](https://celestrak.org): once at install time — skippe
 station already has elements less than three hours old — then by weewxd, which
 checks for missing or stale elements at every startup — a satellite just added to the
 configuration is live seconds after the restart — and refreshes about every three hours
-thereafter, on a worker thread that never blocks reports; on a failed fetch the old file is
-kept and the retry backs off gently.  An HTTP 403, 404 or 429 gets no quick retries at all:
-CelesTrak answers 403 to an address that has asked too often and 404 for an object it does not
-carry, neither changes on a retry, and repeating the request is what gets an address blocked
-outright, so the extension logs the answer's own words and waits a full three hours before
-asking again -- for that satellite after a 404, for every satellite after a 403 or 429, since
-those are about the address.  Each satellite's elements live
+thereafter, on a worker thread that never blocks reports.  A failed fetch keeps the old file
+and is never retried quickly.  [CelesTrak's usage policy](https://celestrak.org/usage-policy.php)
+asks software to stop querying at any answer but a good one and report it to a person, and
+an address that keeps asking through errors ends up in its firewall, so:
+
+- a **404 saying "No GP data found"** is a catalog number CelesTrak does not carry — a typo,
+  or an object that has decayed.  That satellite is not asked for again until weewxd restarts,
+  an error names the number to check, and the other satellites are still fetched.  Any other
+  404 means an outdated URL, and is treated as below;
+- **anything else** — any other status (a 403 or 429 for an address asking too often, a 5xx
+  for a server under load, a 301 for an outdated URL, which is never followed), an answer that
+  is not elements, or no answer at all — stops the round: no satellite is asked for again
+  until the next one, three hours on, and one error carries the answer's own words.
+
+Restarting weewxd asks again at once.  Each satellite's elements live
 in their own file, `wxskyfield_sat_<norad>.tle`, in a `wxskyfield` directory beside the
 station's SQLite database (under `SQLITE_ROOT`), and survive restarts.  Elements whose epoch
 is more than seven days older than the almanac's time are *not used*: every tag for that
@@ -185,9 +193,8 @@ file carrying every comet with a current orbit, cached as `wxskyfield_comets.txt
 same `wxskyfield` directory as the satellite TLEs.  It follows the satellites' fetch shape
 at a gentler cadence: fetched at install unless the cached file is less than two days old, at
 any weewxd startup that finds it missing or stale, then about every two days, on a worker
-thread that never blocks reports — written atomically, the old file kept on any failure,
-backoff on retry, and a 403, 404 or 429 waiting the full two days instead, as for the
-satellites.
+thread that never blocks reports — written atomically, the old file kept on any failure, and
+any failure, whatever the answer, waiting the full two days before the next try.
 Set
 `comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
 ever: an air-gapped station maintains the one `wxskyfield_comets.txt` file by any means it
