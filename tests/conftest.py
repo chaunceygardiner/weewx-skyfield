@@ -1,4 +1,5 @@
-"""Shared by the test modules: a check both copies of open_url take."""
+"""Shared by the test modules: a check open_url takes, and
+a real local server for driving a fetch worker end to end."""
 import http.server
 import threading
 import urllib.error
@@ -47,3 +48,47 @@ def _assert_redirect_refused(open_url):
 @pytest.fixture
 def assert_redirect_refused():
     return _assert_redirect_refused
+
+
+class _AnsweringServer:
+    """A real HTTP server on this machine answering each GET with the next
+    queued (status, body) -- or (status, body, declared_length), to send a
+    Content-Length the body does not fill, which the client reads as an
+    IncompleteRead; every path asked for is recorded in hits."""
+
+    def __init__(self):
+        self.answers = []
+        self.hits = []
+        answers, hits = self.answers, self.hits
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                status, body, *declared = answers.pop(0)
+                self.send_response(status)
+                self.send_header('Content-Length', str(declared[0] if declared else len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        self.url = 'http://127.0.0.1:%d/CometEls.txt' % self.server.server_address[1]
+        # shutdown() waits out serve_forever's poll, half a second by default
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={'poll_interval': 0.02}, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def answering_server():
+    server = _AnsweringServer()
+    try:
+        yield server
+    finally:
+        server.close()

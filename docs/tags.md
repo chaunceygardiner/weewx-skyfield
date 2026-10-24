@@ -253,8 +253,10 @@ surface is a clean per-tag error, the satellite convention.
 Skyfield propagates the elements as unperturbed two-body orbits — where-do-I-look
 accuracy, not ephemeris-grade positions far from the elements' epoch; the routine refresh
 keeps the epoch current.  The MPC drops comets that have faded from observability, so a
-configured comet can vanish from a fresh download: its tags then read "N/A" (a log warning
-names it, once at the crossing), never an error and never a stale number, with
+configured comet can vanish from the file.  An answer lacking it is not saved for a week, in
+case the MPC was only serving part of the file (see [Comets](installation.md#comets)); after
+that its tags read "N/A" (a log warning names it, once at the crossing), never an error and
+never a stale number, with
 `$almanac.halley.elements_epoch` and `.elements_age` always live as diagnostics.  Unlike
 satellite elements there is no age cutoff — two-body comet elements degrade gracefully
 over months, not days.

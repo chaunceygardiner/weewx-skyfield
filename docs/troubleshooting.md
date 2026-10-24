@@ -157,20 +157,13 @@ label layout per chart per cycle.
 
 ## Install messages
 
-Printed by `weectl extension install`, not logged.  The install fetches the first satellite
-and comet orbital elements so their tags work from the first report cycle, which is what it
-is doing when it pauses.
+Printed by `weectl extension install`, not logged.  The install fetches nothing: weewxd
+fetches the orbital elements itself when it starts, and reports any problem with them in its
+log — see [Element messages](#element-messages).
 
 | Message | Meaning |
 |---|---|
-| `Fetching satellite orbital elements for … from CelesTrak…` / `Fetching comet orbital elements from the Minor Planet Center…` | Normal, and why the install pauses.  The comet file is the slower one. |
-| `Satellite elements for … are current; not fetching.` / `Comet elements in … are current; not fetching.` | Nothing to do: what is cached is younger than the interval weewxd refreshes on.  Usual on an upgrade. |
-| `CelesTrak has no current elements for X (N) -- check the NORAD number…` | A typo in `[[Satellites]]`, or an object that has decayed.  Retrying cannot fix it: correct or remove the entry.  See [Satellites](installation.md#satellites). |
-| `Could not fetch elements for X now (…); weewxd asks CelesTrak again when it starts.` | A network or CelesTrak problem, and true as stated: weewxd fetches missing elements at startup and about every three hours after.  The satellites after X are not asked for (`not asking for … either`), as CelesTrak's usage policy requires. |
-| `Skipping satellite X: '…' is not a NORAD catalog number.` | The value in `[[Satellites]]` is not a number.  weewxd logs its own version of this at startup. |
-| `Skipping satellite X: SGP4, which computes satellite positions, takes catalog numbers from 1 to 339999.` | The number is past what SGP4 can take, or zero.  weewxd refuses it at startup too. |
 | `weewx-skyfield requires Skyfield 1.47 or later, found …` / `… which is not installed.` | The install stops before changing anything.  Upgrade or install Skyfield — see [Upgrading Skyfield](installation.md#upgrading-skyfield) — and run the install again. |
-| `Not fetching satellite elements: satellites need Skyfield 1.49 or later, found …` | Skyfield 1.47 or 1.48.  Everything but the satellites works; they stop within 7 days.  Upgrade Skyfield to keep them. |
 
 ## Startup messages
 
@@ -213,10 +206,15 @@ again.  Restart WeeWX to see whether a fix took.
 | `satellite_elements: could not load …: …` | A cached or supplied element file is not elements for that satellite.  A broken file costs only itself: the satellite's other file, if there is one, still serves. |
 | `Could not fetch satellite elements for N (…).  Asking CelesTrak nothing more until the next round, in 3 hours, for every satellite; …` | A fetch failed, and what came back is quoted: a status with the server's own words, or the failure itself (a timeout, a refused connection, an answer that was not elements).  Every cached file is kept and no satellite is asked for again for three hours, as CelesTrak's usage policy requires.  A 403 or 429 means this address is asking too often — usually several installs behind one address, each asking; let one fetch and copy the files to the rest with `satellite_downloads = false`.  A 5xx means CelesTrak is under load.  A 301 means the URL is outdated: update the extension.  Restarting weewxd asks again at once. |
 | `CelesTrak has no elements for satellite N (HTTP 404 …); check the NORAD number.  Not asking for it again until weewxd restarts; …` | A catalog number CelesTrak does not carry: a typo in `[[Satellites]]`, or an object that has decayed.  The other satellites are still fetched.  Fix the number and restart. |
-| `Could not fetch the comet elements from the MPC (…).  Asking again in 2 days; …` | Any failure, whatever came back: the cached file, if there is one, is kept and the fetch waits the full two days before trying again. |
+| `The MPC's comet file has only A comets against C in the cached file, as when the MPC is partway through rebuilding it.  Keeping the cached file and asking again in …` | The MPC answered with part of its file.  The cached file is kept and every comet keeps working; the MPC is asked again three hours later, or two days and three hours later once the cached file is three days old.  Nothing to do. |
+| `The MPC's comet file lacks …, which the cached file has (A comets against C).  Keeping the cached file and asking again in …` | The same, caught by a comet you configure: the answer lacks one the cached file has.  If the MPC has really dropped it, the answer is saved once the cached file is seven days old.  Nothing to do. |
+| `The MPC's comet file still lacks … after 7 days without a saved answer; saving it.  Their tags read N/A until the MPC's file has them again.` | A week of answers without that comet: the MPC has dropped it.  Its tags read `N/A` until it returns. |
+| `The MPC's comet file has only A comets against C in the cached file, after 7 days without a saved answer; saving it.  …` | A week without a saved answer ended on a partial file, which is now the cached copy; every configured comet is in it.  The next full answer, normally two days on, replaces it. |
+| `Could not fetch the comet elements from the MPC (…).  Asking again in …` | A failure, with what came back quoted.  With a cached file it keeps serving and the next try is two days and three hours later; with none, three hours later — or two days and three hours after a 403 or 429, which mean the MPC is refusing this station. |
+| `Fetched the comet elements from the MPC but could not save them into … (…).  Check that weewxd's user can write there.` | The `wxskyfield` cache directory is not writable by weewxd's user, usually left that way by an install run as another user.  Give it to weewxd's user (`chown -R`) and restart weewxd, which asks again at once.  The satellite fetch fails the same way there, logged as a CelesTrak failure whose words include `Permission denied`. |
 | `Satellite N has no usable elements (missing, unreadable, …)` | Every tag for that satellite now reads `N/A`.  Logged once at the crossing, not per tag. |
 | `Satellite N has usable elements again.` | Recovered. |
-| `Comet X (…) has no elements in the cached CometEls…` | The MPC dropped it, or the cache is missing.  Tags read `N/A`. |
+| `Comet X (…) has no elements in the cached CometEls…` | The MPC dropped it, or the cache is missing.  Tags read `N/A`.  To force a fresh copy of the file, delete `wxskyfield_comets.txt` and restart weewxd. |
 | `Comet X (…) has elements again.` | Recovered. |
 
 ## Known Skyfield issues

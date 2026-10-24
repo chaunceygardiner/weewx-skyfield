@@ -1,5 +1,37 @@
 # weewx-skyfield change history
 
+## 2.11 (2026/10/23)
+- A configured comet no longer goes missing for two days when the Minor
+  Planet Center answers with only part of its CometEls.txt, which it does
+  while rebuilding the file (on 2026-10-23 it served 261 of its 965 comets
+  for about 40 minutes, Halley and Hale-Bopp not among them).  An answer
+  is now judged against the cached file: one with fewer than 95% as many
+  comets, or lacking a configured comet the cached file has, is refused,
+  the cached file serving on, and the MPC is asked again three hours later
+  (every two days and three hours once the cached file is three days old).
+  Since the MPC also drops faded comets, once the cached file is seven
+  days old the next answer is saved whatever it is, and a comet it lacks
+  reads N/A as before.  Nothing is remembered between fetches, so a
+  restart or a failed fetch cannot change what is saved.
+- A failed comet fetch with no cached file is retried three hours later
+  instead of two days later, since the station has no comets at all until
+  one succeeds; after a 403 or 429, which mean the MPC is refusing the
+  station, and whenever a cached file is serving, it waits two days and
+  three hours.  The waits are not whole days, so a retry no longer lands
+  at the same time of day as the last.
+- A comet file that weewxd cannot save (a cache directory owned by
+  another user) is reported as that, naming the directory, rather than
+  as a failed download.
+- The installer no longer fetches satellite or comet elements, and no
+  longer creates or changes the ownership of the cache directory.  weewxd
+  fetches whatever is missing or stale within seconds of starting, in
+  every configuration, so the install has no network step and no second
+  copy of the fetch rules; a wrong NORAD number or a failed download is
+  reported in weewxd's log instead of on the install's screen.
+- The cached comet file is now the MPC's bytes exactly as sent, and the
+  tags read it the same way the fetch does, so a byte the MPC never sends
+  can no longer raise an error at report time.
+
 ## 2.10 (2026/10/14)
 - ACTION REQUIRED, if you use satellites on Skyfield 1.47 or 1.48:
   upgrade Skyfield (`pip install --upgrade skyfield` in WeeWX's

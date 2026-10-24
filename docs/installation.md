@@ -69,15 +69,11 @@ later — see [Translations](i18n.md#how-it-works).
    owns the files.  If you installed WeeWX in this same login session, log
    out and back in first so the group membership takes effect.
 
-   The install pauses here to fetch the first satellite and comet orbital elements, so the
-   tags work from the first report cycle rather than the next refresh.  It says what it is
-   downloading before each one — the comet file is the slow one — and elements the station
-   already has, still current, are not fetched again, so a reinstall or an upgrade over a
-   running station usually goes straight through.  A download that fails is not fatal, but
-   it stops the asking, as CelesTrak's usage policy requires: the satellites after it are not
-   asked for, and weewxd asks again when it starts.  A message naming a satellite and its
-   NORAD number is the one exception — CelesTrak has no current elements for it, so check
-   that number in `[[Satellites]]`; the rest are still fetched.
+   The install touches the network not at all.  weewxd fetches the first satellite and comet
+   orbital elements itself within seconds of starting, and keeps them fresh from then on, so
+   the tags work from the first report cycle.  A NORAD number CelesTrak does not carry, or a
+   download that fails, is reported in weewxd's log — see
+   [Element messages](troubleshooting.md#element-messages).
 
 4. Restart WeeWX.
 
@@ -137,8 +133,7 @@ all.
 Satellite positions are computed (by Skyfield's SGP4 implementation) from published orbital
 elements, which age quickly — a reboost or maneuver makes week-old elements minutes wrong —
 so, unlike the ephemeris and the star catalog, they cannot ship in a release.  They are
-fetched from [CelesTrak](https://celestrak.org): once at install time — skipped when the
-station already has elements less than three hours old — then by weewxd, which
+fetched from [CelesTrak](https://celestrak.org) by weewxd, which
 checks for missing or stale elements at every startup — a satellite just added to the
 configuration is live seconds after the restart — and refreshes about every three hours
 thereafter, on a worker thread that never blocks reports.  A failed fetch keeps the old file
@@ -203,19 +198,30 @@ Comet orbital elements are the MPC's published
 [CometEls.txt](https://www.minorplanetcenter.net/iau/MPCORB/CometEls.txt) — one ~160 KB
 file carrying every comet with a current orbit, cached as `wxskyfield_comets.txt` in the
 same `wxskyfield` directory as the satellite elements.  It follows the satellites' fetch shape
-at a gentler cadence: fetched at install unless the cached file is less than two days old, at
-any weewxd startup that finds it missing or stale, then about every two days, on a worker
-thread that never blocks reports — written atomically, the old file kept on any failure, and
-any failure, whatever the answer, waiting the full two days before the next try.
-Set
-`comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
+at a gentler cadence: fetched by weewxd at any startup that finds it missing or stale, then
+about every two days, on a worker thread that never blocks reports, and written atomically,
+the MPC's bytes exactly as sent.
+
+While the MPC rebuilds the file it can serve only part of it — on 2026-10-23, 261 of its 965
+comets for about 40 minutes — so an answer is judged against the cached file before it is
+saved.  It is refused, the cached file kept and serving, when it has fewer than
+95% as many comets as the cached file, or lacks a configured comet the cached file has.  A
+refused answer is asked for again three hours later, until the cached file is three days old;
+after that every two days and three hours.  The MPC also drops comets that have faded from
+observability, so once the cached file is seven days old the next answer is saved whatever
+it is; a configured comet it lacks is then taken as dropped, and its tags read "N/A" with a
+once-per-crossing log warning naming it — see the [comet tags](tags.md#comets).  A failed
+fetch (no answer, or an HTTP error) waits two days and three hours when a cached file is
+serving; with no cached file at all it is retried three hours later, except after a 403 or
+429, which mean the MPC is refusing this station.  Nothing is remembered between fetches: a
+restart changes only when the next ask happens, never what is saved.  To force a fresh copy,
+delete `wxskyfield_comets.txt` and restart weewxd.
+
+Set `comet_downloads = false` in the `[Skyfield]` section and the extension fetches nothing,
 ever: an air-gapped station maintains the one `wxskyfield_comets.txt` file by any means it
 likes (it is the MPC file verbatim).  Unlike satellite elements there is no age cutoff —
 two-body comet elements degrade gracefully over months, not days — and `weectl extension
-uninstall` leaves the cache file, like the satellite elements.  The MPC drops comets that have
-faded from observability, so a configured comet can vanish from a fresh download: its tags
-then read "N/A" with a once-per-crossing log warning naming it — see the
-[comet tags](tags.md#comets).
+uninstall` leaves the cache file, like the satellite elements.
 
 ## Serving every Hipparcos star
 

@@ -230,16 +230,19 @@ class TestAmericanEnglish(unittest.TestCase):
         'LICENSE',
         # Real archived orbital elements: CelesTrak's TLE records for the
         # ISS and Tiangong, its CSV answer for the ISS, and rows lifted from
-        # the Minor Planet Center's CometEls.txt.  They are in the tree so
-        # the suite computes against what a station really fetches, and
-        # correcting a character of someone else's record would defeat
-        # that.  (The comets file also carries one fabricated row of ours,
+        # the Minor Planet Center's CometEls.txt, and two whole answers of
+        # it, one fetched while the MPC was rebuilding it.  They are in the
+        # tree so the suite computes against what a station really fetches,
+        # and correcting a character of someone else's record would defeat
+        # that.  (The excerpt also carries one fabricated row of ours,
         # C/9999 Z9; it is designations and orbital elements, with no prose
         # in it either way.)
         'tests/data/tle/wxskyfield_sat_25544.tle',
         'tests/data/tle/wxskyfield_sat_48274.tle',
         'tests/data/celestrak_answer_25544.csv',
         'tests/data/wxskyfield_comets.txt',
+        'tests/data/mpc_cometels_full_20261023.txt',
+        'tests/data/mpc_cometels_truncated_20261023.txt',
     )
 
     # The translations are not English, and an English spelling rule

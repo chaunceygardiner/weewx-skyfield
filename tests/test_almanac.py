@@ -2126,6 +2126,25 @@ def read_comet_file() -> str:
         return f.read()
 
 
+# Two real MPC answers from 2026-10-23: the 261-row file the MPC served for
+# about 40 minutes while rebuilding CometEls.txt (a scattered subset of the
+# full file, 1P and C/1995 O1 not among them) and the 965-row file that
+# followed.
+MPC_FULL = os.path.join(SAT_DATA_DIR, 'mpc_cometels_full_20261023.txt')
+MPC_PARTIAL = os.path.join(SAT_DATA_DIR, 'mpc_cometels_truncated_20261023.txt')
+MPC_COMETS = {'halley': '1P', 'hale_bopp': 'C/1995 O1', 'tempel': '10P'}
+
+
+def read_mpc(path: str, without=()) -> bytes:
+    """A real MPC answer as the bytes the MPC sent, less the rows whose
+    designation key is in without."""
+    with open(path, 'rb') as f:
+        lines = f.read().splitlines(keepends=True)
+    return b''.join(line for line in lines
+                    if wxskyfield.comet_designation_key(line[102:158].decode('ascii'))
+                    not in without)
+
+
 class TestCometParsing:
     """CometEls.txt row parsing, designation matching, and the [[Comets]]
     config section."""
@@ -2604,57 +2623,22 @@ class TestSatelliteFetcher:
                 assert f.read() == old
             assert not os.path.exists(path + '.tmp')
 
-    def test_comet_fetch_writes_validated_payload(self, tmp_path, monkeypatch):
-        payload = read_comet_file()
+    def test_download_comet_elements_asks_the_mpc_through_open_url(self, monkeypatch):
+        """The download is the MPC's bytes exactly, asked for at COMET_URL
+        with the extension's User-Agent, through open_url (so a redirect is
+        an answer, never followed)."""
+        payload = read_mpc(MPC_FULL)
         seen = {}
 
         def fake_urlopen(request, timeout=None):
             seen['url'] = request.full_url
             seen['ua'] = request.get_header('User-agent')
-            return FakeResponse(payload.encode('ascii'))
+            return FakeResponse(payload)
 
         monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
-        path = str(tmp_path / wxskyfield.COMET_FILE)
-        wxskyfield.fetch_comet_elements(path)
-        with open(path) as f:
-            assert f.read() == payload
-        assert not os.path.exists(path + '.tmp')
+        assert wxskyfield.download_comet_elements() == payload
         assert seen['url'] == wxskyfield.COMET_URL
         assert seen['ua'] == wxskyfield.SAT_USER_AGENT
-
-    def test_comet_fetch_failure_keeps_old_file(self, tmp_path, monkeypatch):
-        old = read_comet_file()
-        path = str(tmp_path / wxskyfield.COMET_FILE)
-        with open(path, 'w') as f:
-            f.write(old)
-
-        def fake_urlopen(request, timeout=None):
-            raise OSError('network unreachable')
-
-        monkeypatch.setattr(wxskyfield, 'open_url', fake_urlopen)
-        with pytest.raises(OSError):
-            wxskyfield.fetch_comet_elements(path)
-        with open(path) as f:
-            assert f.read() == old
-        assert not os.path.exists(path + '.tmp')
-
-    def test_comet_fetch_corrupt_payload_keeps_old_file(self, tmp_path, monkeypatch):
-        """Validated BEFORE the write: an HTML error page or empty answer
-        must never replace a working CometEls file.  The validation asks
-        only for one parseable row anywhere -- never the configured
-        designations: a vanishing row is a tag-time concern."""
-        old = read_comet_file()
-        path = str(tmp_path / wxskyfield.COMET_FILE)
-        with open(path, 'w') as f:
-            f.write(old)
-        for payload in (b'<html><body>503</body></html>', b''):
-            monkeypatch.setattr(wxskyfield, 'open_url',
-                                lambda request, timeout=None, p=payload: FakeResponse(p))
-            with pytest.raises(ValueError):
-                wxskyfield.fetch_comet_elements(path)
-            with open(path) as f:
-                assert f.read() == old
-            assert not os.path.exists(path + '.tmp')
 
     def test_no_network_at_startup(self, tmp_path, monkeypatch):
         """Sky.__init__ (and the whole service constructor) never touches
@@ -3141,9 +3125,10 @@ class TestMeteorShowers:
 
 
 class TestCometFetcher:
-    """The comet element fetch scheduling: one file, one wait after any
-    failure, the same STARTUP + NEW_ARCHIVE_RECORD shape as the satellite refresher.
-    Never touches the network."""
+    """The comet element fetch: its STARTUP + NEW_ARCHIVE_RECORD shape (the
+    satellite refresher's), and the worker end to end against a real local
+    server serving the two real MPC answers, with the clock and the cached
+    file's mtime set by the test.  Never touches the real network."""
 
     def make_service(self, tmp_path, **skyfield_options):
         options = dict(Satellites={}, Comets={'halley': '1P'})
@@ -3190,67 +3175,522 @@ class TestCometFetcher:
         service._comet_retry_ts = now + 60
         assert not service.comet_stale(now)
 
-    def test_comet_failure_waits_one_cadence(self, tmp_path, monkeypatch, caplog):
-        """Any failure of the comet fetch -- the MPC's 404, a 500, a 503,
-        no answer at all -- waits the full two-day cadence, every time,
-        logged once as an error with what came back; a success clears
-        the wait."""
-        _engine, service = self.make_service(tmp_path)
-        answer = {}
+    # -- the worker, end to end ------------------------------------------
 
-        def answering(path):
-            raise answer['e']
+    def mpc_service(self, tmp_path, monkeypatch, answering_server, cached=True,
+                    age=wxskyfield.COMET_REFRESH_SECS, comets=None):
+        """A service whose comet fetch asks the local server and reads a
+        clock the test moves; with the full MPC file cached at the given
+        age when cached.  Returns (service, clock), clock a one-element
+        list holding "now"."""
+        monkeypatch.setattr(wxskyfield, 'COMET_URL', answering_server.url)
+        clock = [1_800_000_000.0]
+        monkeypatch.setattr(wxskyfield, 'time', types.SimpleNamespace(time=lambda: clock[0]))
+        _engine, service = self.make_service(tmp_path, Comets=dict(comets or MPC_COMETS))
+        if cached:
+            self.write_cache(service, read_mpc(MPC_FULL), clock[0] - age)
+        return service, clock
 
-        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', answering)
-        for e, words in ((urllib.error.HTTPError('https://example.invalid/CometEls.txt', 404,
-                                                 'Not Found', None, io.BytesIO(b'gone')),
-                          'HTTP 404 Not Found: gone'),
-                         (urllib.error.HTTPError('https://example.invalid/CometEls.txt', 500,
-                                                 'Internal Server Error', None, None),
-                          'HTTP 500 Internal Server Error'),
-                         (urllib.error.HTTPError('https://example.invalid/CometEls.txt', 503,
-                                                 'Service Unavailable', None, io.BytesIO(b'busy')),
-                          'HTTP 503 Service Unavailable: busy'),
-                         (OSError('offline'), 'offline')):
-            answer['e'] = e
+    @staticmethod
+    def write_cache(service, data, mtime):
+        os.makedirs(service.sky.comet_dir, exist_ok=True)
+        with open(service.sky.comet_path(), 'wb') as f:
+            f.write(data)
+        os.utime(service.sky.comet_path(), (mtime, mtime))
+
+    def reset_cache(self, service, clock, cached, age=wxskyfield.COMET_REFRESH_SECS):
+        """Back to a fresh state for the next case of a test that runs
+        several on one service (building a service costs most of a
+        second): the cache directory emptied, the full file written at the
+        given age when cached, no parked wait."""
+        service._comet_retry_ts = 0.0
+        if os.path.isdir(service.sky.comet_dir):
+            for name in os.listdir(service.sky.comet_dir):
+                os.remove(os.path.join(service.sky.comet_dir, name))
+        if cached:
+            self.write_cache(service, read_mpc(MPC_FULL), clock[0] - age)
+
+    @staticmethod
+    def cached_bytes(service):
+        with open(service.sky.comet_path(), 'rb') as f:
+            return f.read()
+
+    @staticmethod
+    def logged(caplog, level):
+        return [r.getMessage() for r in caplog.records if r.levelno == level]
+
+    def run_until_saved(self, service, clock, caplog, limit_secs):
+        """Drive the scheduler as weewxd does: every five minutes, fetch if
+        comet_stale says so.  Returns the clock offsets of every ask, from
+        the first; stops after the first ask that saves."""
+        t0 = clock[0]
+        asks = []
+        while clock[0] - t0 <= limit_secs:
+            if service.comet_stale(clock[0]):
+                asks.append(clock[0] - t0)
+                service._comet_fetch_worker()
+                if service._comet_retry_ts == 0.0:
+                    return asks
+            clock[0] += 300
+        raise AssertionError('never saved; asks at %r' % asks)
+
+    H, D = 3600, 86400
+
+    def test_a_partial_answer_is_refused_and_the_full_file_saved_three_hours_on(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """Today's case.  The 261-row answer lacks two configured comets,
+        so the cached file is kept, untouched, and the MPC is asked again
+        three hours later; the full file that comes then is saved."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        before = os.stat(service.sky.comet_path())
+        answering_server.answers.append((200, read_mpc(MPC_PARTIAL)))
+        with caplog.at_level(logging.INFO, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL)
+        assert os.stat(service.sky.comet_path()).st_mtime == before.st_mtime
+        assert service.sky.comet_elements('halley') is not None
+        assert wxskyfield.COMET_RETRY_SECS == 3 * self.H      # the message says so
+        assert service._comet_retry_ts == clock[0] + wxskyfield.COMET_RETRY_SECS
+        assert not service.comet_stale(clock[0] + 3 * self.H - 60)
+        assert service.comet_stale(clock[0] + 3 * self.H + 60)
+        assert self.logged(caplog, logging.WARNING) == [
+            "The MPC's comet file has only 261 comets against 965 in the cached file, as"
+            " when the MPC is partway through rebuilding it.  Keeping the cached file and"
+            " asking again in 3 hours."]
+        assert self.logged(caplog, logging.INFO) == []
+
+        clock[0] += 3 * self.H + 60
+        caplog.clear()
+        answering_server.answers.append((200, read_mpc(MPC_FULL, without={'205P'})))
+        with caplog.at_level(logging.INFO, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL, without={'205P'})
+        assert service._comet_retry_ts == 0.0
+        assert self.logged(caplog, logging.WARNING) == []
+        assert self.logged(caplog, logging.INFO) == [
+            'Fetched comet elements into %s.' % service.sky.comet_path()]
+        assert len(answering_server.hits) == 2
+
+    def test_a_genuine_drop_is_accepted_after_the_seven_day_ladder(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """The MPC drops Halley for good: every answer lacks it.  Driven
+        through comet_stale with a fake clock: refused at ages 2 d, 2 d
+        3 h ... 2 d 21 h, 3 d, 5 d 3 h (ten refusals), saved at 7 d 6 h
+        with the warning naming it; Halley serves its last elements until
+        then and reads N/A after."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        dropped = read_mpc(MPC_FULL, without={'1P'})
+        answering_server.answers.extend([(200, dropped)] * 11)
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            asks = self.run_until_saved(service, clock, caplog, 8 * self.D)
+        H, D = self.H, self.D
+        assert asks == [k * 3 * H for k in range(8)] + [D, D + 51 * H, D + 102 * H]
+        assert asks[-1] == 5 * D + 6 * H                  # file age 7 d 6 h
+        assert wxskyfield.COMET_KEEP_SECS == 7 * D and wxskyfield.COMET_WAIT_SECS == 51 * H
+        assert self.cached_bytes(service) == dropped
+        warnings = self.logged(caplog, logging.WARNING)
+        assert len(warnings) == 11
+        assert all(w.startswith("The MPC's comet file lacks 1P, which the cached file has"
+                                " (964 comets against 965).  Keeping the cached file and"
+                                " asking again in ") for w in warnings[:10])
+        assert [w.endswith('in 3 hours.') for w in warnings[:10]] == [True] * 8 + [False] * 2
+        assert warnings[8].endswith('in 2 days and 3 hours.')
+        assert warnings[10] == ("The MPC's comet file still lacks 1P after 7 days without a"
+                                " saved answer; saving it.  Their tags read N/A until the"
+                                " MPC's file has them again.")
+        assert service.sky.comet_elements('halley') is None
+        assert service.sky.comet_elements('hale_bopp') is not None
+
+    def test_a_partial_served_at_every_ask_costs_eleven_asks(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """The same ladder with the short answer: eleven asks spanning
+        5 d 6 h, the short answer saved only at file age 7 d 6 h."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        answering_server.answers.extend([(200, read_mpc(MPC_PARTIAL))] * 11)
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            asks = self.run_until_saved(service, clock, caplog, 8 * self.D)
+        assert len(asks) == 11 and asks[-1] == 5 * self.D + 6 * self.H
+        assert self.cached_bytes(service) == read_mpc(MPC_PARTIAL)
+        assert self.logged(caplog, logging.WARNING)[-1].startswith(
+            "The MPC's comet file still lacks 1P, C/1995 O1 after 7 days")
+
+    def test_a_short_answer_saved_at_seven_days_is_not_silent(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """Every configured comet is in the partial, so nothing is lacking,
+        but a 261-row file becoming the cached copy must still be said
+        out loud: later answers are judged against it."""
+        service, _clock = self.mpc_service(tmp_path, monkeypatch, answering_server,
+                                           age=wxskyfield.COMET_KEEP_SECS,
+                                           comets={'tempel': '10P'})
+        answering_server.answers.append((200, read_mpc(MPC_PARTIAL)))
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert self.cached_bytes(service) == read_mpc(MPC_PARTIAL)
+        assert self.logged(caplog, logging.WARNING) == [
+            "The MPC's comet file has only 261 comets against 965 in the cached file, after"
+            ' 7 days without a saved answer; saving it.  Later answers are judged against'
+            ' this smaller file until a fuller one is saved.']
+
+    def test_a_failure_at_the_first_ask_skips_the_three_hour_ladder(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """A 503 at age 2 d waits 2 d 3 h, past the three-day mark, so a
+        partial is then refused at 4 d 3 h and 6 d 6 h and saved at 8 d 9 h:
+        the protection still lasts to seven days; the failures cost the
+        asks inside it."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        answering_server.answers.append((503, b'busy'))
+        answering_server.answers.extend([(200, read_mpc(MPC_PARTIAL))] * 3)
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            asks = self.run_until_saved(service, clock, caplog, 9 * self.D)
+        H = self.H
+        assert asks == [0, 51 * H, 102 * H, 153 * H]
+        warnings = self.logged(caplog, logging.WARNING)
+        assert len(warnings) == 3
+        assert warnings[0].endswith('asking again in 2 days and 3 hours.')
+        assert self.cached_bytes(service) == read_mpc(MPC_PARTIAL)
+
+    def test_a_refusal_waits_three_hours_until_the_file_is_three_days_old(
+            self, tmp_path, monkeypatch, answering_server):
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server, cached=False)
+        for age, wait in ((3 * self.D - 1, wxskyfield.COMET_RETRY_SECS),
+                          (3 * self.D, wxskyfield.COMET_WAIT_SECS)):
+            self.reset_cache(service, clock, cached=True, age=age)
+            answering_server.answers.append((200, read_mpc(MPC_PARTIAL)))
+            service._comet_fetch_worker()
+            assert service._comet_retry_ts == clock[0] + wait, age
+        assert wxskyfield.COMET_RETRY_UNTIL_SECS == 3 * self.D
+
+    def test_every_failure_wait(self, tmp_path, monkeypatch, answering_server, caplog):
+        """The waits table: 2 d 3 h with a cached file whatever the
+        failure; without one, 2 d 3 h after a 403 or 429 (the MPC is
+        refusing us) and 3 h after anything else, a refused connection, a
+        truncated transfer and an answer with no valid row among them.
+        None of them is ever reported as a local save failure."""
+        H = self.H
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server, cached=False)
+        cases = [
+            # (cached?, answer, expected wait, how the message ends)
+            (True, (500, b'oops'), 51 * H, 'HTTP 500 Internal Server Error: oops).  Asking'
+             ' again in 2 days and 3 hours; keeping the cached elements.'),
+            (True, (403, b'blocked'), 51 * H, 'HTTP 403 Forbidden: blocked).  Asking again in'
+             ' 2 days and 3 hours; keeping the cached elements.'),
+            (False, (403, b'blocked'), 51 * H, 'HTTP 403 Forbidden: blocked).  Asking again in'
+             ' 2 days and 3 hours; no usable cached elements.'),
+            (False, (429, b''), 51 * H, 'HTTP 429 Too Many Requests).  Asking again in 2 days'
+             ' and 3 hours; no usable cached elements.'),
+            (False, (500, b''), 3 * H, 'HTTP 500 Internal Server Error).  Asking again in'
+             ' 3 hours; no usable cached elements.'),
+            (False, (200, b'<html>not elements</html>'), 3 * H, 'no comet rows in the'
+             ' downloaded file).  Asking again in 3 hours; no usable cached elements.'),
+            (False, (200, read_mpc(MPC_PARTIAL)[:5000], 200000), 3 * H,
+             'Asking again in 3 hours; no usable cached elements.'),    # IncompleteRead
+        ]
+        for i, (cached, answer, wait, ending) in enumerate(cases):
+            self.reset_cache(service, clock, cached)
+            answering_server.answers.append(answer)
             caplog.clear()
-            before = time.time()
             with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
                 service._comet_fetch_worker()
-            assert (service._comet_retry_ts - before
-                    == pytest.approx(wxskyfield.COMET_REFRESH_SECS, abs=5)), words
-            assert not service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS - 60)
-            assert service.comet_stale(before + wxskyfield.COMET_REFRESH_SECS + 60)
-            errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
-            assert errors == ['Could not fetch the comet elements from the MPC (%s).  Asking'
-                              ' again in 2 days; nothing on file.' % words]
+            assert service._comet_retry_ts == clock[0] + wait, (i, answer)
+            errors = self.logged(caplog, logging.ERROR)
+            assert len(errors) == 1 and errors[0].startswith(
+                'Could not fetch the comet elements from the MPC (') and \
+                errors[0].endswith(ending), (i, errors)
+            assert os.path.exists(service.sky.comet_path()) == cached
+        # a refused connection: a real socket error, no cached file
+        self.reset_cache(service, clock, cached=False)
+        monkeypatch.setattr(wxskyfield, 'COMET_URL', 'http://127.0.0.1:1/CometEls.txt')
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert service._comet_retry_ts == clock[0] + 3 * H
+        errors = self.logged(caplog, logging.ERROR)
+        assert len(errors) == 1 and errors[0].startswith('Could not fetch the comet')
+        assert 'could not save' not in errors[0]
+        monkeypatch.setattr(wxskyfield, 'COMET_URL', answering_server.url)
+        # anything unexpected is a failure, with the failure waits
+        self.reset_cache(service, clock, cached=True)
+        answering_server.answers.append((200, read_mpc(MPC_FULL)))
+        monkeypatch.setattr(wxskyfield, 'judge_comet_answer', lambda *a, **k: 1 / 0)
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert service._comet_retry_ts == clock[0] + 51 * H
+        assert self.logged(caplog, logging.ERROR) == [
+            'Could not fetch the comet elements from the MPC (division by zero).  Asking'
+            ' again in 2 days and 3 hours; keeping the cached elements.']
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL)
 
-        def succeeding(path):
-            with open(path, 'w') as f:
-                f.write(read_comet_file())
+    def test_no_cached_file_saves_whatever_has_a_valid_row(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """No file, a file with no valid row, an unreadable file (the read
+        error simulated, not chmod, so this holds when run as root): each
+        is no cached file, so the partial answer is saved over it with no
+        warning -- there is nothing to compare against."""
+        import builtins
+        real_open = builtins.open
 
-        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements', succeeding)
+        def unreadable(path, *args, **kwargs):
+            if str(path).endswith(wxskyfield.COMET_FILE) and 'r' in (args[0] if args else 'r'):
+                raise PermissionError(13, 'Permission denied', str(path))
+            return real_open(path, *args, **kwargs)
+
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server, cached=False)
+        for setup in ('missing', 'garbage', 'unreadable'):
+            self.reset_cache(service, clock, cached=False)
+            if setup == 'garbage':
+                self.write_cache(service, b'no comets here\n', clock[0] - 3 * self.D)
+            elif setup == 'unreadable':
+                self.write_cache(service, read_mpc(MPC_FULL), clock[0] - 3 * self.D)
+                monkeypatch.setattr(builtins, 'open', unreadable)
+            answering_server.answers.append((200, read_mpc(MPC_PARTIAL)))
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+                service._comet_fetch_worker()
+            monkeypatch.setattr(builtins, 'open', real_open)
+            assert self.cached_bytes(service) == read_mpc(MPC_PARTIAL), setup
+            assert service._comet_retry_ts == 0.0, setup
+            assert self.logged(caplog, logging.WARNING) == [], setup
+
+    def test_a_fresh_install_creates_the_cache_directory(self, tmp_path, monkeypatch,
+                                                         answering_server):
+        """The installer no longer creates it: the first fetch does, as
+        weewxd's own user, and saves."""
+        service, _clock = self.mpc_service(tmp_path, monkeypatch, answering_server,
+                                           cached=False)
+        assert not os.path.exists(service.sky.comet_dir)
+        answering_server.answers.append((200, read_mpc(MPC_FULL)))
         service._comet_fetch_worker()
-        assert service._comet_retry_ts == 0.0
-        assert os.path.exists(service.sky.comet_path())
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL)
+        assert service.sky.comet_elements('halley') is not None
+
+    def test_a_directory_weewxd_cannot_write_to_is_a_local_failure(
+            self, tmp_path, monkeypatch, answering_server, caplog):
+        """One request, then the save fails: reported as a permission
+        problem naming the directory, not as a failed download, and the
+        next try is 2 d 3 h on.  Simulated (os.replace refused) rather than
+        chmod, so it holds when run as root.  No temp file is left."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        answering_server.answers.append((200, read_mpc(MPC_FULL, without={'205P'})))
+
+        def refuse(src, dst):
+            raise PermissionError(13, 'Permission denied', dst)
+
+        monkeypatch.setattr(wxskyfield.os, 'replace', refuse)
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert len(answering_server.hits) == 1
+        assert service._comet_retry_ts == clock[0] + wxskyfield.COMET_WAIT_SECS
+        errors = self.logged(caplog, logging.ERROR)
+        assert len(errors) == 1
+        assert errors[0].startswith('Fetched the comet elements from the MPC but could not'
+                                    ' save them into %s (' % service.sky.comet_dir)
+        assert errors[0].endswith("Check that weewxd's user can write there.  Trying again"
+                                  ' in 2 days and 3 hours, or at once when weewxd is restarted.')
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL)
+        assert sorted(os.listdir(service.sky.comet_dir)) == [wxskyfield.COMET_FILE]
+
+    def test_the_saved_file_is_the_answers_bytes_with_ordinary_permissions(
+            self, tmp_path, monkeypatch, answering_server):
+        """Verbatim bytes, written with a plain open so the mode follows
+        the umask like the satellite files (not mkstemp's 0600, which
+        would hide the file from another user's weectl report run); a
+        day-old leftover temp file is swept, a fresh one is not, and none
+        of this fetch's own is left."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        old_tmp = service.sky.comet_path() + '.tmp'            # older releases' fixed name
+        fresh_tmp = service.sky.comet_path() + '.4242.7.tmp'
+        for tmp, mtime in ((old_tmp, clock[0] - 2 * self.D), (fresh_tmp, clock[0] - 3600)):
+            with open(tmp, 'wb') as f:
+                f.write(b'half written')
+            os.utime(tmp, (mtime, mtime))
+        answer = read_mpc(MPC_FULL, without={'205P'})
+        answering_server.answers.append((200, answer))
+        service._comet_fetch_worker()
+        assert self.cached_bytes(service) == answer
+        umask = os.umask(0)
+        os.umask(umask)
+        assert os.stat(service.sky.comet_path()).st_mode & 0o777 == 0o666 & ~umask
+        assert sorted(os.listdir(service.sky.comet_dir)) == sorted(
+            [wxskyfield.COMET_FILE, os.path.basename(fresh_tmp)])
+
+    def test_the_fetch_and_the_tags_read_the_same_rows(self, tmp_path, monkeypatch,
+                                                       answering_server):
+        """A non-ASCII byte, a form feed between rows and a lone carriage
+        return in the answer are saved as sent, and the tag reader finds
+        exactly the rows the fetch counted."""
+        answer = read_mpc(MPC_FULL).replace(b'(Hale-Bopp)', b'(Hale-B\xf6pp)')
+        lines = answer.splitlines(keepends=True)
+        answer = lines[0] + b'\x0c' + b''.join(lines[1:]) + b'\rstray text with no newline'
+        service, _clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        answering_server.answers.append((200, answer))
+        service._comet_fetch_worker()
+        assert self.cached_bytes(service) == answer
+        rows, bad = wxskyfield.comet_rows(answer)
+        assert len(rows) == 965 and bad == []
+        by_key = {row.designation_key: row for row in rows}
+        for name, key in MPC_COMETS.items():
+            assert service.sky.comet_elements(name)[1] == by_key[key], name
+
+    def test_a_station_file_with_a_bad_byte_never_raises_at_tag_time(self, tmp_path):
+        """comet_downloads = false, a hand-copied file with a byte the MPC
+        never sends: the tags serve or read N/A, never an error."""
+        sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=False,
+                             comets=dict(MPC_COMETS), comet_dir=str(tmp_path))
+        with open(sky.comet_path(), 'wb') as f:
+            f.write(read_mpc(MPC_FULL).replace(b'1P/Halley', b'1P/H\xfflley'))
+        assert sky.comet_elements('halley') is not None
+        assert sky.comet_elements('hale_bopp') is not None
+
+    def test_a_damaged_first_row_does_not_shadow_a_valid_one(self, tmp_path, monkeypatch,
+                                                             answering_server, caplog):
+        """In the cached file, a damaged 1P row ahead of the valid one: the
+        valid row serves, the parse error is logged once, and 1P is still
+        protected.  In the answer, a damaged 1P row and no valid one: the
+        answer lacks 1P and is refused."""
+        full = read_mpc(MPC_FULL)
+        halley = next(l for l in full.splitlines(keepends=True) if b'1P/Halley' in l)
+        damaged = halley[:30] + b'x.xxxxxxx' + halley[39:]
+        service, _clock = self.mpc_service(tmp_path, monkeypatch, answering_server,
+                                           cached=False)
+        self.write_cache(service, damaged + full, _clock[0] - wxskyfield.COMET_REFRESH_SECS)
+        with caplog.at_level(logging.ERROR, logger=wxskyfield.log.name):
+            assert service.sky.comet_elements('halley') is not None
+        errors = self.logged(caplog, logging.ERROR)
+        assert len(errors) == 1 and errors[0].startswith(
+            'comet_elements: could not parse the 1P row in')
+        answering_server.answers.append((200, full.replace(halley, damaged)))
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert self.cached_bytes(service) == damaged + full
+        assert self.logged(caplog, logging.WARNING)[0].startswith(
+            "The MPC's comet file lacks 1P, which the cached file has (964 comets against 965)")
+
+    def test_the_judge_gets_normalized_designations(self, tmp_path, monkeypatch,
+                                                    answering_server, caplog):
+        """The config may spell a designation in any case or spacing;
+        Sky.comets normalizes it, and that is what the judge compares, so
+        the lacking rule still protects it."""
+        service, _clock = self.mpc_service(tmp_path, monkeypatch, answering_server,
+                                           comets={'hale_bopp': 'c/1995  o1'})
+        assert service.sky.comets == {'hale_bopp': 'C/1995 O1'}
+        answering_server.answers.append((200, read_mpc(MPC_FULL, without={'C/1995 O1'})))
+        with caplog.at_level(logging.WARNING, logger=wxskyfield.log.name):
+            service._comet_fetch_worker()
+        assert self.logged(caplog, logging.WARNING)[0].startswith(
+            "The MPC's comet file lacks C/1995 O1, which the cached file has")
+
+    def test_deleting_the_file_while_parked_takes_a_restart(self, tmp_path, monkeypatch,
+                                                            answering_server):
+        """The documented way to force a fresh copy is delete AND restart:
+        comet_stale checks the parked wait before the file."""
+        service, clock = self.mpc_service(tmp_path, monkeypatch, answering_server)
+        answering_server.answers.append((200, read_mpc(MPC_PARTIAL)))
+        service._comet_fetch_worker()
+        os.remove(service.sky.comet_path())
+        assert not service.comet_stale(clock[0] + 60)
+        _engine, restarted = self.make_service(tmp_path, Comets=dict(MPC_COMETS))
+        assert restarted.comet_stale(clock[0] + 60)
 
     def test_refresh_fetches_on_worker_thread(self, tmp_path, monkeypatch):
         _engine, service = self.make_service(tmp_path)
         fetched = []
-        monkeypatch.setattr(wxskyfield, 'fetch_comet_elements',
-                            lambda path: fetched.append(path))
+
+        def download(timeout=30.0):
+            fetched.append(timeout)
+            return read_mpc(MPC_FULL)
+
+        monkeypatch.setattr(wxskyfield, 'download_comet_elements', download)
         service.refresh_comet_elements(None)
         assert service._comet_thread is not None
         service._comet_thread.join(10)
-        assert fetched == [service.sky.comet_path()]
+        assert fetched == [30.0]
+        assert self.cached_bytes(service) == read_mpc(MPC_FULL)
         # A fresh file is not refetched.
-        with open(service.sky.comet_path(), 'w') as f:
-            f.write(read_comet_file())
         service.refresh_comet_elements(None)
         if service._comet_thread is not None:
             service._comet_thread.join(10)
-        assert fetched == [service.sky.comet_path()]
+        assert fetched == [30.0]
 
+
+class TestCometJudge:
+    """judge_comet_answer and comet_rows directly, on the two real MPC
+    files: every rule and every boundary, in milliseconds."""
+
+    CONFIGURED = list(MPC_COMETS.values())
+
+    @staticmethod
+    def rows(path, without=()):
+        return wxskyfield.comet_rows(read_mpc(path, without))[0]
+
+    def test_the_rules_in_order(self):
+        judge = wxskyfield.judge_comet_answer
+        SAVE, REFUSE = wxskyfield.COMET_SAVE, wxskyfield.COMET_REFUSE
+        full, partial = self.rows(MPC_FULL), self.rows(MPC_PARTIAL)
+        assert (len(full), len(partial)) == (965, 261)
+        keep = wxskyfield.COMET_KEEP_SECS
+        v = judge(partial, None, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.answer_rows, v.cached_rows, v.lacking) == (
+            SAVE, 'no_cache', 261, 0, [])
+        v = judge(partial, full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.answer_rows, v.cached_rows, v.lacking) == (
+            REFUSE, 'short', 261, 965, ['1P', 'C/1995 O1'])
+        v = judge(partial, full, keep - 1, self.CONFIGURED)
+        assert (v.outcome, v.rule) == (REFUSE, 'short')
+        v = judge(partial, full, keep, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.lacking) == (SAVE, 'keep', ['1P', 'C/1995 O1'])
+        without_1p = self.rows(MPC_FULL, without={'1P'})
+        v = judge(without_1p, full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.answer_rows, v.lacking) == (REFUSE, 'lacking', 964, ['1P'])
+        v = judge(without_1p, full, keep, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.lacking) == (SAVE, 'keep', ['1P'])
+        v = judge(self.rows(MPC_FULL, without={'205P'}), full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.lacking) == (SAVE, 'ok', [])
+        # a comet never in the file is not protected and not "lacking"
+        v = judge(full, full, 0.0, self.CONFIGURED + ['C/9999 Z9'])
+        assert (v.outcome, v.rule, v.lacking) == (SAVE, 'ok', [])
+        # short with every configured comet present is still refused
+        configured_first = ([r for r in full if r.designation_key in self.CONFIGURED]
+                            + [r for r in full if r.designation_key not in self.CONFIGURED])
+        v = judge(configured_first[:900], full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule, v.lacking) == (REFUSE, 'short', [])
+        # the 95% edge at 965: 917 is not short, 916 is
+        assert wxskyfield.COMET_SHORT_PERCENT == 95
+        v = judge(configured_first[:917], full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule) == (SAVE, 'ok')
+        v = judge(configured_first[:916], full, 0.0, self.CONFIGURED)
+        assert (v.outcome, v.rule) == (REFUSE, 'short')
+
+    def test_short_is_whole_number_arithmetic(self):
+        """100 * A < 95 * C, for every A at every C up to 150 (and every A
+        at the real 965): the rule as written, with no decimal fraction in
+        it."""
+        template = self.rows(MPC_FULL)[0]
+        fake = [template._replace(designation_key='K%d' % i) for i in range(966)]
+        for c in list(range(1, 151)) + [965]:
+            for a in range(c + 1):
+                v = wxskyfield.judge_comet_answer(fake[:a], fake[:c], 0.0, [])
+                assert (v.rule == 'short') == (100 * a < 95 * c), (a, c)
+
+    def test_the_limits_are_ordered_and_spelled_as_literals(self):
+        assert (wxskyfield.COMET_REFRESH_SECS < wxskyfield.COMET_RETRY_UNTIL_SECS
+                < wxskyfield.COMET_KEEP_SECS)
+        assert wxskyfield.COMET_WAIT_SECS == 2 * 86400 + 3 * 3600
+        assert wxskyfield.COMET_RETRY_SECS == 3 * 3600
+        assert wxskyfield.COMET_TMP_SWEEP_SECS == 86400
+
+    def test_comet_rows_first_valid_row_wins_and_names_the_damaged_ones(self):
+        full = read_mpc(MPC_FULL)
+        halley = next(l for l in full.splitlines(keepends=True) if b'1P/Halley' in l)
+        damaged = halley[:30] + b'x.xxxxxxx' + halley[39:]
+        other = halley[:30] + b'0.5000000' + halley[39:]
+        rows, bad = wxskyfield.comet_rows(damaged + halley + other)
+        assert [r.designation_key for r in rows] == ['1P']
+        assert rows[0] == wxskyfield.parse_comet_row(halley.decode('ascii'))
+        assert len(bad) == 1 and bad[0][0] == '1P' and 'could not convert' in bad[0][1]
+        rows, bad = wxskyfield.comet_rows(b'\n\nnothing with a designation column\n')
+        assert (rows, bad) == ([], [])
 
 class TestSatellitePositions:
     """Topocentric satellite tags at the standard fixture.  SGP4 is pure

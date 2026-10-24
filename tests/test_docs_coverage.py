@@ -809,6 +809,14 @@ class TestReadmeButtons:
 QUOTED_CONSTANTS = [
     ('SAT_REFRESH_SECS',                  3 * 3600,   'three hours'),
     ('COMET_REFRESH_SECS',                2 * 86400,  'two days'),
+    # Each phrase below is one no other pinned phrase contains, so a page
+    # stating a different wait cannot satisfy it (a bare 'three hours'
+    # would be found inside 'two days and three hours').
+    ('COMET_RETRY_SECS',                  3 * 3600,   'asked for again three hours later'),
+    ('COMET_RETRY_UNTIL_SECS',            3 * 86400,  'three days old'),
+    ('COMET_WAIT_SECS',                   2 * 86400 + 3 * 3600, 'two days and three hours'),
+    ('COMET_KEEP_SECS',                   7 * 86400,  'seven days old'),
+    ('COMET_SHORT_PERCENT',               95,         '95% as many comets'),
     ('SAT_MAX_ELEMENT_AGE_SECS',          7 * 86400,  'seven days'),
     ('SAT_VISIBLE_MIN_CULMINATION_DEGREES', 10.0,     '10°'),
     ('_HORIZON_QUANTUM_DEGREES',          0.002,      '0.002 degrees'),

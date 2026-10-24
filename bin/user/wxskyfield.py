@@ -32,7 +32,7 @@ import weakref
 
 from datetime import datetime
 from datetime import timezone
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 import jplephem.daf
 import jplephem.spk
@@ -65,7 +65,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.10'
+WXSKYFIELD_VERSION = '2.11'
 
 # The oldest Skyfield this extension runs on: find_risings and
 # find_settings arrived in 1.47.  install.py keeps its own copy, held
@@ -342,23 +342,127 @@ class WxSkyfield(StdService):
         return now - mtime >= COMET_REFRESH_SECS
 
     def _comet_fetch_worker(self) -> None:
-        """Fetch the CometEls file.  A failure keeps the old file (the
-        fetcher is atomic) and, whatever it was, waits one full cadence,
-        by WHAT A FETCH DOES WITH EACH ANSWER: one file, so nothing to
-        split.  Never raises, never touches the engine."""
+        """Fetch the CometEls file and judge the answer against the cached
+        file (judge_comet_answer; the rules and waits are written at the
+        COMET_* constants).  Every decision comes from the answer, the
+        cached file, its age and the configured comets; _comet_retry_ts,
+        the only state here, says only when the next ask may happen.
+        Never raises, never touches the engine."""
+        start = time.time()
+        path = self.sky.comet_path()
+        cached: Optional[List[CometRow]] = None
+        age = 0.0
         try:
-            assert self.sky.comet_dir is not None
-            os.makedirs(self.sky.comet_dir, exist_ok=True)
-            fetch_comet_elements(self.sky.comet_path())
+            try:
+                with open(path, 'rb') as f:
+                    data = f.read()
+                mtime = os.stat(path).st_mtime
+            except OSError:
+                pass
+            else:
+                rows, _bad = comet_rows(data)
+                if rows:
+                    cached, age = rows, start - mtime
+            try:
+                answer = download_comet_elements()
+            except Exception as e:
+                self._comet_failed(e, start, cached is not None)
+                return
+            rows, _bad = comet_rows(answer)
+            if not rows:
+                self._comet_failed(ValueError('no comet rows in the downloaded file'),
+                                   start, cached is not None)
+                return
+            verdict = judge_comet_answer(rows, cached, age, self.sky.comets.values())
+            if verdict.outcome == COMET_REFUSE:
+                soon = age < COMET_RETRY_UNTIL_SECS
+                self._comet_retry_ts = start + (COMET_RETRY_SECS if soon else COMET_WAIT_SECS)
+                again = 'in 3 hours' if soon else 'in 2 days and 3 hours'
+                if verdict.rule == 'short':
+                    log.warning("The MPC's comet file has only %d comets against %d in the"
+                                " cached file, as when the MPC is partway through rebuilding"
+                                " it.  Keeping the cached file and asking again %s."
+                                % (verdict.answer_rows, verdict.cached_rows, again))
+                else:
+                    log.warning("The MPC's comet file lacks %s, which the cached file has"
+                                " (%d comets against %d).  Keeping the cached file and"
+                                " asking again %s."
+                                % (', '.join(verdict.lacking), verdict.answer_rows,
+                                   verdict.cached_rows, again))
+                return
+            try:
+                self._save_comets(path, answer)
+            except OSError as e:
+                self._comet_retry_ts = start + COMET_WAIT_SECS
+                log.error('Fetched the comet elements from the MPC but could not save them'
+                          " into %s (%s).  Check that weewxd's user can write there."
+                          '  Trying again in 2 days and 3 hours, or at once when weewxd is'
+                          ' restarted.' % (os.path.dirname(path), e))
+                return
             self._comet_retry_ts = 0.0
-            log.info('Fetched comet elements into %s.' % self.sky.comet_path())
+            log.info('Fetched comet elements into %s.' % path)
+            if verdict.rule == 'keep' and verdict.lacking:
+                log.warning("The MPC's comet file still lacks %s after 7 days without a saved"
+                            " answer; saving it.  Their tags read N/A until the MPC's file"
+                            ' has them again.' % ', '.join(verdict.lacking))
+            elif (verdict.rule == 'keep'
+                  and 100 * verdict.answer_rows < COMET_SHORT_PERCENT * verdict.cached_rows):
+                # A partial becoming the new baseline must not pass in silence.
+                log.warning("The MPC's comet file has only %d comets against %d in the cached"
+                            ' file, after 7 days without a saved answer; saving it.  Later'
+                            ' answers are judged against this smaller file until a fuller'
+                            ' one is saved.' % (verdict.answer_rows, verdict.cached_rows))
         except Exception as e:
-            self._comet_retry_ts = time.time() + COMET_REFRESH_SECS
-            log.error('Could not fetch the comet elements from the MPC (%s).  Asking'
-                      ' again in %d days; %s.'
-                      % (failure_words(e), COMET_REFRESH_SECS // 86400,
-                         'keeping the cached elements'
-                         if os.path.exists(self.sky.comet_path()) else 'nothing on file'))
+            self._comet_failed(e, start, cached is not None)
+
+    def _comet_failed(self, e: BaseException, start: float, have_cache: bool) -> None:
+        """A FAILURE: no answer, an HTTP status, an answer with no valid
+        row, or anything unexpected.  The cached file, if any, stays; the
+        wait depends on whether one is serving and, when none is, on
+        whether the MPC refused us (403, 429)."""
+        answer = http_answer(e)
+        refused = answer is not None and answer.code in (403, 429)
+        if have_cache:
+            wait, words = COMET_WAIT_SECS, 'in 2 days and 3 hours; keeping the cached elements'
+        elif refused:
+            wait, words = COMET_WAIT_SECS, 'in 2 days and 3 hours; no usable cached elements'
+        else:
+            wait, words = COMET_RETRY_SECS, 'in 3 hours; no usable cached elements'
+        self._comet_retry_ts = start + wait
+        log.error('Could not fetch the comet elements from the MPC (%s).  Asking again %s.'
+                  % (failure_words(e), words))
+
+    @staticmethod
+    def _save_comets(path: str, data: bytes) -> None:
+        """Write the MPC's bytes verbatim and atomically, as the satellite
+        fetch does: the directory made if need be, comet temp files older
+        than COMET_TMP_SWEEP_SECS swept, the answer written to a temp file
+        named for this process and thread with a plain open (the file gets
+        the permissions every other file weewxd writes gets; mkstemp's 0600
+        would hide it from another user's weectl report run), then
+        os.replace.  Raises OSError, the temp file removed first."""
+        directory = os.path.dirname(path)
+        os.makedirs(directory, exist_ok=True)
+        cutoff = time.time() - COMET_TMP_SWEEP_SECS
+        for name in os.listdir(directory):
+            if name.startswith(COMET_FILE) and name.endswith('.tmp'):
+                leftover = os.path.join(directory, name)
+                try:
+                    if os.stat(leftover).st_mtime < cutoff:
+                        os.remove(leftover)
+                except OSError:
+                    pass
+        tmp = '%s.%d.%d.tmp' % (path, os.getpid(), threading.get_ident())
+        try:
+            with open(tmp, 'wb') as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 # Named stars available as report almanac tags (e.g., $almanac.rigel.rise)
 # unless disabled (stars = false in [Skyfield]).  Maps the tag name to the
@@ -894,6 +998,35 @@ COMET_FILE = 'wxskyfield_comets.txt'
 # the elements_epoch/elements_age diagnostics.
 COMET_REFRESH_SECS = 2 * 86400
 
+# While the MPC rebuilds the file it can serve part of it: on 2026-10-23 a
+# 261-row subset of 965 for about 40 minutes, every row valid, 1P and
+# C/1995 O1 not among them.  One partial has been seen; a partial could hold
+# any share of the rows.  So an answer is judged against the cached file
+# (judge_comet_answer) and REFUSED, the cached file serving on, when it is
+# short -- under COMET_SHORT_PERCENT of the cached file's valid rows -- or
+# lacks a configured comet the cached file has.  The MPC also genuinely drops
+# faded comets, so the refusals end once the cached file is COMET_KEEP_SECS
+# old: the next answer with a valid row is then saved whatever it is.  A
+# refused answer is asked for again in COMET_RETRY_SECS while the cached file
+# is younger than COMET_RETRY_UNTIL_SECS (the first day after the refresh came
+# due) and in COMET_WAIT_SECS after that.  COMET_WAIT_SECS is also the wait
+# after a failure with a cached file (it serves meanwhile) and after a 403 or
+# 429 with none (the MPC is refusing this station; asking sooner cannot change
+# that); any other failure with no cached file waits COMET_RETRY_SECS, since
+# then the station has no comets at all.  COMET_WAIT_SECS is deliberately not
+# a whole number of days: each retry lands three hours later in the day than
+# the last instead of returning to one time-of-day rebuild window.  Comet temp
+# files older than COMET_TMP_SWEEP_SECS are deleted before a save (a weewxd
+# stopped mid-write, or the fixed-name .tmp older releases wrote).  The log
+# messages state these numbers as literals; the tests pin each beside its
+# constant.
+COMET_RETRY_SECS = 3 * 3600
+COMET_RETRY_UNTIL_SECS = 3 * 86400
+COMET_WAIT_SECS = 2 * 86400 + 3 * 3600
+COMET_KEEP_SECS = 7 * 86400
+COMET_SHORT_PERCENT = 95
+COMET_TMP_SWEEP_SECS = 86400
+
 # Periodic-comet readable designations start "12P/", "220P/", "73P-B/" (and
 # D for defunct, I for interstellar); everything else is the "C/1995 O1
 # (Hale-Bopp)" shape whose parenthesized name is decoration.
@@ -1052,30 +1185,78 @@ def parse_comets(skyfield_config_dict: Dict[str, Any],
     return comets
 
 
-def fetch_comet_elements(path: str, timeout: float = 30.0) -> None:
-    """Download CometEls.txt from the MPC into path.  Validates before any
-    write -- the payload must contain at least one parseable comet row,
-    never the CONFIGURED designations (a vanishing row is a tag-time
-    concern, not a download failure).  The write is atomic (temp file +
-    os.replace), so report threads never see a partial file; raises on any
-    failure, leaving the previous file in place -- the caller decides
-    when to ask again."""
+def comet_rows(data: bytes) -> Tuple[List[CometRow], List[Tuple[str, str]]]:
+    """The one reader of CometEls text, for the fetch and the tag reader
+    alike, so the same bytes give the same rows wherever they are read.
+    Decoded as ascii with each bad byte one replacement character (so the
+    fixed columns never shift), split with str.splitlines().  Returns the
+    valid rows in file order -- the first VALID row for a designation wins,
+    so a damaged row never shadows a good one -- and, for each row with a
+    designation that fails to parse, its designation key and the error's
+    text, for the tag reader's log line."""
+    rows: List[CometRow] = []
+    seen = set()
+    bad: List[Tuple[str, str]] = []
+    for line in data.decode('ascii', 'replace').splitlines():
+        if not line[102:158].strip():
+            continue
+        try:
+            row = parse_comet_row(line)
+        except ValueError as e:
+            bad.append((comet_designation_key(line[102:158]), str(e)))
+            continue
+        if row.designation_key not in seen:
+            seen.add(row.designation_key)
+            rows.append(row)
+    return rows, bad
+
+
+def download_comet_elements(timeout: float = 30.0) -> bytes:
+    """CometEls.txt from the MPC, as the bytes it sent.  Raises whatever
+    happened -- an HTTP status as the HTTPError it is, so the caller can
+    read it (http_answer)."""
     request = urllib.request.Request(COMET_URL,
                                      headers={'User-Agent': SAT_USER_AGENT})
     with open_url(request, timeout) as response:
-        payload = response.read().decode('ascii', 'replace')
-    for line in payload.splitlines():
-        try:
-            parse_comet_row(line)
-            break
-        except ValueError:
-            continue
-    else:
-        raise ValueError('no parseable comet rows in the downloaded file')
-    tmp_path = '%s.tmp' % path
-    with open(tmp_path, 'w') as f:
-        f.write(payload)
-    os.replace(tmp_path, path)
+        return response.read()
+
+
+COMET_SAVE = 'save'
+COMET_REFUSE = 'refuse'
+
+
+class CometJudgment(NamedTuple):
+    """judge_comet_answer's verdict on an MPC answer."""
+    outcome: str        # COMET_SAVE or COMET_REFUSE
+    rule: str           # 'no_cache', 'keep', 'short', 'lacking' or 'ok'
+    answer_rows: int
+    cached_rows: int
+    lacking: List[str]  # configured designations the answer lacks that the cached file has
+
+
+def judge_comet_answer(answer: List[CometRow], cached: Optional[List[CometRow]],
+                       age: float, configured: Iterable[str]) -> CometJudgment:
+    """Save or refuse an MPC answer, from the answer's valid rows, the cached
+    file's (None when there is no cached file: missing, unreadable, or
+    without a valid row), the cached file's age in seconds and the
+    configured designations -- and nothing else, so no history, restart or
+    clock step can change a verdict.  In order: no cached file, save; the
+    cached file COMET_KEEP_SECS old or older, save; the answer short, refuse;
+    the answer lacking a configured comet the cached file has, refuse;
+    otherwise save.  Both refusals end at the same age, so their order does
+    not matter.  Pure, so every rule is tested directly."""
+    if cached is None:
+        return CometJudgment(COMET_SAVE, 'no_cache', len(answer), 0, [])
+    have = {row.designation_key for row in answer}
+    had = {row.designation_key for row in cached}
+    lacking = sorted(d for d in set(configured) if d in had and d not in have)
+    if age >= COMET_KEEP_SECS:
+        return CometJudgment(COMET_SAVE, 'keep', len(answer), len(cached), lacking)
+    if 100 * len(answer) < COMET_SHORT_PERCENT * len(cached):
+        return CometJudgment(COMET_REFUSE, 'short', len(answer), len(cached), lacking)
+    if lacking:
+        return CometJudgment(COMET_REFUSE, 'lacking', len(answer), len(cached), lacking)
+    return CometJudgment(COMET_SAVE, 'ok', len(answer), len(cached), [])
 
 
 # ── meteor showers ───────────────────────────────────────────────────────────
@@ -1518,9 +1699,9 @@ def satellite_from_text(text: str, norad: int, ts: Any, omm: bool) -> Any:
 #     connection, DNS) -- ends the round: no satellite is asked again
 #     until the next round, one cadence on, logged once as an error with
 #     the answer's own words.
-# The comets are one file from the Minor Planet Center: any failure waits
-# its cadence.  There are no quick retries of any kind; restarting weewxd,
-# a person acting on the error, asks again at once.
+# The comets are one file from the Minor Planet Center, which publishes no
+# policy: what each answer does is written at the COMET_* constants.
+# Restarting weewxd, a person acting on an error, asks again at once.
 NOT_CARRIED = 404
 NOT_CARRIED_WORDS = 'No GP data found'
 HTTP_EXCERPT_CHARS = 200
@@ -2167,9 +2348,10 @@ class Sky():
         longer carries the designation -- MPC drops faded comets, so a
         configured comet CAN vanish from a fresh download; the binder
         serves the honest no-elements state, never an error.  Lazy and
-        mtime-invalidated like satellite_elements; only CONFIGURED
-        designations are parsed (six rows, not 953), and a malformed
-        matching row logs and disables only that comet."""
+        mtime-invalidated like satellite_elements; read through
+        comet_rows, the fetch's reader, so the two never disagree about a
+        row; a malformed row for a configured comet logs and disables only
+        that comet, and a later valid row for it still serves."""
         designation = self.comets.get(name)
         if designation is None:
             return None
@@ -2181,20 +2363,19 @@ class Sky():
             wanted = set(self.comets.values())
             rows: Dict[str, CometRow] = {}
             try:
-                with open(self.comet_path()) as f:
-                    for line in f:
-                        key = comet_designation_key(line[102:158])
-                        if key in wanted and key not in rows:
-                            try:
-                                rows[key] = parse_comet_row(line)
-                            except ValueError as e:
-                                log.error('comet_elements: could not parse the'
-                                          ' %s row in %s: %s'
-                                          % (key, self.comet_path(), e))
-            except OSError as e:
+                with open(self.comet_path(), 'rb') as f:
+                    parsed, bad = comet_rows(f.read())
+            except (OSError, ValueError) as e:
                 log.error('comet_elements: could not read %s: %s'
                           % (self.comet_path(), e))
-                rows = {}
+                parsed, bad = [], []
+            for parsed_row in parsed:
+                if parsed_row.designation_key in wanted:
+                    rows[parsed_row.designation_key] = parsed_row
+            for key, error in bad:
+                if key in wanted:
+                    log.error('comet_elements: could not parse the %s row in %s: %s'
+                              % (key, self.comet_path(), error))
             self._comet_file = (mtime, rows)
             self._comet_vectors.clear()
         row = self._comet_file[1].get(designation)
