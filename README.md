@@ -98,8 +98,8 @@ into a skin of your own.
   translatable through WeeWX's own lang files, with per-string English fallback.  (Body,
   constellation and meteor shower names need WeeWX 5.3 or later; the page itself translates
   on 5.2.)
-  Complete German, French and Danish (all from native speakers) and Dutch, Spanish, Italian,
-  Norwegian and Swedish (Beta) translations ship with the skin.
+  Complete German, French, Danish, Dutch, Spanish, Italian, Norwegian and Swedish
+  translations ship with the skin; the first three are from native speakers.
   → [How to translate](https://chaunceygardiner.github.io/weewx-skyfield/i18n.html)
 
 - **Fast.**  A transparent result cache reuses expensive rise/set searches within and across

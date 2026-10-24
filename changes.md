@@ -1,5 +1,11 @@
 # weewx-skyfield change history
 
+## 2.x (in progress)
+- The Dutch, Spanish, Italian, Norwegian and Swedish translations are no
+  longer marked Beta, in the files, the manual and the README.  Every one
+  is complete and has shipped for months; a native speaker's review, when
+  one comes, is credited in the file and the manual's table as before.
+
 ## 2.11 (2026/10/23)
 - A configured comet no longer goes missing for two days when the Minor
   Planet Center answers with only part of its CometEls.txt, which it does

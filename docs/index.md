@@ -82,9 +82,9 @@ be dropped into a skin of your own.
   and desktop-sized labels in one chart, the browser choosing by viewport.
 - **Speaks your language** — new in 1.12: the Sky page, its panels and the almanac's body
   names (`$almanac.moon.label`) are translatable through WeeWX's own lang files, with
-  per-string English fallback; complete German, French and Danish (all from native
-  speakers) and Dutch, Spanish, Italian, Norwegian and Swedish (Beta) translations ship
-  with the skin.
+  per-string English fallback; complete German, French, Danish, Dutch, Spanish, Italian,
+  Norwegian and Swedish translations ship with the skin, the first three from native
+  speakers.
   1.13 adds the constellations (`$almanac.saturn.constellation.label`), all 88 in each.
   (Body, constellation and meteor shower names need WeeWX 5.3 or later; the page itself
   translates on 5.2.)  [How to translate](i18n.md).
