@@ -3314,7 +3314,7 @@ def record_placer_fixture(path=PLACER_FIXTURE):
 
 class TestLabelReplay:
     """The sky charts' label placer replayed over recorded skies, at every
-    shipped scale (wide 0.8 and 1.35, weewx-tempestas; 1.0, the Sky page;
+    shipped scale (wide 0.8 and 1.35, an embedding skin's; 1.0, the Sky page;
     1.2, weewx-celestial; narrow 1.0), with what it achieves held in both
     directions: names misread, far from their marks or on another name as
     ceilings, names level with their marks and star and radiant names
