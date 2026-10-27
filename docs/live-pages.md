@@ -50,7 +50,7 @@ number.
 Three rules cover almost everything.
 
 **Drop the `$`, keep the chain.**  Anything in the [tag index](tag-index.md) works, including
-the chains: `almanac.moon.constellation.label`, `almanac.iss.next_visible_pass.max_altitude`,
+the chains: `almanac.moon.constellation.label`, `almanac.iss.next_visible_pass.visible_peak_altitude`,
 `almanac.next_meteor_shower.peak`.
 
 **Pin the unit on every `.raw`.**  loopdata walks your target report's converter, so an
@@ -105,9 +105,9 @@ these are a stable contract:
 | `<g class="dome-body" data-body="mars">` | dome, pass chart | The sun's, moon's and each planet's mark; name labels carry the same `data-body`, one copy per label layer (see `dome-labels` below). |
 | `data-dome-cx` / `-cy` / `-r` on the `<svg>` | dome, pass chart | The chart's own center and radius, in its own units, for a page that projects altitude and azimuth itself (2.7 and later).  Present on a **narrow** chart, which is 360 units across; a chart without them is the wide frame, whose geometry is frozen and published — `cx=340, cy=348, r=296` of a `680 × 706` viewBox.  One line reads either: `+svg.dataset.domeCx \|\| 340`.  See [Two frames](panels.md#two-frames--the-narrow-argument). |
 | `<g class="dome-labels" data-label-scale="2.2">` | dome, pass chart | One label layout (2.5 and later): every label the chart carries, at one scale.  A chart asked for [label layers](panels.md#the-sky-dome--dome_svg) has one group per scale, and the labels' `data-body` is repeated in each — a live page that moves a label must move every layer's copy (`querySelectorAll`). |
-| `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
+| `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome, pass chart | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
 | `data-bright="1"`/`"0"` | dome, orrery | A comet's diamond, and whether it is plausibly naked-eye. |
-| `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one before this one is over. |
+| `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group: a dashed path for the whole pass, then (2.12 and later) a solid one for its visible window, which carries the `<title>`.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one before this one is over. |
 | `$sky_page.satellite_names()` | template | The configured satellite tag names, in config order. |
 | `$sky_page.comet_names()` | template | The configured comet tag names, in config order. |
 | `$sky_page.can_draw()` | template | Whether the page can draw the sky at all — True with the Skyfield almanac registered, False on a lesser tier, where `dome_svg`, `pass_chart_html`, `satellites_html`, `eot_svg` and `moon_apsides_html` come back empty (2.3.4 and later).  Gate panels placed beside the dome on this rather than on a dome render. |
@@ -132,11 +132,14 @@ from the same `sunlit` flag the dome bakes in.
 ![weewx-skyfield's sky dome during a Tiangong zenith pass, animated live on the weewx-celestial page](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/live_dome_tiangong.gif)
 
 *The animation is weewx-celestial's live page, moved by weewx-loopdata fields —
-weewx-skyfield's own Sky page stays static, refreshing once per report cycle.  The chart
-itself is this extension's dome, embedded there.  A third of the way across, still climbing, the
-marker inverts to a hollow ring as Tiangong slips into Earth's shadow — and it goes on to
-cross the exact center of the dome dark, no longer shining.  In the opening seconds Terra is finishing its own low
-western pass: two satellites on the dome at once.*
+weewx-skyfield's own Sky page stays static, refreshing once per report cycle.  The chart itself
+is this extension's dome, embedded there.  A third of the way across, still climbing, the
+marker inverts to a hollow ring as Tiangong slips into Earth's shadow — and it goes on to cross
+the exact center of the dome dark, no longer shining.  In the opening seconds Terra is
+finishing its own low western pass: two satellites on the dome at once.  Captured in August
+2026, before 2.12: the rows beside the dome still call this pass visible with a 90° peak, where
+it is now reported only for the stretch you can see, and the 30° and 60° figures sit on each
+other's rings, fixed in 2.7.*
 
 The [paloaltoweather.com celestial pages](https://www.paloaltoweather.com/celestial.html)
 update the same way.

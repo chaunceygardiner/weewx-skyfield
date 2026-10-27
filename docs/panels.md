@@ -133,7 +133,7 @@ its gutters cut for words that size, and whatever will not fit **thinned rather 
 
 | Panel | What the narrow frame does differently |
 |---|---|
-| `dome_svg`, `pass_chart_html` | The same projection at 360 units.  The star census is cut to magnitude 4.0 or brighter (the wide default is 5.0) and star names to first magnitude, so the sky is no denser than the wide dome's; a constellation is named only where its figure stands wide enough to carry the name.  Every body, satellite, comet and radiant is drawn and named as before. |
+| `dome_svg`, `pass_chart_html` | The same projection at 360 units.  The dome's star census is cut to magnitude 4.0 or brighter (the wide default is 5.0; the pass chart keeps its own 3.5) and star names to first magnitude, so the sky is no denser than the wide dome's; a constellation is named only where its figure stands wide enough to carry the name.  Every body, satellite, comet and radiant is drawn as before, and named where there is room. |
 | `ribbons_svg` | The one panel whose **layout** changes: a 360-unit row cannot hold a name column, a day of bar and a `12:45 PM → 12:59 PM` time column side by side, so each row puts its name and its times on a line of their own with the bar full width underneath, and the twilight bands run behind the bars rather than behind the text.  Hours numbered every six. |
 | `daylength_svg` | Hours numbered every six, every other month named.  All 53 weekly columns, every hour rule and every month rule still drawn. |
 | `sunpath_svg` | The sun's arc numbered every six hours instead of every three.  Both arcs, every band, and the moon's rise, set and transit times as before. |
@@ -342,7 +342,7 @@ Two places that can bite, and the second one bites silently:
   stroke are *different* roles (`body` and `ring`), and exchanging those means nothing.
 
 As of 2.5 the sky charts' labels no longer sit beside their marks.  Every label — the
-cardinals, the 30° and 60° ring figures, a pass's rise and set times, and the body, star and
+cardinals, the 30° and 60° ring figures, a pass's two clock times, and the body, star and
 constellation names — is written inside `<g class="dome-labels" data-label-scale="1">` at the
 end of the SVG, one group per [label layer](#the-sky-dome--dome_svg), and the `<svg>` root
 carries `data-label-layers` (plus `data-label-media` when there is an extra layer).  Positions
@@ -494,6 +494,15 @@ The `star_mag_limit` and `star_label_mag` options set the star cutoffs and
 [Configuration](configuration.md#the-sky-pages-report-stanza); when embedding the panels in your
 own skin, set them in that skin's report section the same way.
 
+Each name sits beside its mark: on its right, or its left when the right is taken, or failing
+both a row below or above (never more than two above).  Names keep off every mark, comet tail
+and other name, and off spots nearer another body's mark than their own, wherever there is
+room; in a tight crowd, more often on the narrow frame, a name can still end a few rows from its
+mark or nearer a neighbor.  A comet's tail ends at the horizon, and the 30° and 60° numbers move
+to another place on their ring when a mark sits on theirs.  A star's or meteor radiant's name
+is shown only where there is room beside it on its own row.  The pass chart places its names
+the same way.
+
 An embedding skin that repositions dome marks between report cycles — weewx-celestial's live
 dome is the consumer — locates them by machine name, never by tooltip text (which is
 translated): the sun's, moon's and each planet's marks are wrapped in
@@ -508,7 +517,7 @@ the satellite crosses the shadow line.  A comet's diamond carries `data-bright="
 chart depicts is ahead, in progress or over without consulting a feed whose *next* pass
 has already rolled on — `next_visible_pass` moves on as soon as the visible window closes,
 minutes before the satellite sets.  Inside that group the dashed path is the whole pass and
-the solid path after it is the visible window (2.x).  These hooks are a
+the solid path after it is the visible window (2.12).  These hooks are a
 stable contract, and so are `$sky_page.satellite_names()` and `$sky_page.comet_names()`,
 through which an embedding skin enumerates the configured satellites and comets — the tag
 names in config order, empty when none are configured or the almanac is not registered —
@@ -535,21 +544,18 @@ $sky_page.pass_chart_html($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_passchart.png" width="440" alt="The next visible pass chart panel">
 
-The whole sky as it will stand at the visible peak of the soonest upcoming
-[visible pass](tags.md#satellites) among the configured satellites — the highest point at
-which the satellite can be seen.  The whole pass is drawn across it as a dashed arc, horizon
-to horizon, and its visible window — the stretch in which the satellite is sunlit, your sky
-dark and the satellite at least 10° up — as a solid stretch over it, with its two times at
-its ends and the satellite's own dot at the peak, under a dated head line naming the
-satellite and the window ("ISS · Sun, Jun 22 · 3:17 AM → 3:18 AM · peak 17°").  The window is
-often a small part of the pass: that morning pass rises at 3:11 in Earth's shadow, passes
-its 19° culmination still in it, and comes into view only as it leaves the shadow, at 17°.
-One chart, one epoch: the arc crosses the stars it will
-actually cross, the per-pass convention sky-charting has always used for future events (the
-sky dome, by contrast, never shows anything but the current sky).  The star field uses
-twilight-honest cutoffs — a visible pass happens while the sky is only half dark, so only
-stars bright enough to actually show then are plotted (magnitude 3.5, labels at 1.5) —
-making it a finder chart rather than a census.
+The whole sky as it will stand at the highest visible point of the next
+[visible pass](tags.md#satellites) among the configured satellites.  The whole pass is drawn
+as a dashed arc from horizon to horizon; the part you can see, its visible window, is drawn
+solid over it, with its start and end times at its ends and the satellite's dot at its
+highest point.  A heading above names the satellite and the window ("ISS · Sun, Jun 22 ·
+3:17 AM → 3:18 AM · peak 17°").  The window is often a small part of the pass: that morning's
+pass rises at 3:11 in Earth's shadow, is still in the shadow at its 19° culmination, and comes
+into view only when it leaves the shadow, at 17°.  Because the chart shows one moment, the arc
+crosses the stars it will actually cross, as sky charts for future events always do (the sky
+dome, by contrast, shows only the current sky).  A visible pass happens while the sky is only
+partly dark, so only stars bright enough to show then are plotted (magnitude 3.5, labels to
+1.5): a finder chart, not a census.
 
 The method returns a `passhead` div followed by the chart SVG, and an **empty string** when
 no configured satellite has a visible pass in its elements' validity window (up to a week
@@ -627,16 +633,14 @@ beyond the outermost ring pins near the rim, its tail shortened there to stay on
 Unlike the dome, the orrery plots a comet whether or not it is above the observer's
 horizon: it is a plan view of the solar system, not the observer's sky.
 
-Each name sits beside its own body, clear of every other dot and diamond, of every comet's
-tail and of the 0° mark, and nearer its own body than any other — even when two bodies crowd
-together, as Venus and Earth do near inferior conjunction.  The 0° mark moves below its line
-while a body or a comet's tail sits at its end, and a row further up or down when both spots
-are taken.  Where bodies crowd closer than a name can tell apart (two nearly touching, or a
-tight group in the narrow frame, whose type is set for a phone), a name can end nearer a
-neighbor or touching another name; it goes on a dot only when no other spot is left.  On the
-phone that is common for a comet: one beyond Neptune is pinned at the rim just outside
-Neptune's ring, and one deep inside crowds the inner planets, so a comet's name there often
-ends nearer a neighbor.
+Each name sits beside its own body, clear of the other dots and diamonds, the comet tails and
+the 0° mark, and nearer its own body than any other, wherever there is room: Venus and Earth
+stay apart even near inferior conjunction.  The 0° mark moves below its line, or a row further
+up or down, when a body or a tail sits at its end.  When bodies crowd too closely, as two
+almost touching or a tight group on the narrow (phone) frame, a name can end up nearer a
+neighbor or touching another name, and only as a last resort on a dot.  On the phone that is
+common for comets: a comet beyond Neptune is drawn at the rim just outside Neptune's ring, and
+one close to the sun crowds the inner planets.
 
 ## The equation of time — `eot_svg`
 

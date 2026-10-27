@@ -72,7 +72,7 @@ Intended, as of 2.5.  A pass is searched up to a week ahead, so a bare clock tim
 three days out read as tonight.  The satellite times — `rise`, `culmination` and `set` on
 `next_pass` and `next_visible_pass`, and the satellite's own `rise`, `transit` and `set` — now
 render in the `ephem_year` context, with their date, rather than `ephem_day`; so do a pass's
-`visible_start`, `visible_peak` and `visible_end`, added later.  For the old look
+`visible_start`, `visible_peak` and `visible_end`, added in 2.12.  For the old look
 on one tag, format it in place:
 `$almanac.iss.next_visible_pass.rise.format(format_string="%X")`.  Overriding `ephem_year`
 itself would also restyle the equinoxes, the moon-phase finders, meteor-shower peaks and a
@@ -107,6 +107,14 @@ Remember also that `next_visible_pass` is deliberately strict: at least a minute
 the satellite is sunlit, the sun is below −6° and the satellite is at least 10° up, all at
 once.  A satellite whose passes are lit only low in the sky can go a whole week without one.  `next_pass` is the unfiltered fact and will
 often have an answer when `next_visible_pass` does not.
+
+### A pass that used to be listed is gone, or the next pass moved on early
+
+Intended, as of 2.12.  A pass counts as visible only if you can see it for a minute or more,
+so passes that were lit only near the horizon, or whose high point is in Earth's shadow, are
+no longer listed.  And `next_visible_pass` moves on to the following visible pass as soon as
+the visible window closes, often minutes before the satellite actually sets.  See
+[If you show visible satellite passes](upgrading.md#if-you-show-visible-satellite-passes-212).
 
 ### A number looks wrong by a factor of 3600 or 57.3
 

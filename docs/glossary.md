@@ -45,7 +45,7 @@ the aberration and refraction that affect what you actually see.  Contrast *appa
 way of saying which part of the lunar surface is lit.
 
 **Culmination** — the highest point of a pass; for satellites, this manual's word for
-transit.
+transit.  The highest point you can *see* may be lower: see *visible window*.
 
 **Declination** — celestial latitude: how far north or south of the celestial equator a body
 sits.  Paired with *right ascension*.
@@ -96,6 +96,9 @@ which is what tells you how a chart's orientation relates to the view through a 
 direct measure of its distance.  A star without a measured parallax has no known distance,
 which is why this extension reports `N/A` rather than a fictitious number.
 
+**Pass** — one trip of a satellite across your sky, from the moment it rises above your
+horizon to the moment it sets.  A pass of the ISS lasts about ten minutes.
+
 **Plate** — this manual's word for one of the Sky page's two color schemes, borrowed from
 printed star atlases: the **night plate** (`night`, the default dark theme) and the **light
 plate** (`light`, a paper-atlas look).  A plate is chosen at generation time by the `theme`
@@ -140,6 +143,12 @@ sky.
 **Twilight** — the time between sunset and full darkness, in three defined stages: **civil**
 (sun 6° below the horizon; you can still read outside), **nautical** (12°; the horizon is
 still discernible at sea), and **astronomical** (18°; the sky is as dark as it will get).
+
+**Visible pass, visible window** — a pass you can see.  Its *visible window* is the stretch
+in which the satellite is lit by the sun, your sky is dark (the sun at least 6° below the
+horizon) and the satellite is at least 10° up, all at once; a pass is visible when that
+stretch lasts a minute or more.  The window is often shorter and lower than the whole pass:
+a satellite can climb into Earth's shadow, or rise while the sky is still bright.
 
 **ZHR (zenithal hourly rate)** — the number of meteors an ideal observer would see per hour
 under a perfectly dark sky with the radiant directly overhead.  Real counts are always

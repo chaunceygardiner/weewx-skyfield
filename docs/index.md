@@ -169,15 +169,17 @@ update the same way.
 
 *The animation is the [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial)
 live page at work, moved by
-[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) fields —
-weewx-skyfield's own Sky page stays static, refreshing once per report cycle.  The chart
-itself is this extension's dome, embedded there.  A third of the way across, still climbing, the marker
-inverts to a hollow ring as Tiangong — one of the two satellites the installer configures
-out of the box — slips into Earth's shadow; it goes on to cross the exact center of the
-dome dark, no longer shining.  In the opening seconds Terra is finishing its own low western
-pass: two satellites on the dome at once.  2-second frames played at 15 fps (about 30×
-speed), replayed through the live page with the orbital elements Space-Track archived for
-July 15.*
+[weewx-loopdata](https://github.com/chaunceygardiner/weewx-loopdata) fields — weewx-skyfield's
+own Sky page stays static, refreshing once per report cycle.  The chart itself is this
+extension's dome, embedded there.  A third of the way across, still climbing, the marker
+inverts to a hollow ring as Tiangong — one of the two satellites the installer configures out
+of the box — slips into Earth's shadow; it goes on to cross the exact center of the dome dark,
+no longer shining.  In the opening seconds Terra is finishing its own low western pass: two
+satellites on the dome at once.  2-second frames played at 15 fps (about 30× speed), replayed
+through the live page with the orbital elements Space-Track archived for July 15.  Captured in
+August 2026, before 2.12: the rows beside the dome still call this pass visible with a 90°
+peak, where it is now reported only for the stretch you can see, and the 30° and 60° figures
+sit on each other's rings, fixed in 2.7.*
 
 ## Relationship to other extensions
 

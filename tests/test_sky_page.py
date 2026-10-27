@@ -11,9 +11,11 @@ Cheetah template and skin.conf must parse.
 
 import collections
 import contextlib
+import gzip
 import html
 import inspect
 import itertools
+import json
 import logging
 import math
 import os
@@ -155,11 +157,12 @@ class TestPanels:
                 assert len(rings) == 2, (name, narrow, rings)
                 seen = []
                 for x, alt in re.findall(
-                        r'<text x="(\d+)" y="\d+" text-anchor="middle" '
+                        r'<text x="([\d.]+)" y="[\d.]+" text-anchor="middle" '
                         r'class="mono gridlab skylab"[^>]*>(\d+)&#176;</text>', svg):
                     # The ring this number is drawn against: the label sits
-                    # a few units OUTSIDE its own ring, clear of the line.
-                    off = float(x) - cx
+                    # a few units OUTSIDE its own ring, clear of the line,
+                    # on the right or (moved off a mark) the left.
+                    off = abs(float(x) - cx)
                     near = [r for r in rings if 0 < off - r <= 10]
                     assert len(near) == 1, (name, narrow, alt, off, rings)
                     drawn_alt = 90.0 - 90.0 * near[0] / R
@@ -678,6 +681,123 @@ class TestPanels:
         for corner in ((x1 - 1.5, y1 - 1.5, x1, y1), (x0, y0, x0 + 1.5, y0 + 1.5)):
             assert not any(meet(corner, b) for b in boxes), corner
 
+
+    def test_dome_labels_keep_off_comet_tails(self, sky, page):
+        """The dome keeps its labels off a comet's tail as the orrery does,
+        not just off the diamond: on 2026-10-26 Halley's name and the
+        fixture's bright comet's both printed across their own tails in
+        the wide frame.  Rendered for real, both frames; every body and
+        star label is measured with the placer's own estimate, against
+        each ray's stroke as drawn, and every ray ends inside the horizon.
+        And each comet's name stays near its diamond: within a row above
+        or below on the wide frame, two on the narrow.  Two, not one, on
+        the narrow frame by measurement: there the Sun's and Jupiter's
+        names, free to sit a row up and to their left, take the spots the
+        bright comet had, every nearer spot meets a name, and two rows
+        below is the nearest clear one; rows only stepping down put it
+        and Halley three and four rows below.
+
+        Two full renders (about 4 s): the only check that real comets'
+        tails are drawn, cut at the horizon and kept clear on the dome,
+        which no replay of recorded requests can show."""
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(1793036400, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            for narrow in (False, True):
+                svg = page.dome_svg(alm, narrow=narrow)
+                rays = self.tail_rays(svg)
+                assert len(rays) >= 6, narrow        # two comets up, three rays each
+                cx, cy, R = (180, 178, 148) if narrow else (340, 348, 296)
+                for x1, y1, x2, y2 in rays:
+                    assert math.hypot(x2 - cx, y2 - cy) <= R + 0.1, (narrow, x2, y2)
+                labels = re.findall(r'<text x="([\d.]+)" y="([\d.]+)" text-anchor="(\w+)" '
+                                    r'class="(?:bodylab|satlab|starlab)" '
+                                    r'style="font-size:([\d.]+)px"[^>]*>([^<]*)</text>', svg)
+                assert labels, narrow
+                for x, y, anchor, px, text in labels:
+                    x, y, px = float(x), float(y), float(px)
+                    w = 0.62 * px * len(html.unescape(text))
+                    x0 = {'start': x, 'end': x - w, 'middle': x - w / 2}[anchor]
+                    box = (x0, y - px, x0 + w, y + 2)
+                    for ray in rays:
+                        assert not self.ray_meets(box, ray), (narrow, text, ray)
+                for body in ('halley', 'bright'):
+                    diamond = re.search(r'data-body="%s"[^>]*>(?:<line[^>]*/>)*'
+                                        r'<path d="M([\d.]+) ([\d.]+)' % body, svg)
+                    name = re.search(r'<text x="[\d.]+" y="([\d.]+)" [^>]*class="satlab" '
+                                     r'style="font-size:([\d.]+)px" data-body="%s"' % body, svg)
+                    my = float(diamond.group(2)) + (4.5 if narrow else 5.0)
+                    rows = (float(name.group(1)) - (my + 4)) / (float(name.group(2)) + 3)
+                    most = 2.01 if narrow else 1.01
+                    assert -most < rows < most, (narrow, body, rows)
+
+    def test_a_dome_tail_ends_at_the_horizon(self):
+        """A comet's tail on the sky charts ends at the horizon circle: a
+        tail below it is not seen.  A comet low in the sky whose tail
+        points out past the rim draws a shortened one, or none at all when
+        its rays would start outside; one as low whose tail points inward
+        draws it whole."""
+        cx, cy, R = 340.0, 348.0, 296.0
+        scale = wxskyfield_sky._comet_tail_scale_in_circle
+        x, y = cx + R - 12, cy                     # 12 units inside the rim, due west
+        s_out = scale(cx, cy, R, x, y, 1.0, 0.0)
+        assert 0 < s_out < 1, s_out
+        for ray in self.tail_rays(wxskyfield_sky._comet_tail(x, y, 1.0, 0.0, 'c', s_out)):
+            assert math.hypot(ray[2] - cx, ray[3] - cy) <= R + 1e-6, ray
+        assert scale(cx, cy, R, x, y, -1.0, 0.0) == 1.0
+        assert scale(cx, cy, R, cx + R - 3, cy, 1.0, 0.0) == 0.0
+
+    def test_a_low_comets_tail_is_cut_at_the_horizon(self, sky, page):
+        """Rendered for real, Halley held low over the southeast horizon on
+        the fixture night, the sun below the northwest one: its tail points
+        straight out past the rim, and is drawn only as far as the horizon.
+        Held 3 degrees up on the wide frame and 8 on the narrow, so it sits
+        10 and 13 units inside the rim, where a full tail (18) would cross
+        it."""
+        class Comet:
+            def __init__(self, real, alt):
+                self.real = real
+                self.alt, self.az = alt, 140.0
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+
+        class Almanac:
+            def __init__(self, real, alt):
+                self.real, self.alt_ = real, alt
+
+            def __getattr__(self, name):
+                value = getattr(self.real, name)
+                return Comet(value, self.alt_) if name == 'halley' else value
+
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            alm = weewx.almanac.Almanac(TIME_TS, LATITUDE, LONGITUDE, altitude=ALTITUDE_M,
+                                        formatter=weewx.units.get_default_formatter())
+            for narrow, alt in ((False, 3.0), (True, 8.0)):
+                svg = wxskyfield_sky.SkyPage().dome_svg(Almanac(alm, alt), narrow=narrow)
+                assert 'Halley — alt %.1f°, az 140.0°' % alt in svg, narrow
+                cx, cy, R = (180, 178, 148) if narrow else (340, 348, 296)
+                hx, hy = (float(v) for v in re.search(
+                    r'data-body="halley"[^>]*>(?:<line[^>]*/>)*<path d="M([\d.]+) ([\d.]+)',
+                    svg).groups())
+                rays = [r for r in self.tail_rays(svg) if math.hypot(r[0] - hx, r[1] - hy) < 12]
+                assert len(rays) == 3, (narrow, rays)
+                ends = [math.hypot(r[2] - cx, r[3] - cy) for r in rays]
+                assert max(ends) <= R + 0.1, (narrow, ends)
+                assert max(ends) > R - 1, (narrow, ends)        # cut AT it, not short of it
+
+    def test_dome_measures_a_name_as_drawn(self):
+        """The dome's placer sizes a name by its text as drawn, not as
+        escaped for the SVG: 'Lee &amp; Lovas' is 11 glyphs, and a name
+        that fits beside its mark at the right edge stays there."""
+        f = wxskyfield_sky.WIDE_FRAME
+        S, H, gap, px = 680, 706, 8, f.px['bodylab']
+        x = S - 4 - gap - 0.62 * px * len('Lee & Lovas') - 0.5
+        out = wxskyfield_sky.SkyPage._place_labels(
+            [('mark', x, 300.0, 'Lee &amp; Lovas', 'satlab', gap, True, 'lee')], 1.0, f, S, H)
+        assert 'text-anchor="start"' in out, out
 
     def test_orrery_comets(self, almanac, page):
         """Every configured comet with elements is a diamond at its
@@ -2785,13 +2905,16 @@ class TestLabelKeepouts:
     """Labels step clear of body marks where there is room.  A planet's
     name over the noon sun measured 1.09:1 and a pass's set time over the
     moon's dark disc 2.18: each label cleared its bars against the sky and
-    read against a disc instead.  _sky_chart hands _place_labels every body
-    mark as a box, and the layout counts those boxes as already placed.  A
-    label that must be drawn and finds no room in the frame's allowance
-    of steps (five wide, eight narrow) is still drawn -- the fixtures
-    below are not that crowded."""
+    read against a disc instead.  _sky_chart hands _place_labels every mark
+    as a thing to keep clear (a tail as one thing of many boxes), and the
+    layout costs a spot that meets one as the worst there is.  A label that
+    must be drawn and finds no clear spot within its reach is still drawn,
+    at the cheapest spot -- the fixtures below are not that crowded, but
+    the unit tests force it."""
 
-    KEEP = [(100.0, 90.0, 160.0, 110.0)]
+    KEEP = [[(100.0, 90.0, 160.0, 110.0)]]          # the right of a mark at (100, 100)
+    KEEP_BOTH = [[(30.0, 90.0, 170.0, 110.0)]]      # both sides of it
+    EVERYTHING = [[(0.0, 0.0, 680.0, 706.0)]]
     DAY_TS = 1750536000          # 2025-06-21 13:00 PDT: Jupiter beside the sun
 
     @staticmethod
@@ -2799,40 +2922,210 @@ class TestLabelKeepouts:
         return [(float(x), float(y), t) for x, y, t in re.findall(
             r'<text x="([-\d.]+)" y="([-\d.]+)"[^>]*>([^<]*)</text>', svg)]
 
+    @staticmethod
+    def _drawn(svg, frame=wxskyfield_sky.WIDE_FRAME):
+        """Each mark name's text and box as drawn, from its anchor, with
+        the placer's own width estimate."""
+        out = []
+        for x, y, anchor, cls, px, text in re.findall(
+                r'<text x="([-\d.]+)" y="([-\d.]+)" text-anchor="(\w+)" '
+                r'class="(bodylab|satlab|starlab)" style="font-size:([\d.]+)px"[^>]*>'
+                r'([^<]*)</text>', svg):
+            x, y, px = float(x), float(y), float(px)
+            w = 0.62 * px * len(html.unescape(text))
+            x0 = {'start': x, 'end': x - w, 'middle': x - w / 2}[anchor]
+            out.append((html.unescape(text), anchor, (x0, y - px, x0 + w, y + 2)))
+        return out
+
+    @staticmethod
+    def _place(reqs, keep=None, f=wxskyfield_sky.WIDE_FRAME, S=680, H=706, scale=1.0):
+        return wxskyfield_sky.SkyPage._place_labels(reqs, scale, f, S, H, keep)
+
     def test_a_body_name_steps_off_a_mark(self):
-        out = wxskyfield_sky.SkyPage._place_labels(
-            [('mark', 100.0, 100.0, 'Jupiter', 'bodylab', 8, True, None)],
-            1.0, wxskyfield_sky.WIDE_FRAME, 680, 706, self.KEEP)
-        (_x, y, text), = self._texts(out)
+        """With its right taken, a name goes to the left of its mark on the
+        same row; with both sides taken, to the nearest clear row."""
+        jupiter = ('mark', 100.0, 100.0, 'Jupiter', 'bodylab', 8, True, None)
+        out = self._place([jupiter], self.KEEP)
+        assert re.search(r'<text x="92.0" y="104.0" text-anchor="end"[^>]*>Jupiter<', out), out
+        (_x, y, text), = self._texts(self._place([jupiter], self.KEEP_BOTH))
         assert text == 'Jupiter'
         assert y - 11.0 >= 110.0, y
 
     def test_an_optional_name_yields_to_a_mark(self):
-        for req in (('mark', 100.0, 100.0, 'Mizar', 'starlab', 6, False, None),
-                    ('con', 130.0, 100.0, 'LYRA')):
-            out = wxskyfield_sky.SkyPage._place_labels(
-                [req], 1.0, wxskyfield_sky.WIDE_FRAME, 680, 706, self.KEEP)
-            assert self._texts(out) == [], req
+        """A star's name takes the free side of its own row, and is dropped
+        when neither side is free; a constellation's is dropped on any
+        collision."""
+        star = ('mark', 100.0, 100.0, 'Mizar', 'starlab', 6, False, None)
+        assert re.search(r'text-anchor="end"[^>]*>Mizar<', self._place([star], self.KEEP))
+        for req, keep in ((star, self.KEEP_BOTH), (('con', 130.0, 100.0, 'LYRA'), self.KEEP)):
+            assert self._texts(self._place([req], keep)) == [], req
 
     def test_a_pass_time_steps_inward_off_a_mark(self):
         """Four steps of 10 clear the box, so the label is placed by the
         clear check, not by running out of tries (five)."""
-        out = wxskyfield_sky.SkyPage._place_labels(
-            [('time', 100.0, 100.0, '03:21', 1.0, 0.0)], 1.0,
-            wxskyfield_sky.WIDE_FRAME, 680, 706, [(80.0, 85.0, 115.0, 110.0)])
+        out = self._place([('time', 100.0, 100.0, '03:21', 1.0, 0.0)],
+                          [[(80.0, 85.0, 115.0, 110.0)]])
         (x, y, text), = self._texts(out)
         assert text == '03:21'
         assert x == pytest.approx(140.0), x
         assert y == pytest.approx(103.0)
 
     def test_with_nothing_in_the_way_nothing_moves(self):
-        out = wxskyfield_sky.SkyPage._place_labels(
-            [('time', 100.0, 100.0, '03:21', 1.0, 0.0),
-             ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)],
-            1.0, wxskyfield_sky.WIDE_FRAME, 680, 706)
+        out = self._place([('time', 100.0, 100.0, '03:21', 1.0, 0.0),
+                           ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)])
         texts = self._texts(out)
         assert (100.0, 103.0, '03:21') in texts, texts
         assert (308.0, 304.0, 'Mars') in texts, texts
+
+    def test_nowhere_clear_takes_the_level_row(self):
+        """With every spot equally bad, a name that must land takes the
+        nearest -- its own row -- not the farthest row it tried (where it
+        read as some other mark's)."""
+        out = self._place([('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)],
+                          self.EVERYTHING)
+        assert self._texts(out) == [(308.0, 304.0, 'Mars')], out
+
+    def test_nowhere_clear_is_drawn_where_it_is_kept(self):
+        """A name placed with nowhere clear claims the space it is DRAWN in:
+        a second name placed after it keeps clear of the first's drawn
+        text (the row used to be stepped once more after the last try, so
+        the name printed a row below the space it claimed)."""
+        out = self._place([('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None),
+                           ('mark', 300.0, 300.0, 'Venus', 'bodylab', 8, True, None)],
+                          self.EVERYTHING)
+        (mars, _a, mbox), (venus, _b, vbox) = self._drawn(out)
+        assert (mars, venus) == ('Mars', 'Venus')
+        assert not wxskyfield_sky._boxes_meet(mbox, vbox), (mbox, vbox)
+
+    def test_a_name_too_wide_for_either_side_is_slid_inside(self):
+        """Narrow frame, a full comet designation at x = 60: it fits on
+        neither side, so it is slid inside the chart, centered on its
+        mark -- a row off it, since level it would cover its own diamond
+        (it used to be drawn from x = -238)."""
+        f = wxskyfield_sky.NARROW_FRAME
+        name = 'C/2023 A3 (Tsuchinshan-ATLAS)'
+        out = self._place([('mark', 60.0, 180.0, name, 'satlab', 10, True, 'comet')],
+                          [[(54.5, 174.5, 65.5, 185.5)]], f=f, S=360, H=360)
+        (text, anchor, box), = self._drawn(out, f)
+        assert (text, anchor) == (name, 'middle')
+        # Inside [4, 356], to the 0.1 the drawn x is printed to.
+        assert 3.9 <= box[0] and box[2] <= 356.1, box
+        (_x, y, _t), = self._texts(out)
+        assert y == pytest.approx(180 + 4 + 19), out           # one row below its mark
+
+    def test_a_star_name_too_wide_for_either_side_is_dropped(self):
+        """A star's name tries its own row only, so slid inside the chart
+        it would lie across its own dot: one too wide for either side is
+        dropped, as one without room on its row always is."""
+        f = wxskyfield_sky.NARROW_FRAME
+        star = ('mark', 180.0, 100.0, 'An Implausibly Long Name For One Star', 'starlab', 8,
+                False, None)
+        assert self._texts(self._place([star], [], f=f, S=360, H=360)) == []
+
+    def test_a_mark_near_the_foot_gets_a_row_above(self):
+        """Narrow frame, a body at y = 320 (the dome's foot is 326) with
+        its own row and every row below taken: rows below clamp to the
+        chart's foot, so the name goes a row ABOVE (305) -- rows only ever
+        stepped down, and here re-tried the clamped foot six times."""
+        f = wxskyfield_sky.NARROW_FRAME
+        out = self._place([('mark', 180.0, 320.0, 'Mars', 'bodylab', 10, True, None)],
+                          [[(0.0, 308.0, 360.0, 360.0)]], f=f, S=360, H=360)
+        (_x, y, _t), = self._texts(out)
+        assert y == pytest.approx(305.0), out
+
+    def test_never_more_than_two_rows_above(self):
+        """Only the row three above is clear: the name does not go there
+        but takes the cheapest within reach, its own row first."""
+        keep = [[(0.0, 0.0, 680.0, 250.0)], [(0.0, 265.0, 680.0, 706.0)]]
+        out = self._place([('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None)], keep)
+        assert self._texts(out) == [(308.0, 304.0, 'Mars')], out
+
+    def test_a_name_that_would_read_as_another_bodys_moves(self):
+        """A clear spot nearer another body's mark than its own is passed
+        over for the next clear one; a star's mark does not count."""
+        for other, cls, must, side in (('Venus', 'bodylab', True, 'end'),
+                                       ('Mizar', 'starlab', False, 'start')):
+            out = self._place([('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None),
+                               ('mark', 340.0, 296.0, other, cls, 8, must, None)])
+            (mars,) = [d for d in self._drawn(out) if d[0] == 'Mars']
+            assert mars[1] == side, (other, out)
+
+    # Only row 0 of a mark at (300, 300) is open: everything above and
+    # below it is kept, so the ranking of its two sides decides.
+    BAND = [[(0.0, 0.0, 680.0, 290.0)], [(0.0, 307.0, 680.0, 706.0)]]
+
+    def test_a_misread_costs_less_than_a_name_on_a_name(self):
+        """Right: on a cardinal (2).  Left: nearer Venus's mark (1).  The
+        left is taken.  With the weights collapsed to equals the right,
+        first in order, would be."""
+        out = self._place([('cardinal', 322.0, 300.0, 'middle', 'W'),
+                           ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None),
+                           ('mark', 262.0, 300.0, 'Venus', 'bodylab', 8, True, None)],
+                          self.BAND)
+        (mars,) = [d for d in self._drawn(out) if d[0] == 'Mars']
+        assert mars[1] == 'end', out
+
+    def test_a_name_on_a_name_costs_less_than_one_on_a_mark(self):
+        """Right: on a cardinal and nearer Venus's mark (3).  Left: on a
+        kept mark (4).  The right is taken.  With the weights collapsed to
+        equals the left (1 against 2) would be."""
+        out = self._place([('cardinal', 322.0, 300.0, 'middle', 'W'),
+                           ('mark', 300.0, 300.0, 'Mars', 'bodylab', 8, True, None),
+                           ('mark', 340.0, 300.0, 'Venus', 'bodylab', 8, True, None)],
+                          self.BAND + [[(250.0, 293.0, 296.0, 306.0)]])
+        (mars,) = [d for d in self._drawn(out) if d[0] == 'Mars']
+        assert mars[1] == 'start', out
+
+    @staticmethod
+    def _ring_requests(narrow):
+        """The cardinal and ring requests a real dome makes, and its frame,
+        from the recorded placer fixture (record_placer_fixture)."""
+        with gzip.open(PLACER_FIXTURE, 'rt', encoding='utf-8') as fh:
+            rec = next(r for r in json.load(fh)
+                       if r['chart'] == 'dome_svg' and r['narrow'] == narrow)
+        f = wxskyfield_sky.NARROW_FRAME if narrow else wxskyfield_sky.WIDE_FRAME
+        reqs = [tuple(r) for r in rec['labels'] if r[0] in ('cardinal', 'ring')]
+        return reqs, f, rec['S'], rec['H']
+
+    def test_a_ring_number_with_nothing_near_stays_put(self):
+        """At every shipped scale, with no mark near, each ring number is
+        drawn where it always was: right of center, just above the line.
+        A box sized for a longer word put the narrow frame's 30 on its 60,
+        and moved it on every narrow dome."""
+        for narrow, scales in ((False, (0.8, 1.0, 1.2, 1.35)), (True, (1.0,))):
+            reqs, f, S, H = self._ring_requests(narrow)
+            rings = [r for r in reqs if r[0] == 'ring']
+            assert len(rings) == 2
+            for scale in scales:
+                out = self._place(reqs, [], f, S, H, scale)
+                for _k, cx, cy, d, text in rings:
+                    assert re.search(r'<text x="%s" y="%s" [^>]*>%s<' % (
+                        re.escape(wxskyfield_sky._num(cx + d)),
+                        re.escape(wxskyfield_sky._num(cy - 6)), text), out), (narrow, scale, out)
+
+    def test_a_ring_number_moves_off_a_mark(self):
+        """A mark on a ring number's spot sends it to the next crossing
+        that is clear: just below the line on the same side.  With all
+        four taken it goes where it meets the fewest THINGS: a tail of a
+        dozen boxes on its own spot is one thing, no worse than the single
+        mark on each of the others, so it stays first in order."""
+        reqs, f, S, H = self._ring_requests(False)
+        (_k, cx, cy, d, text), = [r for r in reqs if r[0] == 'ring' and '30' in r[4]]
+        grid = f.px['gridlab']
+        spots = [(cx + d, cy - 6), (cx + d, cy + 6 + grid), (cx - d, cy - 6),
+                 (cx - d, cy + 6 + grid)]
+
+        def dot(x, y):
+            return [(x - 3, y - 6, x + 3, y)]
+        ring = [r for r in reqs if r[0] == 'ring' and '30' in r[4]]
+        out = self._place(ring, [dot(*spots[0])], f, S, H)
+        assert 'x="%s" y="%s"' % (wxskyfield_sky._num(spots[1][0]),
+                                  wxskyfield_sky._num(spots[1][1])) in out, out
+        tail = [(spots[0][0] - 6 + i, spots[0][1] - 6, spots[0][0] - 5 + i, spots[0][1])
+                for i in range(12)]
+        out = self._place(ring, [tail] + [dot(*sp) for sp in spots[1:]], f, S, H)
+        assert 'x="%s" y="%s"' % (wxskyfield_sky._num(spots[0][0]),
+                                  wxskyfield_sky._num(spots[0][1])) in out, out
 
     @staticmethod
     def _marks(svg):
@@ -2902,7 +3195,7 @@ class TestLabelKeepouts:
         real = wxskyfield_sky.SkyPage._place_labels
 
         def spy(labels, scale, f, S, H, keep=None):
-            seen.append(list(keep or []))
+            seen.append([box for thing in keep or [] for box in thing])
             return real(labels, scale, f, S, H, keep)
         monkeypatch.setattr(wxskyfield_sky.SkyPage, '_place_labels', staticmethod(spy))
         with saved_almanacs():
@@ -2948,6 +3241,174 @@ class TestLabelKeepouts:
                 chart = page.pass_chart_html(noon, palette=plate, narrow=narrow)
                 assert 'nowlab' in chart
                 assert self._overlaps(chart) == [], where
+
+
+PLACER_FIXTURE = os.path.join(SAT_DATA_DIR, 'sky_label_requests.json.gz')
+
+
+def record_placer_fixture(path=PLACER_FIXTURE):
+    """Record what the sky charts hand their label placer -- every request
+    and every kept thing -- for TestLabelReplay.  The requests do not
+    depend on the label scale, so one recording replays every scale.
+
+    Re-record whenever _sky_chart changes what it asks for (a request's
+    shape, a mark's keep box, a new kind of mark), from the repo root:
+
+      PYTHONDONTWRITEBYTECODE=1 /home/weewx/weewx-venv/bin/python -c \\
+        "import sys; sys.path[:0] = ['tests', 'bin/user']; \\
+         import test_sky_page; test_sky_page.record_placer_fixture()"
+
+    and then re-measure TestLabelReplay's bounds.  Six instants from the
+    fixture day, when the fixture satellites are usable (so the pass
+    charts carry them), domes and pass charts; two on the Perseids' peak
+    night, 2025-08-12, domes only (so a radiant's name is placed); both
+    frames throughout; the bright comet shown under a full designation,
+    too long for either side of its mark on the narrow frame (so the slid
+    spot is exercised)."""
+    sky = wxskyfield.Sky(os.path.join(REPO_ROOT, 'bin', 'user'), load_stars=True,
+                         satellites=dict(SATELLITES), sat_dir=SAT_DATA_DIR,
+                         comets=dict(COMETS), comet_dir=SAT_DATA_DIR)
+    seen = []
+    real_place, real_label = wxskyfield_sky.SkyPage._place_labels, wxskyfield_sky.SkyPage._label
+
+    def spy(labels, scale, f, S, H, keep=None):
+        if scale == 1.0:
+            seen.append({'narrow': f.narrow, 'S': S, 'H': H, 'labels': labels,
+                         'keep': keep or []})
+        return real_place(labels, scale, f, S, H, keep)
+
+    def label(alm, name):
+        return 'C/2023 A3 (Tsuchinshan-ATLAS)' if name == 'bright' else real_label(alm, name)
+    records = []
+    try:
+        wxskyfield_sky.SkyPage._place_labels = staticmethod(spy)
+        wxskyfield_sky.SkyPage._label = staticmethod(label)
+        with saved_almanacs():
+            assert wxskyfield.register_almanac(sky)
+            perseids = 52 * 24
+            for hours in (0, 9, 11, 13, 16, 21, perseids + 11, perseids + 15):
+                alm = weewx.almanac.Almanac(TIME_TS + hours * 3600, LATITUDE, LONGITUDE,
+                                            altitude=ALTITUDE_M,
+                                            formatter=weewx.units.get_default_formatter())
+                charts = ('dome_svg',) if hours > perseids else ('dome_svg', 'pass_chart_html')
+                for chart in charts:
+                    for narrow in (False, True):
+                        seen.clear()
+                        getattr(wxskyfield_sky.SkyPage(), chart)(alm, narrow=narrow)
+                        for rec in seen:
+                            rec['chart'] = chart
+                            records.append(rec)
+    finally:
+        wxskyfield_sky.SkyPage._place_labels = staticmethod(real_place)
+        wxskyfield_sky.SkyPage._label = staticmethod(real_label)
+
+    def rounded(v):
+        if isinstance(v, float):
+            return round(v, 2)
+        if isinstance(v, (list, tuple)):
+            return [rounded(x) for x in v]
+        return v
+    with gzip.open(path, 'wt', encoding='utf-8') as fh:
+        json.dump(rounded(records), fh, separators=(',', ':'))
+
+
+class TestLabelReplay:
+    """The sky charts' label placer replayed over recorded skies, at every
+    shipped scale (wide 0.8 and 1.35, weewx-tempestas; 1.0, the Sky page;
+    1.2, weewx-celestial; narrow 1.0), with what it achieves held in both
+    directions: names misread, far from their marks or on another name as
+    ceilings, names level with their marks and star and radiant names
+    placed as floors.  A change that tries a lower row before the level
+    one, or stops trying the left, fails here though no single unit test
+    sees it.  The skies are record_placer_fixture's: domes and pass
+    charts, both frames, satellites up and a comet name too long for
+    either side.  Driven straight through _place_labels, so the whole
+    sweep costs milliseconds rather than a render per sky."""
+
+    SCALES = ((False, 0.8), (False, 1.0), (False, 1.2), (False, 1.35), (True, 1.0))
+
+    @staticmethod
+    def tally(records, narrow, scale):
+        meet, dist = wxskyfield_sky._boxes_meet, wxskyfield_sky._box_distance
+        f = wxskyfield_sky.NARROW_FRAME if narrow else wxskyfield_sky.WIDE_FRAME
+        t = collections.Counter()
+        for rec in records:
+            if rec['narrow'] != narrow:
+                continue
+            labels = [tuple(r) for r in rec['labels']]
+            keep = [[tuple(b) for b in thing] for thing in rec['keep']]
+            kept = [b for thing in keep for b in thing]
+            out = wxskyfield_sky.SkyPage._place_labels(labels, scale, f, rec['S'], rec['H'], keep)
+            drawn = re.findall(r'<text x="([-\d.]+)" y="([-\d.]+)" text-anchor="(\w+)" '
+                               r'class="(bodylab|satlab|starlab)" style="font-size:([\d.]+)px"'
+                               r'[^>]*>([^<]*)</text>', out)
+            grid = f.px['gridlab'] * scale
+            half = (0.62 * grid * 3 + 2) / 2               # a ring number: three glyphs
+            t['ring on a mark'] += sum(
+                any(meet((float(x) - half, float(y) - grid, float(x) + half, float(y) + 2), k)
+                    for k in kept)
+                for x, y in re.findall(r'<text x="([-\d.]+)" y="([-\d.]+)" '
+                                       r'text-anchor="middle" class="mono gridlab skylab"', out))
+            marks = [r for r in labels if r[0] == 'mark']
+            musts = [(k, r[1], r[2]) for k, r in enumerate(marks) if r[6]]
+            boxes = []
+            i = 0
+            for n, r in enumerate(marks):
+                _k, x, y, text, cls, gap, must, body = r
+                if i == len(drawn) or html.unescape(drawn[i][5]) != html.unescape(text):
+                    t['dropped star' if cls == 'starlab' else 'dropped other'] += 1
+                    continue
+                lx, ly, anchor, _c, px, _t = drawn[i]
+                i += 1
+                lx, ly, px = float(lx), float(ly), float(px)
+                w = 0.62 * px * len(html.unescape(text))
+                x0 = {'start': lx, 'end': lx - w, 'middle': lx - w / 2}[anchor]
+                box = (x0, ly - px, x0 + w, ly + 2)
+                boxes.append(box)
+                if not must:
+                    t['stars' if cls == 'starlab' else 'radiants'] += 1
+                    continue
+                t['must'] += 1
+                row = round((ly - min(max(y + 4, px + 3), rec['H'] - 6)) / (px + 3))
+                t['level'] += row == 0
+                t['far'] += abs(row) > 2
+                t['on a mark'] += any(meet(box, k) for k in kept)
+                # The placer's own margin, to the 0.1 the drawn x is printed to.
+                t['off chart'] += box[0] < 3.9 or box[2] > rec['S'] - 3.9
+                own = dist(box, x, y)
+                t['misread'] += any(dist(box, ox, oy) < own for k, ox, oy in musts if k != n)
+                t['sats'] += r[7] in SATELLITES
+                t['slid'] += anchor == 'middle'
+            assert i == len(drawn), rec['chart']
+            t['on a name'] += sum(meet(a, b) for k, a in enumerate(boxes) for b in boxes[k + 1:])
+        return t
+
+    # (narrow, scale): (level, stars, radiants) as floors, then (misread,
+    # far, on a name) as ceilings -- measured on the fixture when the
+    # placer was written; lower a ceiling or raise a floor when a change
+    # improves on it.  Must names on a mark, off the chart, and ring
+    # numbers on a mark are held at none everywhere.
+    BOUNDS = {(False, 0.8): ((63, 341, 4), (1, 0, 0)),
+              (False, 1.0): ((63, 333, 4), (1, 0, 0)),
+              (False, 1.2): ((60, 324, 4), (1, 0, 0)),
+              (False, 1.35): ((59, 306, 4), (1, 0, 0)),
+              (True, 1.0): ((42, 68, 3), (13, 6, 3))}
+
+    def test_the_placer_over_recorded_skies(self):
+        with gzip.open(PLACER_FIXTURE, 'rt', encoding='utf-8') as fh:
+            records = json.load(fh)
+        for (narrow, scale), (floors, ceilings) in self.BOUNDS.items():
+            t = self.tally(records, narrow, scale)
+            where = (narrow, scale, dict(t))
+            # The fixture exercises what it is meant to.
+            assert t['must'] == 72 and t['sats'] == 6, where
+            assert t['slid'] > 0 if narrow else t['slid'] == 0, where
+            for key, least in zip(('level', 'stars', 'radiants'), floors):
+                assert t[key] >= least, (key, where)
+            for key, most in zip(('misread', 'far', 'on a name'), ceilings):
+                assert t[key] <= most, (key, where)
+            for key in ('on a mark', 'off chart', 'ring on a mark'):
+                assert t[key] == 0, (key, where)
 
 
 class TestBandLabelContrast:

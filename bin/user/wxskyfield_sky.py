@@ -14,6 +14,7 @@ JavaScript libraries and nothing fetched at run time.
 import datetime
 import functools
 import hashlib
+import html
 import locale
 import logging
 import math
@@ -1210,6 +1211,25 @@ def _comet_tail_scale(S: float, x: float, y: float, ux: float, uy: float) -> flo
     return scale
 
 
+def _comet_tail_scale_in_circle(cx: float, cy: float, R: float, x: float, y: float,
+                                ux: float, uy: float) -> float:
+    """How much of a full tail fits inside the circle of radius R about
+    (cx, cy) -- the sky charts' horizon: for each ray, the largest fraction
+    of it still inside, the least over the three rays.  0 when a ray starts
+    outside (a comet within 6 units of the rim, its tail pointing out),
+    1.0 for a tail wholly inside."""
+    scale = 1.0
+    for (x1, y1, x2, y2), _o in _comet_tail_rays(x, y, ux, uy):
+        ax, ay, dx, dy = x1 - cx, y1 - cy, x2 - x1, y2 - y1
+        if ax * ax + ay * ay > R * R:
+            return 0.0
+        # |a + t d| = R, the root in t >= 0 (a is inside, so there is one).
+        qa, qb, qc = dx * dx + dy * dy, 2 * (ax * dx + ay * dy), ax * ax + ay * ay - R * R
+        t = (-qb + math.sqrt(qb * qb - 4 * qa * qc)) / (2 * qa)
+        scale = min(scale, t)
+    return max(scale, 0.0)
+
+
 def _comet_tail_boxes(x: float, y: float, ux: float, uy: float,
                       scale: float = 1.0) -> List[Tuple[float, float, float, float]]:
     """Small boxes along each of a comet's tail rays (see _comet_tail),
@@ -2309,8 +2329,7 @@ class SkyPage:
         # number gets it backwards.  Innermost first, which is the order
         # these two have always been written in.
         for alt, ring_r, nudge in reversed(rings):
-            labels.append(('ring', cx + nudge + ring_r, cy - 6,
-                           '%d&#176;' % alt))
+            labels.append(('ring', cx, cy, ring_r + nudge, '%d&#176;' % alt))
         con_labels: List[Tuple[float, float, str]] = []
         if self._constellation_lines:
             segs, con_labels = self._constellation_layer(alm, cx, cy, R,
@@ -2323,22 +2342,26 @@ class SkyPage:
                             CONLINE_OPACITY_SUN_UP if sun['alt'] > 0
                             else CONLINE_OPACITY_DARK,
                             ''.join(segs)))
-        # Labels are placed after every mark is drawn: body labels first (each
-        # nudged vertically until it clears the ones already placed), then
-        # star labels, which are simply dropped on a collision -- their dots
-        # keep the hover title.  Bunched-up bodies (planets crowd the ecliptic)
-        # otherwise print over each other.  The layout itself is
-        # _place_labels; a mark's label is requested here, beside its mark.
+        # Labels are placed after every mark is drawn: body labels first
+        # (each moved to the nearest spot beside, below or above its mark
+        # that clears what is already placed), then star labels, which are
+        # simply dropped when neither side of their own row is clear --
+        # their dots keep the hover title.  Bunched-up bodies (planets crowd
+        # the ecliptic) otherwise print over each other.  The layout itself
+        # is _place_labels; a mark's label is requested here, beside its
+        # mark.
         # Every body mark is a keep-out box for the labels, seeded before any
         # label is placed: a label over a disc reads against the disc, not
         # the sky -- a planet's name over the noon sun measured 1.09:1.  In
         # chart units, and not scaled with the labels, because the marks
         # are not.  Each half-size covers the mark's stroke (the sun's, its
-        # rays) and is smaller than the gap its own label is set at.
-        keep: List[Tuple[float, float, float, float]] = []
+        # rays) and is smaller than the gap its own label is set at.  The
+        # marks are handed over as THINGS, each a list of boxes: one box for
+        # a mark, a comet tail's small boxes along its rays as one thing.
+        keep: List[List[Tuple[float, float, float, float]]] = []
 
         def _keep(x: float, y: float, half: float) -> None:
-            keep.append((x - half, y - half, x + half, y + half))
+            keep.append([(x - half, y - half, x + half, y + half)])
 
         def _want(x: float, y: float, text: str, cls: str, gap: float,
                   must: bool, body: Optional[str] = None) -> None:
@@ -2479,8 +2502,16 @@ class SkyPage:
             fill_cls, ring_cls = (('sky-fill-brass', 'sky-stroke-halo') if bright
                                   else ('sky-fill-halo', 'sky-stroke-brass'))
             n = math.hypot(x - sun_xy[0], y - sun_xy[1])
-            tail = (_comet_tail(x, y, (x - sun_xy[0]) / n, (y - sun_xy[1]) / n,
-                                'sky-stroke-brass') if n > 1.0 else '')
+            tail = ''
+            if n > 1.0:
+                # Anti-sunward, and ending at the horizon: a tail below it
+                # is not seen.  Kept clear of the labels like the diamond.
+                ux, uy = (x - sun_xy[0]) / n, (y - sun_xy[1]) / n
+                t_scale = _comet_tail_scale_in_circle(cx, cy, R, x, y, ux, uy)
+                tail = _comet_tail(x, y, ux, uy, 'sky-stroke-brass', t_scale)
+                tail_boxes = _comet_tail_boxes(x, y, ux, uy, t_scale)
+                if tail_boxes:
+                    keep.append(tail_boxes)
             p.append('<g class="dome-body" data-body="%s" data-bright="%d">%s'
                      '<path d="M%.1f %.1f L%.1f %.1f L%.1f %.1f L%.1f %.1f Z"'
                      ' class="%s %s" stroke-width="2">'
@@ -2601,7 +2632,8 @@ class SkyPage:
     @staticmethod
     def _place_labels(labels: List[Tuple[Any, ...]], scale: float, f: Frame,
                       S: int, H: int,
-                      keep: Optional[List[Tuple[float, float, float, float]]] = None) -> str:
+                      keep: Optional[List[List[Tuple[float, float, float, float]]]] = None
+                      ) -> str:
         """One label layer: the collision layout run over a sky chart's
         label requests at one scale, wrapped in `<g class="dome-labels"
         data-label-scale="...">`.  Called once per layer by _sky_chart;
@@ -2609,38 +2641,64 @@ class SkyPage:
         and so what fits -- differ.
 
         Five kinds of request, in the order _sky_chart makes them:
-        `cardinal` and `ring` are the chrome (always placed, and the seed
-        the rest dodge); `mark` is a body's, satellite's, comet's or
-        radiant's name, or a star's -- placed beside its mark, nudged down
-        a row at a time when it must land (up to five rows) and dropped
-        when it need not; `time` is a pass arc's rise or set clock, always
-        placed, but stepped further in along its own ray until it clears;
-        `con` is a constellation name, centered on its figure and dropped
-        on any collision.  Body and satellite names carry
-        data-body, the consumer contract that lets a live page move a
-        label with its mark -- on every layer, so a consumer that moves a
-        mark must move every layer's copy (querySelectorAll, not
-        querySelector).
+        `cardinal` (always placed where asked); `ring`, the 30 and 60
+        degree numbers, each at the first of the four places its ring
+        meets the east-west line that is clear, else the one meeting the
+        fewest things; `mark`, a body's, satellite's, comet's or radiant's
+        name, or a star's (see below); `time`, a pass arc's clock, always
+        placed but stepped in along its own ray until it clears; `con`, a
+        constellation name, centered on its figure and dropped on any
+        collision.  Body and satellite names carry data-body, the consumer
+        contract that lets a live page move a label with its mark -- on
+        every layer, so a consumer that moves a mark must move every
+        layer's copy (querySelectorAll, not querySelector).
 
-        `keep` is the chart's body marks as boxes, counted as placed before
-        anything else, so no label lands on a mark.
+        A `mark` name is tried at candidate spots, nearest first: its own
+        row, then one below, one above, two below, two above, then further
+        below only (up to four rows below on the wide frame and seven on
+        the narrow, for a name that must land; a star's or radiant's name
+        tries its own row only); on each row its right and then its left,
+        either only if it stays in the chart, or, for a name too wide for
+        both, one spot slid inside the chart and centered on its mark (a
+        star's or radiant's name too wide for both is dropped; a name
+        wider than the chart starts at its left edge).  Each spot
+        costs 4 if it meets a kept mark or tail, 2 if it meets a label
+        already placed, and, for a name that must land, 1 if it lies nearer
+        another such name's mark than its own (it would read as that
+        body's).  The first spot costing nothing is taken; a name that must
+        land takes the cheapest otherwise, the nearest among equals, and
+        one that need not is dropped.
+
+        `keep` is the chart's marks as THINGS, each a list of boxes: one
+        box for a mark, a comet tail's boxes along its rays as one thing.
+        No label is placed on one where any other spot will do.
 
         The FRAME sets what each of these kinds of label is set at and the
         scale multiplies it, so a narrow chart lays out phone-sized type
         by default and label_scale keeps meaning the same thing on both
-        frames.  S and H are the chart's own width and height: a label
-        that would leave the drawing flips its anchor or stops at the
-        foot, and the numbers to stop at are the frame's, not 680 x 706."""
+        frames.  S and H are the chart's own width and height, the bounds
+        a label stays inside: the frame's, not 680 x 706."""
         star_px = f.px['starlab'] * scale
         body_px = f.px['bodylab'] * scale
         card_px = f.px['cardinal'] * scale
         grid_px = f.px['gridlab'] * scale
         con_px = f.px['conlab'] * scale
-        placed: List[Tuple[float, float, float, float]] = list(keep or [])
+        things = list(keep or [])
+        kept = [box for thing in things for box in thing]
+        placed: List[Tuple[float, float, float, float]] = []
         out = ['<g class="dome-labels" data-label-scale="%s">' % _fmt_scale(scale)]
+        # Every name that must land, with its mark: a name nearer one of
+        # these marks than its own reads as that body's.
+        musts = [req for req in labels if req[0] == 'mark' and req[6]]
+
+        def on_kept(box: Tuple[float, float, float, float]) -> bool:
+            return any(_boxes_meet(box, k) for k in kept)
+
+        def on_label(box: Tuple[float, float, float, float]) -> bool:
+            return any(_boxes_meet(box, o) for o in placed)
 
         def clear(box: Tuple[float, float, float, float]) -> bool:
-            return not any(_boxes_meet(box, o) for o in placed)
+            return not on_kept(box) and not on_label(box)
 
         for req in labels:
             kind = req[0]
@@ -2654,12 +2712,28 @@ class SkyPage:
                 # skylab, not plain gridlab: these two sit on the dome
                 # gradient, where the axis-label gray every other panel
                 # uses reaches only 3.70:1.  The other panels' labels are
-                # on the panel surface and keep it (2.2).
-                _k, x, y, text = req
-                out.append('<text x="%d" y="%d" text-anchor="middle" '
+                # on the panel surface and keep it (2.2).  The box is the
+                # number itself: one sized for a longer word put the two
+                # numbers on each other on the narrow frame.
+                _k, rcx, rcy, d, text = req
+                half = (0.62 * grid_px * len(html.unescape(text)) + 2) / 2
+                spots = [(rcx + d, rcy - 6), (rcx + d, rcy + 6 + grid_px),
+                         (rcx - d, rcy - 6), (rcx - d, rcy + 6 + grid_px)]
+
+                def ring_box(spot: Tuple[float, float]) -> Tuple[float, float, float, float]:
+                    return (spot[0] - half, spot[1] - grid_px, spot[0] + half, spot[1] + 2)
+
+                def ring_cost(spot: Tuple[float, float]) -> int:
+                    # Things, not boxes: a tail is a dozen boxes and one thing.
+                    box = ring_box(spot)
+                    return (sum(any(_boxes_meet(box, b) for b in t) for t in things)
+                            + sum(_boxes_meet(box, o) for o in placed))
+                # min() keeps the first of equals, so a clear spot wins in order.
+                spot = min(spots, key=ring_cost)
+                out.append('<text x="%s" y="%s" text-anchor="middle" '
                            'class="mono gridlab skylab" style="font-size:%.1fpx">%s</text>'
-                           % (int(x), y, grid_px, text))
-                placed.append((x - 2.0 * grid_px, y - card_px, x + 2.0 * grid_px, y + 4))
+                           % (_num(spot[0]), _num(spot[1]), grid_px, text))
+                placed.append(ring_box(spot))
             elif kind == 'time':
                 # Always placed, but not on top of what is already there:
                 # stepped in along its own ray toward the center, a row at a
@@ -2696,30 +2770,64 @@ class SkyPage:
             else:
                 _k, x, y, text, cls, gap, must, body = req
                 px = body_px if cls in ('bodylab', 'satlab') else star_px
-                est_w = 0.62 * px * len(text)
-                row_h = px + 3.0
-                anchor = 'start'
-                lx = x + gap
-                if lx + est_w > S - 4:
-                    anchor = 'end'
-                    lx = x - gap
-                ly = min(max(y + 4, row_h), H - 6.0)
-                fits = False
-                # More rows to try on the narrow frame: the planets crowd
+                # text arrives escaped for the SVG; measure what is drawn.
+                w = 0.62 * px * len(html.unescape(text))
+                h = px + 3.0
+                # Rows nearest first, and never more than two above: a
+                # clear spot far up beat a level one touching a label, and
+                # far below is the established place for a crowded name.
+                # More rows below on the narrow frame: the planets crowd
                 # the ecliptic whatever the frame, and at phone type each
-                # name is half again as wide with half the sky to land in,
-                # so five steps ran out and the last few names printed on
-                # each other rather than below them.
-                for _tries in range(8 if f.narrow else 5):
-                    x0 = lx if anchor == 'start' else lx - est_w
-                    box = (x0, ly - px, x0 + est_w, ly + 2)
-                    if clear(box):
-                        fits = True
-                        break
+                # name is half again as wide with half the sky to land in.
+                reach = (7 if f.narrow else 4) if must else 0
+                rows = [0]
+                for k in range(1, reach + 1):
+                    rows += [k, -k] if k <= 2 else [k]
+                # Each side as (anchor, x drawn at, box's left edge): the
+                # left is drawn right-anchored so it never runs toward the
+                # mark, whatever the text's true width.
+                sides = [(a, lx, x0) for a, lx, x0 in (('start', x + gap, x + gap),
+                                                       ('end', x - gap, x - gap - w))
+                         if x0 >= 4 and x0 + w <= S - 4]
+                if not sides:
+                    # Too wide for either side.  A star's or radiant's
+                    # name, which only tries its own row, is dropped: slid
+                    # level with its mark it would cover its own dot.  One
+                    # that must land is slid inside the chart, centered on
+                    # its mark, and lands a row off it.
                     if not must:
+                        continue
+                    x0 = max(4.0, min(x - w / 2, S - 4 - w))
+                    sides = [('middle', x0 + w / 2, x0)]
+                others = [(r[1], r[2]) for r in musts if r is not req] if must else []
+
+                def cost(box: Tuple[float, float, float, float]) -> int:
+                    c = 4 * on_kept(box) + 2 * on_label(box)
+                    if must:
+                        own = _box_distance(box, x, y)
+                        c += any(_box_distance(box, ox, oy) < own for ox, oy in others)
+                    return c
+
+                best: Optional[Tuple[int, str, float, float,
+                                     Tuple[float, float, float, float]]] = None
+                tried = set()
+                for k in rows:
+                    ly = min(max(y + 4 + k * h, h), H - 6.0)
+                    if ly in tried:
+                        continue
+                    tried.add(ly)
+                    for anchor, lx, x0 in sides:
+                        box = (x0, ly - px, x0 + w, ly + 2)
+                        c = cost(box)
+                        if best is None or c < best[0]:
+                            best = (c, anchor, lx, ly, box)
+                        if c == 0:
+                            break
+                    if best is not None and best[0] == 0:
                         break
-                    ly = min(ly + row_h, H - 6.0)
-                if not fits and not must:
+                assert best is not None
+                c, anchor, lx, ly, box = best
+                if c and not must:
                     continue
                 placed.append(box)
                 dat = '' if body is None else ' data-body="%s"' % _esc(body)

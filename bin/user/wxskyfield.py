@@ -65,7 +65,7 @@ from weewx.units import ValueTuple
 # get a logger object
 log = logging.getLogger(__name__)
 
-WXSKYFIELD_VERSION = '2.11'
+WXSKYFIELD_VERSION = '2.12'
 
 # The oldest Skyfield this extension runs on: find_risings and
 # find_settings arrived in 1.47.  install.py keeps its own copy, held

@@ -251,17 +251,17 @@ window, the part that can be seen, and are empty when the pass is not visible.
 | `culmination_azimuth` | compass | Where it peaks. |
 | `set_azimuth` | compass | Where it sets. |
 | `duration` | duration | Horizon to horizon. |
-| `visible` | bool | Whether this pass has a visible window of a minute or more: sunlit, the sun below −6° and the satellite at least 10° up, all at once.  `None` with no usable elements.  2.x: until then, lit against a dark sky at rise, culmination or set. |
-| `visible_start` | time | When it comes into view.  2.x. |
-| `visible_peak` | time | Its highest point in view.  2.x. |
-| `visible_end` | time | When it goes out of view: below 10°, into Earth's shadow, or into a brightening sky.  2.x. |
-| `visible_start_altitude` | angle | Its altitude as it comes into view.  2.x. |
-| `visible_peak_altitude` | angle | Its highest altitude in view — can be well under `max_altitude`.  2.x. |
-| `visible_end_altitude` | angle | Its altitude as it goes out of view.  2.x. |
-| `visible_start_azimuth` | compass | Where it appears.  2.x. |
-| `visible_peak_azimuth` | compass | Where it is highest in view.  2.x. |
-| `visible_end_azimuth` | compass | Where it disappears.  2.x. |
-| `visible_duration` | duration | How long it is in view.  2.x. |
+| `visible` | bool | Whether this pass has a visible window of a minute or more: sunlit, the sun below −6° and the satellite at least 10° up, all at once.  `None` with no usable elements.  2.12: until then, lit against a dark sky at rise, culmination or set. |
+| `visible_start` | time | When it comes into view.  2.12. |
+| `visible_peak` | time | Its highest point in view.  2.12. |
+| `visible_end` | time | When it goes out of view: below 10°, into Earth's shadow, or into a brightening sky.  2.12. |
+| `visible_start_altitude` | angle | Its altitude as it comes into view.  2.12. |
+| `visible_peak_altitude` | angle | Its highest altitude in view — can be well under `max_altitude`.  2.12. |
+| `visible_end_altitude` | angle | Its altitude as it goes out of view.  2.12. |
+| `visible_start_azimuth` | compass | Where it appears.  2.12. |
+| `visible_peak_azimuth` | compass | Where it is highest in view.  2.12. |
+| `visible_end_azimuth` | compass | Where it disappears.  2.12. |
+| `visible_duration` | duration | How long it is in view.  2.12. |
 
 ## Meteor shower attributes
 

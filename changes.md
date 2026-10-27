@@ -1,52 +1,57 @@
 # weewx-skyfield change history
 
-## 2.x (in progress)
-- A satellite pass is listed as visible only when it can actually be seen:
-  `next_visible_pass`, `.visible`, the Sky page's satellite rows and its
-  pass chart now require a stretch of at least a minute in which the
-  satellite is sunlit, the sun is below −6° and the satellite is at least
-  10° up, all at once.  Until now a pass counted when it was lit against a
-  dark sky at its rise, its culmination or its set and peaked at least 10°
-  up, so a pass lit only at the horizon, its high culmination in Earth's
-  shadow, was listed: Terra from Palo Alto on 2026-10-26, "peaks 90°", is
-  lit against a dark sky for 40 seconds and never above 2.4°.  In one week
-  of passes over Palo Alto, 9 of the 25 listed could not be seen.  A pass
-  visible for under a minute no longer counts either, and one whose visible
-  stretch falls between its rise, culmination and set now does.
-- New pass attributes describe that stretch, the visible window:
-  `visible_start`, `visible_peak` and `visible_end`, each with an
-  `_altitude` and an `_azimuth`, and `visible_duration`, on `next_pass` and
-  `next_visible_pass` alike, the three points of a Heavens-Above table row.
-  They read N/A on a pass that is not visible.  `rise`, `culmination`,
-  `set`, `max_altitude`, the three azimuths and `duration` still describe
-  the whole pass, horizon to horizon.
-- `next_visible_pass` moves on to the following visible pass when the
-  window closes, minutes before the satellite sets; `next_pass` still waits
-  for the set.  A loopdata group of `next_visible_pass` fields is kept until
-  the latest time among them has passed, so one that includes `.set` keeps a
-  pass until it sets; leave `.set` out to move on with the window.
-- The satellite rows report the visible window: when and where the
-  satellite comes into view, its highest point in view, where it goes out
-  of view, and for how long, and "overhead now" while it is in view.
-- The pass chart is drawn at the window's highest point, so the featured
-  satellite is always the solid sunlit dot; the window is a solid stretch
-  over the dashed arc of the whole pass, with its two times at its ends; and
-  the head line gives the window's times and peak.  The satellite panel's
-  explanation of "visible" and the chart's caption say so, in every
-  language; the two rewritten sentences are not yet reviewed by native
-  speakers.
-- The orrery's names no longer print over other bodies: each is placed
-  clear of every dot, diamond, comet tail and the 0° mark, and nearer its
-  own body than any other, wherever the chart has room.  On 2026-10-26
-  Earth's dot covered the V of Venus, near inferior conjunction, and
-  Neptune's dot covered the 0° mark; the 0° mark now moves below its line
-  while a body or a comet's tail sits at its end, and a row further up or
-  down when both spots are taken.  Where bodies crowd closer than a name
-  can tell apart (two nearly touching, or a tight group in the narrow
-  frame), a name can end nearer a neighbor or touching another name; it
-  goes on a dot only when no other spot is left.  On the narrow frame that
-  is common for a comet at the rim or deep inside.  A comet pinned at the
-  rim draws its tail shortened to stay on the plate.
+## 2.12 (2026/10/26)
+- A satellite pass now counts as visible only if you can actually see it:
+  for at least a minute, the satellite must be sunlit, the sun at least 6°
+  below the horizon, and the satellite at least 10° up, all at the same
+  time.  This applies to `next_visible_pass`, `.visible`, and the Sky
+  page's satellite rows and pass chart.  Before, a pass counted if it was
+  lit against a dark sky at its rise, highest point or set, so passes were
+  listed that could not be seen: Terra from Palo Alto on 2026-10-26 was
+  listed as peaking at 90°, but could be seen for only 40 seconds, never
+  above 2.4°.  In one week over Palo Alto, 9 of the 25 passes listed could
+  not be seen.
+- Every pass has ten new attributes for the part you can see, its visible
+  window: `visible_start`, `visible_peak` and `visible_end` (when it comes
+  into view, is highest, and goes out of view), each also with `_altitude`
+  and `_azimuth`, plus `visible_duration`.  They are on both `next_pass`
+  and `next_visible_pass`, and read N/A when the pass is not visible.  The
+  existing attributes (`rise`, `culmination`, `set`, `max_altitude`, the
+  azimuths and `duration`) still describe the whole pass, from horizon to
+  horizon.
+- `next_visible_pass` moves on to the next visible pass as soon as the
+  visible window closes, often minutes before the satellite sets;
+  `next_pass` still waits for it to set.  With weewx-loopdata, a group of
+  `next_visible_pass` fields is kept until the latest time among them has
+  passed, so leave `.set` out of a group that should move on with the
+  window.
+- The satellite rows describe the visible window: where the satellite
+  comes into view, its highest point, where it disappears, and for how
+  long.
+- The pass chart shows the sky at the visible window's highest point.  The
+  visible part is drawn solid over the dashed whole pass, with its start
+  and end times at its ends, and the heading gives the window's times and
+  highest point.  The satellite panel's explanation of "visible" and the
+  chart's caption are rewritten in every language, and Spanish and Italian
+  now say "máximo" and "massimo" for the highest point; these translations
+  are not yet reviewed by native speakers.
+- The orrery's names no longer print over other bodies.  Each is placed
+  clear of every planet, comet, comet tail and the 0° mark, and nearer its
+  own body than any other, wherever there is room.  The 0° mark moves off
+  the end of its line when a body sits there, and a comet at the edge of
+  the chart draws a shorter tail so it stays on the chart.  In a tight
+  crowd, especially on the narrow (phone) layout, a name can still end up
+  nearer a neighbor.
+- Names on the sky dome and the pass chart are placed better.  Each name
+  tries its mark's right side, then its left, then a row below or above,
+  and takes the first spot clear of marks, comet tails and other names
+  and not closer to another body.  Over two years of sample skies, names
+  more than two rows from their mark dropped from one in eight to almost
+  none on the full-size dome, and from nearly half to one in eight on the
+  narrow one.  The 30° and 60° figures move off a mark that sits on them,
+  comet tails stop at the horizon, and a name too long for either side
+  stays on the chart.  Meteor radiant names, which give way when space is
+  tight, appear slightly less often on a crowded dome.
 - The Dutch, Spanish, Italian, Norwegian and Swedish translations are no
   longer marked Beta, in the files, the manual and the README.  Every one
   is complete and has shipped for months; a native speaker's review, when

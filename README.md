@@ -162,8 +162,9 @@ and what to do when
 
 Upgrading from an earlier release?  A handful of things need attention — the removed
 `stars` option, the one tag whose units changed, the `classic-` palettes dropped in 2.3,
-satellite times that now print with their date (2.5), and what 2.4 and 2.5 changed for skins
-that embed the panels — and all of them are on the
+satellite times that now print with their date (2.5), what 2.4, 2.5 and 2.12 changed for
+skins that embed the panels, satellites needing Skyfield 1.49 (2.10), and what a visible
+satellite pass means (2.12) — and all of them are on the
 [Upgrading page](https://chaunceygardiner.github.io/weewx-skyfield/upgrading.html).  The
 full history is in
 [changes.md](https://github.com/chaunceygardiner/weewx-skyfield/blob/main/changes.md).
@@ -216,10 +217,13 @@ report tags and the live values, so they always agree.
 ![weewx-skyfield's sky dome during a Tiangong zenith pass, animated live on the weewx-celestial page](https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/live_dome_tiangong.gif)
 
 *The animation is the [weewx-celestial](https://github.com/chaunceygardiner/weewx-celestial)
-live page at work, moved by weewx-loopdata fields — weewx-skyfield's own Sky page stays
-static.  The chart itself is this extension's dome, embedded there.  A third of the way
-across, still climbing, the marker inverts to a hollow ring as Tiangong slips into Earth's
-shadow — and it goes on to cross the exact center of the dome dark, no longer shining.*
+live page at work, moved by weewx-loopdata fields — weewx-skyfield's own Sky page stays static.
+The chart itself is this extension's dome, embedded there.  A third of the way across, still
+climbing, the marker inverts to a hollow ring as Tiangong slips into Earth's shadow — and it
+goes on to cross the exact center of the dome dark, no longer shining.  Captured in August
+2026, before 2.12: the rows beside the dome still call this pass visible with a 90° peak, where
+it is now reported only for the stretch you can see, and the 30° and 60° figures sit on each
+other's rings, fixed in 2.7.*
 
 → [Live-updating pages](https://chaunceygardiner.github.io/weewx-skyfield/live-pages.html)
 
