@@ -43,9 +43,9 @@ it is computed for *your* station's location and elevation, taken automatically 
 - an **analemma** — the sun's altitude and azimuth at local standard noon for every week of
   the year, with today's point marked;
 - the **next visible pass** of each configured satellite — the ISS and Tiangong out of the
-  box — when it appears, how high it peaks, when it disappears, with the soonest pass
-  charted on its own dated sky: the whole sky as it will stand at the pass's peak, the
-  pass arced across it;
+  box — when it comes into view, how high it is at its highest in view, when it goes out of
+  view, with the soonest pass charted on its own dated sky: the whole sky as it will stand at
+  that highest point, the pass arced across it and the part you can see drawn solid;
 - a **countdown row** — the next equinox, solstice, new and full moon, the next eclipse
   visible from your station, and the next major **meteor shower**, whose chip carries the
   moon's illumination on the peak night as the honest interference judgment; a configured
@@ -71,11 +71,13 @@ Every panel on the page can also be embedded individually in your own skin — s
 With [satellites](configuration.md#the-skyfield-section) configured, the page adds two
 panels.  A **Satellites** panel gives one card per satellite with its
 [next visible pass](tag-index.md#satellite-tags): the date and countdown, then "appears WSW ·
-peaks 45° SSW · disappears NE · 6 m"; a satellite with no visible pass in the coming week
-says so honestly.  And a **Next Visible Pass** chart draws the soonest of those passes on its
-own sky: the whole sky as it will stand at the pass's culmination — one chart, one moment, so
-the dashed, time-labeled arc crosses the stars it will actually cross — under a head line
-carrying the satellite's name, the pass's date, its times and its peak altitude.  Its star
+peaks 45° SSW · disappears NE · 6 m" — the stretch in which it can actually be seen, sunlit
+against a dark sky at least 10° up; a satellite with no visible pass in the coming week says
+so honestly.  And a **Next Visible Pass** chart draws the soonest of those passes on its own
+sky: the whole sky as it will stand at the highest point the satellite can be seen — one
+chart, one moment, so the arc crosses the stars it will actually cross — the whole pass
+dashed, the visible stretch solid with its two times at its ends, under a head line carrying
+the satellite's name, the date, the visible stretch's times and its peak altitude.  Its star
 field is cut off at magnitude 3.5, the stars a twilight sky actually shows, since a visible
 pass happens while the sky is only half dark.
 

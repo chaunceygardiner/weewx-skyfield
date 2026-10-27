@@ -203,6 +203,48 @@ CONLINE_OPACITY_SUN_UP = 0.40
 CONLINE_OPACITY_DARK = 0.55
 
 
+class OrreryGeometry(NamedTuple):
+    """The orrery's layout in one frame: the square, the sun's center and
+    radius, the innermost orbit's radius and the span to the outermost,
+    how far a comet's marker may stray from them, the room a name label
+    takes beside its body, and one label row."""
+    S: int
+    cx: int
+    sun_r: float
+    r0: float
+    rspan: float
+    c_lo: float
+    c_hi: float
+    lab_gap: float
+    step: float
+
+
+def _orrery_geometry(f: 'Frame') -> OrreryGeometry:
+    """The orrery's layout for the frame: the phone's (360 across, type set
+    for a hand) or the wide one."""
+    if f.narrow:
+        return OrreryGeometry(NARROW_W, 180, 7.0, 30.0, 126.0, 12.0, 168.0, 10.0, 18)
+    return OrreryGeometry(480, 240, 8.0, 44.0, 176.0, 16.0, 228.0, 8.0, 13)
+
+
+def _orrery_radius(g: OrreryGeometry, a: float) -> float:
+    """An orbit's radius on the orrery, logarithmic in its size in au
+    between Mercury's and Neptune's."""
+    lo, hi = math.log(0.387), math.log(30.07)
+    return g.r0 + g.rspan * (math.log(a) - lo) / (hi - lo)
+
+
+def _boxes_meet(a: Tuple[float, float, float, float],
+                b: Tuple[float, float, float, float]) -> bool:
+    """Whether two (x0, y0, x1, y1) boxes overlap."""
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _box_distance(b: Tuple[float, float, float, float], x: float, y: float) -> float:
+    """How far the point (x, y) is from the box b; 0 inside it."""
+    return math.hypot(max(b[0] - x, 0.0, x - b[2]), max(b[1] - y, 0.0, y - b[3]))
+
+
 def _num(v: float) -> str:
     """An SVG coordinate: integral values without a decimal point.  The
     sites feeding _band_rule mix ints and floats (an hour rule's x is
@@ -990,6 +1032,9 @@ STAR_LABEL_MAG = 2.5          # ... and labels these (default)
 # Constants, not options, until a consumer asks.
 PASS_STAR_MAG_LIMIT = 3.5
 PASS_STAR_LABEL_MAG = 1.5
+# The orrery's keep-out half-size around a planet's dot (radius 5, stroke
+# 1.5 to 2) or a comet's diamond: a label may come this close and no closer.
+ORRERY_MARK_HALF = 6.5
 # The narrow frame's ceiling on both, whatever the report asked for.  The
 # dome drawn at 360 units has 28% of the wide dome's area, so the wide
 # census -- about 1,600 stars at mag 5.0 -- lands at nearly four times the
@@ -1114,22 +1159,72 @@ def _days_until(now_ts: float, ts: float) -> int:
                    - datetime.datetime.fromtimestamp(now_ts).date()).days)
 
 
-def _comet_tail(x: float, y: float, ux: float, uy: float, cls: str) -> str:
+def _comet_tail(x: float, y: float, ux: float, uy: float, cls: str,
+                scale: float = 1.0) -> str:
     """Three short rays fanning out from a comet marker along (ux, uy),
     the unit ANTI-SUNWARD direction in chart coordinates -- a comet's
     tail always points away from the sun, so the glyph is honest physics
     as well as iconography (a bare diamond says nothing; a tailed one
-    reads as a comet at a glance)."""
+    reads as a comet at a glance).  scale shortens the rays (see
+    _comet_tail_scale); at 0 there is no tail to draw."""
+    if scale <= 0:
+        return ''
+    return ''.join('<line class="comet-tail %s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+                   'stroke-width="1.2" opacity="%s"/>'
+                   % ((cls,) + ray + (opacity,))
+                   for ray, opacity in _comet_tail_rays(x, y, ux, uy, scale))
+
+
+def _comet_tail_rays(x: float, y: float, ux: float, uy: float, scale: float = 1.0
+                     ) -> List[Tuple[Tuple[float, float, float, float], str]]:
+    """The tail's three rays as ((x1, y1, x2, y2), opacity), each scale
+    times its full length, for _comet_tail to draw and _comet_tail_boxes
+    to keep labels off."""
     rays = []
     for angle, length, opacity in ((-0.18, 9.0, '0.55'), (0.0, 12.0, '0.9'),
                                    (0.18, 9.0, '0.55')):
         ca, sa = math.cos(angle), math.sin(angle)
         rx, ry = ux * ca - uy * sa, ux * sa + uy * ca
-        rays.append('<line class="comet-tail %s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
-                    'stroke-width="1.2" opacity="%s"/>'
-                    % (cls, x + 6.0 * rx, y + 6.0 * ry, x + (6.0 + length) * rx,
-                       y + (6.0 + length) * ry, opacity))
-    return ''.join(rays)
+        length *= scale
+        rays.append(((x + 6.0 * rx, y + 6.0 * ry, x + (6.0 + length) * rx,
+                      y + (6.0 + length) * ry), opacity))
+    return rays
+
+
+def _comet_tail_scale(S: float, x: float, y: float, ux: float, uy: float) -> float:
+    """How much of a full tail fits inside an S-square chart, 2 units in
+    from its edge: 1.0 for the whole tail, less for a comet pinned near
+    the rim (the orrery's far comets sit 12 units inside it, and a full
+    tail is 18 long), down to 0 when even the gap before the rays does
+    not fit."""
+    lo, hi = 2.0, S - 2.0
+    scale = 1.0
+    for (x1, y1, x2, y2), _o in _comet_tail_rays(x, y, ux, uy):
+        for a, b in ((x1, x2), (y1, y2)):
+            if not lo <= a <= hi:
+                return 0.0
+            if b > hi:
+                scale = min(scale, (hi - a) / (b - a))
+            elif b < lo:
+                scale = min(scale, (lo - a) / (b - a))
+    return scale
+
+
+def _comet_tail_boxes(x: float, y: float, ux: float, uy: float,
+                      scale: float = 1.0) -> List[Tuple[float, float, float, float]]:
+    """Small boxes along each of a comet's tail rays (see _comet_tail),
+    stroke included, each ray cut in four: a box around a whole diagonal
+    ray, or the whole tail, is mostly empty sky.  None at scale 0, where
+    no tail is drawn."""
+    if scale <= 0:
+        return []
+    boxes = []
+    for (x1, y1, x2, y2), _o in _comet_tail_rays(x, y, ux, uy, scale):
+        for i in range(4):
+            ax, ay = x1 + (x2 - x1) * i / 4, y1 + (y2 - y1) * i / 4
+            bx, by = x1 + (x2 - x1) * (i + 1) / 4, y1 + (y2 - y1) * (i + 1) / 4
+            boxes.append((min(ax, bx) - 1, min(ay, by) - 1, max(ax, bx) + 1, max(ay, by) + 1))
+    return boxes
 
 
 def _esc(s: str) -> str:
@@ -1653,42 +1748,60 @@ class SkyPage:
         when there is none in the elements' validity window) -- 'usable'
         then says whether that is honest sky truth (a satellite that just
         never qualifies, HST from high latitudes) or missing/stale
-        elements, which point at the log instead."""
+        elements, which point at the log instead.  'rise' and 'set' are
+        the whole pass, horizon to horizon (the chart's arc); the rest is
+        its visible window -- start, peak and end, the peak's altitude,
+        each point's compass direction, and the window's length -- which
+        is what the panel and the chart's head line report."""
         key = (alm.time_ts, 'sat:' + name)
         if key in self._memo:
             return self._memo[key]
         b = getattr(alm, name)
         p = b.next_visible_pass
-        rise = _raw(p.rise, 'unix_epoch')
+        start = _raw(p.visible_start, 'unix_epoch')
         d: Dict[str, Any] = {'usable': b.sunlit is not None, 'pass': None}
-        if rise is not None:
+        if start is not None:
             d['pass'] = {
-                'rise': rise,
-                'culmination': _raw(p.culmination, 'unix_epoch'),
+                'rise': _raw(p.rise, 'unix_epoch'),
                 'set': _raw(p.set, 'unix_epoch'),
-                'max_alt': _raw(p.max_altitude, 'degree_angle'),
-                'rise_ord': str(p.rise_azimuth.ordinal_compass()),
-                'culm_ord': str(p.culmination_azimuth.ordinal_compass()),
-                'set_ord': str(p.set_azimuth.ordinal_compass()),
-                'duration': _raw(p.duration, 'second'),
+                'start': start,
+                'peak': _raw(p.visible_peak, 'unix_epoch'),
+                'end': _raw(p.visible_end, 'unix_epoch'),
+                'peak_alt': _raw(p.visible_peak_altitude, 'degree_angle'),
+                'start_ord': str(p.visible_start_azimuth.ordinal_compass()),
+                'peak_ord': str(p.visible_peak_azimuth.ordinal_compass()),
+                'end_ord': str(p.visible_end_azimuth.ordinal_compass()),
+                'duration': _raw(p.visible_duration, 'second'),
             }
         self._memo[key] = d
         return d
 
     def _satellite_track(self, alm) -> Optional[Dict[str, Any]]:
         """The pass chart's arc: the soonest upcoming visible pass among
-        the configured satellites, sampled along its path (a pass in
-        progress counts -- its rise is simply in the past).  One track
+        the configured satellites (soonest to come into view; one whose
+        window is open counts), sampled along its whole path ('pts', rise
+        to set) and along its visible window ('win_pts').  One track
         only: the next thing worth watching; several arcs would be
         clutter.
 
+        'epoch' is the chart's instant: the visible peak, as the nearest
+        whole second INSIDE the window.  The chart is built at a whole
+        second, and the window often opens as the satellite leaves Earth's
+        shadow -- rounding a peak at the window's start to the nearest
+        second lands before it half the time, in shadow, and the dot the
+        head line calls visible is drawn as the hollow in-shadow ring.
+        The window lasts at least a minute, so the clamp always has a
+        second to land on, and the satellite is sunlit there unless the
+        window has a gap (see wxskyfield's window_peak) with shadow within
+        half a second of a peak at its edge.
+
         Memoized per instant, like every other chart input (_body,
-        _twilight, _sat_pass): the search evaluates the satellite at 25
-        instants along the arc, and a page that draws the pass chart on
-        both frames asks for the same track twice.  An empty dict stands
-        for "no qualifying pass", so that answer is cached too -- it is
-        the expensive one, having scanned every configured satellite to
-        reach it."""
+        _twilight, _sat_pass): the search evaluates the satellite at 39
+        instants along the arc, the window and the peak, and a page that
+        draws the pass chart on both frames asks for the same track
+        twice.  An empty dict stands for "no qualifying pass", so that
+        answer is cached too -- it is the expensive one, having scanned
+        every configured satellite to reach it."""
         key = (alm.time_ts, '_satellite_track')
         if key in self._memo:
             return self._memo[key] or None
@@ -1701,23 +1814,32 @@ class SkyPage:
         for name in self.satellite_names():
             q = self._sat_pass(alm, name)['pass']
             if q is not None and (best is None or
-                                  q['rise'] < self._sat_pass(alm, best)['pass']['rise']):
+                                  q['start'] < self._sat_pass(alm, best)['pass']['start']):
                 best = name
         if best is None:
             return remember(None)
         q = dict(self._sat_pass(alm, best)['pass'])
-        n = 24
-        pts: List[Tuple[float, float]] = []
-        for i in range(n + 1):
-            ts = q['rise'] + (q['set'] - q['rise']) * i / n
-            b = getattr(alm(almanac_time=int(round(ts))), best)
-            alt, az = b.alt, b.az
-            if alt is None or az is None:
-                return remember(None)
-            pts.append((az, alt))
-        q.update(name=best, label=self._label(alm, best), pts=pts,
-                 culm_i=min(n, max(0, round(n * (q['culmination'] - q['rise'])
-                                            / (q['set'] - q['rise'])))))
+
+        def sample(t0: float, t1: float, n: int) -> Optional[List[Tuple[float, float]]]:
+            pts: List[Tuple[float, float]] = []
+            for i in range(n + 1):
+                b = getattr(alm(almanac_time=int(round(t0 + (t1 - t0) * i / n))), best)
+                alt, az = b.alt, b.az
+                if alt is None or az is None:
+                    return None
+                pts.append((az, alt))
+            return pts
+
+        pts = sample(q['rise'], q['set'], 24)
+        win_pts = sample(q['start'], q['end'], 12)
+        if pts is None or win_pts is None:
+            return remember(None)
+        epoch = min(max(int(round(q['peak'])), math.ceil(q['start'])), math.floor(q['end']))
+        b = getattr(alm(almanac_time=epoch), best)
+        if b.alt is None or b.az is None:
+            return remember(None)
+        q.update(name=best, label=self._label(alm, best), pts=pts, win_pts=win_pts,
+                 epoch=epoch, peak_pt=(b.az, b.alt))
         return remember(q)
 
     # ── template conveniences ─────────────────────────────────────────────────
@@ -2031,7 +2153,7 @@ class SkyPage:
                    aria: str, f: Frame = WIDE_FRAME) -> str:
         """The all-sky chart core shared by the dome (the sky at the
         almanac's time) and the pass chart (the sky at a pass's
-        culmination): frame, stars, constellation figures, bodies, and any
+        visible peak): frame, stars, constellation figures, bodies, and any
         configured satellite above the horizon at the chart's epoch.
         `track` adds the satellite pass arc -- the pass chart's reason to
         exist; the dome stopped drawing it in 2.0, because an undated
@@ -2288,10 +2410,10 @@ class SkyPage:
                        must=True, body='moon')
         # Satellites: a marker for any satellite above the horizon at the
         # chart's epoch -- the "sky at time T" contract.  On the pass
-        # chart, whose epoch is the pass's culmination, this is what puts
-        # the tracked satellite's dot at the peak of its arc.  A marker's
-        # name label doubles as the arc's when the tracked satellite is
-        # the one overhead.  A sunlit satellite is the solid brass dot; one
+        # chart, whose epoch is the pass's visible peak, this is what puts
+        # the tracked satellite's dot at the highest point it can be seen.
+        # A marker's name label doubles as the arc's when the tracked
+        # satellite is the one overhead.  A sunlit satellite is the solid brass dot; one
         # inside Earth's shadow inverts to a hollow ring (the open-symbol
         # convention for present-but-not-shining -- unlike a daytime star,
         # a shadowed satellite emits nothing).  The ring keeps the marker's
@@ -2408,44 +2530,60 @@ class SkyPage:
                        body=shower.key)
         if track is not None:
             xy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['pts']]
-            # data-rise/data-set: the pass's own window, epoch seconds, on
-            # the consumer-contract element -- the chart saying when the
-            # pass it depicts begins and ends, the way the dome fragment
-            # declares its own epoch (data-dome-ts).  weewx-celestial's
-            # live sweep judges the chart against this rather than against
-            # the loop feed's next_visible_pass, which rolls to the
-            # FOLLOWING pass moments after this one sets: without the
-            # chart's own times, a mark that had just ridden the arc to its
+            # data-rise/data-set: the pass's own rise and set, epoch
+            # seconds, on the consumer-contract element -- the chart saying
+            # when the pass it depicts begins and ends, the way the dome
+            # fragment declares its own epoch (data-dome-ts).
+            # weewx-celestial's live sweep judges the chart against this
+            # rather than against the loop feed's next_visible_pass, which
+            # rolls to the FOLLOWING pass as this one's visible window
+            # closes (before it sets): without the chart's own times, a
+            # mark that had just ridden the arc to its
             # end was put back at the culmination -- mid-arc, under a header
             # naming the finished pass -- for up to the refetch interval
             # (celestial 8.3.3, from NOAA-21's 2026-08-15 capture).
+            # The dashed arc is the whole pass, horizon to horizon; the
+            # solid stretch over it is the visible window, the part that
+            # can actually be seen, and carries the pass's title and its
+            # two clock times.
+            wxy = [self._dome_xy(cx, cy, R, az, alt) for az, alt in track['win_pts']]
             p.append('<g class="dome-track" data-body="%s" '
                      'data-rise="%d" data-set="%d" '
                      'clip-path="url(#%s)"><path d="M%s" fill="none" '
                      'class="sky-stroke-brass" '
                      'stroke-width="1.6" stroke-dasharray="6 4" opacity="0.9"/>'
-                     '<title>%s</title></g>'
+                     '<path d="M%s" fill="none" class="sky-stroke-brass" '
+                     'stroke-width="2.6" stroke-linecap="round">'
+                     '<title>%s</title></path></g>'
                      % (_esc(track['name']),
                         int(round(track['rise'])), int(round(track['set'])),
                         clip_id,
                         ' L'.join('%.1f %.1f' % pt for pt in xy),
+                        ' L'.join('%.1f %.1f' % pt for pt in wxy),
                         self._t('{name} pass — {rise} → {set}, peak {alt}°',
-                                name=_esc(track['label']), rise=self._hm(track['rise']),
-                                set=self._hm(track['set']), alt='%.0f' % track['max_alt'])))
-            for end_i, ts in ((0, track['rise']), (-1, track['set'])):
-                x, y = xy[end_i]
-                # The ends sit on the rim; nudge each time label toward the
-                # dome's center so it stays inside, and log its box so the
-                # remaining labels dodge it.
-                away = math.hypot(cx - x, cy - y) or 1.0
-                lx = x + trk_off * (cx - x) / away
-                ly = y + trk_off * (cy - y) / away
+                                name=_esc(track['label']), rise=self._hm(track['start']),
+                                set=self._hm(track['end']), alt='%.0f' % track['peak_alt'])))
+            for end_i, nb_i, ts in ((0, 1, track['start']), (-1, -2, track['end'])):
+                x, y = wxy[end_i]
+                # Each time label stands off its end of the stretch,
+                # square to the arc on the side toward the dome's center
+                # (inside the dome even when the end is low), and is
+                # stepped further along that line if it collides.
+                tx, ty = x - wxy[nb_i][0], y - wxy[nb_i][1]
+                tlen = math.hypot(tx, ty)
+                if tlen > 0:
+                    ux, uy = -ty / tlen, tx / tlen
+                else:
+                    away = math.hypot(cx - x, cy - y) or 1.0
+                    ux, uy = (cx - x) / away, (cy - y) / away
+                if ux * (cx - x) + uy * (cy - y) < 0:
+                    ux, uy = -ux, -uy
                 p.append('<circle cx="%.1f" cy="%.1f" r="%s" class="sky-fill-brass"/>'
                          % (x, y, _num(trk_r)))
-                labels.append(('time', lx, ly, self._hm(ts),
-                               (cx - x) / away, (cy - y) / away))
+                labels.append(('time', x + trk_off * ux, y + trk_off * uy,
+                               self._hm(ts), ux, uy))
             if track['name'] not in overhead:
-                xc, yc = xy[track['culm_i']]
+                xc, yc = self._dome_xy(cx, cy, R, *track['peak_pt'])
                 _want(xc, yc, _esc(track['label']), 'satlab', sat_gap,
                            must=True, body=track['name'])
         for x, y, name in star_labels:
@@ -2502,8 +2640,7 @@ class SkyPage:
         out = ['<g class="dome-labels" data-label-scale="%s">' % _fmt_scale(scale)]
 
         def clear(box: Tuple[float, float, float, float]) -> bool:
-            return not any(box[0] < o[2] and box[2] > o[0] and
-                           box[1] < o[3] and box[3] > o[1] for o in placed)
+            return not any(_boxes_meet(box, o) for o in placed)
 
         for req in labels:
             kind = req[0]
@@ -2599,14 +2736,17 @@ class SkyPage:
                         label_layers: Optional[Sequence[Tuple[Any, Any]]] = None,
                         narrow: Any = False) -> str:
         """The Next Visible Pass panel: the whole sky as it will stand at the
-        soonest upcoming visible pass's culmination, the pass's arc drawn
+        soonest upcoming visible pass's visible peak, the pass's arc drawn
         across it -- one chart, one epoch, so the arc crosses the stars
         it will actually cross (the per-pass chart convention
-        Heavens-Above set).  A dated head line names the satellite and
-        the pass's times; the chart itself is the dome renderer pointed
-        at the culmination, with twilight-honest star cutoffs, and the
-        chart-epoch satellite loop puts the satellite's own dot at the
-        peak of its arc.  Empty string when no configured satellite has a
+        Heavens-Above set).  The dashed arc is the whole pass; the solid
+        stretch over it is the visible window, with its two times.  A
+        dated head line names the satellite and the window's times and
+        peak; the chart itself is the dome renderer pointed at the peak
+        (a whole second inside the window, so the satellite is sunlit
+        there), with twilight-honest star cutoffs, and the chart-epoch
+        satellite loop puts the satellite's own dot at that peak.  Empty
+        string when no configured satellite has a
         visible pass in its elements' validity window -- the satellite
         panel's rows then tell that story.  The data-body/dome-track
         hooks (the weewx-celestial consumer contract) appear here exactly
@@ -2619,17 +2759,17 @@ class SkyPage:
         track = self._satellite_track(alm)
         if track is None:
             return ''
-        culm = alm(almanac_time=int(round(track['culmination'])))
+        peak = alm(almanac_time=track['epoch'])
         head = ('<div class="passhead"><span class="passname">%s</span>'
                 '<span class="passwhen mono">%s</span></div>'
                 % (_esc(track['label']),
                    self._t('{date} · {rise} → {set} · peak {alt}°',
                            date=_esc(time.strftime(
                                self._t('%a, %b %-d'),
-                               time.localtime(track['culmination']))),
-                           rise=self._hm(track['rise']), set=self._hm(track['set']),
-                           alt='%.0f' % track['max_alt'])))
-        return head + self._sky_chart(culm, pal, pal_name, layers,
+                               time.localtime(track['start']))),
+                           rise=self._hm(track['start']), set=self._hm(track['end']),
+                           alt='%.0f' % track['peak_alt'])))
+        return head + self._sky_chart(peak, pal, pal_name, layers,
                                       PASS_STAR_MAG_LIMIT, PASS_STAR_LABEL_MAG,
                                       track=track, grad_id='skygp-%s' % pal_name,
                                       clip_id='domecp-%s' % pal_name,
@@ -2850,19 +2990,11 @@ class SkyPage:
         the rings give up the room and the type does not."""
         f = _frame(narrow)
         pal_name, _pal = _resolve_palette(palette)
-        # The square, the innermost and outermost orbit radii, how far a
-        # comet's marker may stray from them, and the room a name label
-        # takes beside its body.
-        if f.narrow:
-            S, cx, r0, rspan = NARROW_W, 180, 30.0, 126.0
-            lab_gap, c_lo, c_hi, step, row = 10.0, 12.0, 168.0, 18, 17
-        else:
-            S, cx, r0, rspan = 480, 240, 44.0, 176.0
-            lab_gap, c_lo, c_hi, step, row = 8.0, 16.0, 228.0, 13, 12
-        lo, hi = math.log(0.387), math.log(30.07)
+        g = _orrery_geometry(f)
+        S, cx, r0, c_lo, c_hi, sun_r = g.S, g.cx, g.r0, g.c_lo, g.c_hi, g.sun_r
 
         def orbit_r(a: float) -> float:
-            return r0 + rspan * (math.log(a) - lo) / (hi - lo)
+            return _orrery_radius(g, a)
 
         p = [_svg_open('viewBox="0 0 %d %d" role="img" aria-label="%s"'
                        % (S, S, self._t('Solar system plan view')), pal_name, f)]
@@ -2873,34 +3005,20 @@ class SkyPage:
         p.append('<line x1="%s" y1="%d" x2="%d" y2="%d" class="sky-stroke-muted" '
                  'stroke-width="1" stroke-dasharray="2 5" opacity="0.6"/>'
                  % (_num(cx + r0), cx, S - 12, cx))
-        p.append('<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
-                 % (S - 8, cx - 8))
         # The rim paints only where the plate gives the sun a ring (the
         # paper plate does; navy needs none), so the stroke is written
         # either way and the class decides.
         p.append('<circle cx="%d" cy="%d" r="%s" '
                  'class="sky-fill-orrery-sun sky-stroke-rim-sun" stroke-width="1.5">'
                  '<title>%s</title></circle>'
-                 % (cx, cx, _num(7.0 if f.narrow else 8.0),
-                    _esc(self._label(alm, 'sun'))))
+                 % (cx, cx, _num(sun_r), _esc(self._label(alm, 'sun'))))
         hlongs = {name: self._body(alm, name)['hlong'] for name in PLANETS}
         hlongs['earth'] = alm.sun.hlong    # the sun tag reports Earth's, per XEphem
-        labels: List[List[Any]] = []
-
-        def queue_label(x: float, y: float, disp: str) -> None:
-            # Label away from center, flipped when its estimated width would
-            # leave the viewBox (a body near 0 degrees sits at the right rim
-            # for years at a time), then clamped vertically.
-            est_w = lab_gap + f.glyph * len(disp)
-            anchor = 'start' if x >= cx else 'end'
-            if anchor == 'start' and x + est_w > S - 6:
-                anchor = 'end'
-            elif anchor == 'end' and x - est_w < 6:
-                anchor = 'start'
-            lx = x + (lab_gap if anchor == 'start' else -lab_gap)
-            ly = min(max(y + 4, 14.0), S - 8.0)
-            x0 = lx if anchor == 'start' else lx - est_w
-            labels.append([lx, ly, anchor, _esc(disp), x0, x0 + est_w])
+        # Each body's tag name, position, display name and, for a comet,
+        # the direction and scale its tail is drawn at, in drawing order,
+        # for the labels (_orrery_annotations).
+        bodies: List[Tuple[str, float, float, str,
+                           Optional[Tuple[float, float, float]]]] = []
 
         for name, a in SEMI_MAJOR_AU.items():
             h = math.radians(hlongs[name])
@@ -2919,7 +3037,7 @@ class SkyPage:
                          'class="sky-fill-body-%s sky-stroke-ring-%s" stroke-width="1.5">'
                          '<title>%s</title></circle>'
                          % (x, y, name, name, title))
-            queue_label(x, y, disp)
+            bodies.append((name, x, y, disp, None))
         # Comets: a diamond at the comet's CURRENT sun distance on the
         # same log scale as the rings, at its heliocentric longitude --
         # marker only, no orbit ring: a circle would misdraw an eccentric
@@ -2938,7 +3056,10 @@ class SkyPage:
             bright_mag = self._comet_pos(alm, name)['mag']
             h = math.radians(hlong)
             r = min(max(orbit_r(r_au), c_lo), c_hi)
-            x, y = cx + r * math.cos(h), cx - r * math.sin(h)
+            # The tail points anti-sunward, which on a sun-centered plan
+            # view is simply radially outward.
+            ux, uy = math.cos(h), -math.sin(h)
+            x, y = cx + r * ux, cx + r * uy
             disp = self._label(alm, name)
             bright = bright_mag is not None and bright_mag <= COMET_NAKED_EYE_MAG
             fill_cls, ring_cls = (('sky-fill-brass', 'sky-stroke-halo') if bright
@@ -2946,30 +3067,155 @@ class SkyPage:
             title = self._t('{name} — heliocentric longitude {deg}°, {dist} au',
                             name=_esc(disp), deg='%.1f' % hlong,
                             dist='%.1f' % r_au)
-            # The tail points anti-sunward, which on a sun-centered plan
-            # view is simply radially outward.
-            p.append(_comet_tail(x, y, (x - cx) / r, (y - cx) / r,
-                                 'sky-stroke-brass'))
+            # Shortened where it would run off the chart (a far comet
+            # pinned at the rim).
+            scale = _comet_tail_scale(S, x, y, ux, uy)
+            p.append(_comet_tail(x, y, ux, uy, 'sky-stroke-brass', scale))
             p.append('<path d="M%.1f %.1f L%.1f %.1f L%.1f %.1f L%.1f %.1f Z" '
                      'class="%s %s" stroke-width="1.5">'
                      '<title>%s</title></path>'
                      % (x, y - 5.0, x + 5.0, y, x, y + 5.0, x - 5.0, y,
                         fill_cls, ring_cls, title))
-            queue_label(x, y, disp)
-        # Neighbors sharing a rim (Saturn/Neptune near 0 degrees) collide;
-        # push the later label down a row at a time until it clears.
-        placed: List[List[Any]] = []
-        for lab in labels:
-            for _tries in range(6):
-                if not any(lab[4] < o[5] and lab[5] > o[4] and abs(lab[1] - o[1]) < row
-                           for o in placed):
-                    break
-                lab[1] = min(lab[1] + step, S - 8.0)
-            placed.append(lab)
-            p.append('<text x="%.1f" y="%.1f" text-anchor="%s" class="bodylab">%s</text>'
-                     % (lab[0], lab[1], lab[2], lab[3]))
+            bodies.append((name, x, y, disp, (ux, uy, scale)))
+        p.extend(self._orrery_annotations(bodies, f))
         p.append('</svg>')
         return _svg_out(p, pal_name, narrow_type=f.narrow)
+
+    @staticmethod
+    def _orrery_annotations(bodies: Sequence[Tuple[str, float, float, str,
+                                                   Optional[Tuple[float, float, float]]]],
+                            f: Frame) -> List[str]:
+        """The orrery's text: the 0-degree mark, then each body's name, as
+        SVG.  bodies is (tag name, x, y, display name, tail) for every dot
+        and diamond, in drawing order, tail being the unit direction and
+        the scale a comet's tail is drawn at (None for a planet).  Pure
+        layout -- positions in, text out -- so its rules can be checked
+        over any sky without computing one.
+
+        Every mark is a keep-out box for the labels and the 0-degree mark,
+        as on the sky charts: a name printed over another body's dot reads
+        as that body's.  So is every comet's tail, which points exactly
+        where the comet's own label would first go.  The 0-degree mark sits
+        above the end of its line, or below it when a body is there
+        (Neptune spends years within a few degrees of 0, and its dot
+        covered the 0), then a row further up or down; when every spot is
+        taken it goes where it covers the fewest things -- the sun, a dot,
+        a diamond or a tail each counting once.  Once placed it keeps the
+        labels off it as a dot does."""
+        g = _orrery_geometry(f)
+        S, cx = g.S, g.cx
+        marks = [(name, x, y) for name, x, y, _disp, _tail in bodies]
+        # Each thing on the chart as its boxes: the sun, every dot and
+        # diamond, and every tail (many small boxes, one thing).
+        things: List[List[Tuple[float, float, float, float]]] = [
+            [(cx - g.sun_r - 1, cx - g.sun_r - 1, cx + g.sun_r + 1, cx + g.sun_r + 1)]]
+        things += [[(x - ORRERY_MARK_HALF, y - ORRERY_MARK_HALF,
+                     x + ORRERY_MARK_HALF, y + ORRERY_MARK_HALF)] for _n, x, y in marks]
+        things += [_comet_tail_boxes(x, y, *tail)
+                   for _name, x, y, _disp, tail in bodies if tail is not None]
+        keep = [box for thing in things for box in thing]
+        zero_w, grid_px = 2 * f.mono, f.px['gridlab']
+        row = grid_px + 2
+
+        def zero_box(zy: float) -> Tuple[float, float, float, float]:
+            return (S - 8 - zero_w, zy - 0.8 * grid_px, S - 8.0, zy + 0.3 * grid_px)
+
+        # min() keeps the first of equals, so a clear spot wins in order.
+        zy = min((cx - 8, cx + 8 + grid_px, cx - 8 - row, cx + 8 + grid_px + row,
+                  cx - 8 - 2 * row, cx + 8 + grid_px + 2 * row),
+                 key=lambda zy: sum(any(_boxes_meet(zero_box(zy), k) for k in thing)
+                                    for thing in things))
+        zbox = zero_box(zy)
+        out = ['<text x="%d" y="%d" text-anchor="end" class="mono gridlab">0&#176;</text>'
+               % (S - 8, zy)]
+        keep.append(zbox)
+        placed: List[Tuple[float, float, float, float]] = []
+        for name, x, y, disp, _tail in bodies:
+            out.append(SkyPage._orrery_label(name, x, y, disp, g, f, marks, keep, placed))
+        return out
+
+    @staticmethod
+    def _orrery_label(name: str, x: float, y: float, disp: str,
+                      g: OrreryGeometry, f: Frame,
+                      marks: List[Tuple[str, float, float]],
+                      keep: List[Tuple[float, float, float, float]],
+                      placed: List[Tuple[float, float, float, float]]) -> str:
+        """One orrery name label, placed beside its own body and appended
+        to placed.  Tried nearest first: beside the dot, on the side away
+        from the sun and then the other; centered just above and just
+        below it (slid along to stay in the chart); then a row lower and a
+        row higher on each side and centered, and so on to four rows.  The
+        first spot taken is one that stays in the chart, overlaps no label
+        already placed and no mark (the sun, every dot and diamond, every
+        comet's tail and the 0-degree mark: keep), and has its own body
+        nearer than any other: Venus at inferior conjunction stood 13
+        units from Earth, and its label, set clear of Earth's dot, must
+        still read as Venus's.  When no spot passes all three, the one
+        that breaks the least does -- on a mark is worst, then on a label,
+        then nearer a body standing well apart, then nearer one crowding
+        its own (within a dot's keep-out width and the gap: a comet beside
+        Neptune, where no spot is nearer one than the other) -- the first
+        in order among equals."""
+        S, cx, gap, px = g.S, g.cx, g.lab_gap, f.px['bodylab']
+        w = f.glyph * len(disp)
+        crowd = 2 * ORRERY_MARK_HALF + gap
+
+        def spot(anchor: str, ly: float) -> Tuple[float, float, Tuple[float, float, float, float]]:
+            ly = min(max(ly, 14.0), S - 8.0)
+            if anchor == 'middle':
+                # Centered on the dot, slid sideways just enough to stay
+                # in the chart (a body at the rim); a name wider than the
+                # chart starts at its left edge.
+                x0 = max(min(x - w / 2, S - 2.0 - w), 2.0)
+                return x0 + w / 2, ly, (x0, ly - 0.8 * px, x0 + w, ly + 0.3 * px)
+            lx = x + (gap if anchor == 'start' else -gap)
+            x0 = lx if anchor == 'start' else lx - w
+            return lx, ly, (x0, ly - 0.8 * px, x0 + w, ly + 0.3 * px)
+
+        def cost(box: Tuple[float, float, float, float]) -> int:
+            own = _box_distance(box, x, y)
+            nearer = [math.hypot(ox - x, oy - y) for oname, ox, oy in marks
+                      if oname != name and _box_distance(box, ox, oy) <= own]
+            return (8 * any(_boxes_meet(box, k) for k in keep)
+                    + 4 * any(_boxes_meet(box, o) for o in placed)
+                    + (2 if any(d >= crowd for d in nearer) else 1 if nearer else 0))
+
+        # Away from the sun, unless the name would run off the chart (a
+        # body near 0 degrees sits at the right rim for years at a time).
+        first = 'start' if x >= cx else 'end'
+        if first == 'start' and x + gap + w > S - 2:
+            first = 'end'
+        elif first == 'end' and x - gap - w < 2:
+            first = 'start'
+        other = 'end' if first == 'start' else 'start'
+        above = y - ORRERY_MARK_HALF - 0.3 * px - 1
+        below = y + ORRERY_MARK_HALF + 0.8 * px + 1
+        # Nearest first: beside the dot on either side, centered just above
+        # or below it, then a row lower or higher on either side and
+        # centered, and so on.
+        order = [(first, y + 4), (other, y + 4), ('middle', above), ('middle', below)]
+        for k in (1, 2, 3, 4):
+            for anchor in (first, other):
+                order += [(anchor, y + 4 + k * g.step), (anchor, y + 4 - k * g.step)]
+            order += [('middle', above - k * g.step), ('middle', below + k * g.step)]
+        # A centered spot is always kept: slid into the chart, or for a
+        # name wider than the chart starting at its left edge, so the
+        # best of them is still chosen by cost.
+        best: Optional[Tuple[int, str, float, float, Tuple[float, float, float, float]]] = None
+        for anchor, want_y in order:
+            lx, ly, box = spot(anchor, want_y)
+            if anchor != 'middle' and (box[0] < 2 or box[2] > S - 2):
+                continue
+            c = cost(box)
+            if best is None or c < best[0]:
+                best = (c, anchor, lx, ly, box)
+            if c == 0:
+                break
+        assert best is not None
+        _c, anchor, lx, ly, box = best
+        placed.append(box)
+        return ('<text x="%.1f" y="%.1f" text-anchor="%s" class="bodylab">%s</text>'
+                % (lx, ly, anchor, _esc(disp)))
 
     # ── analemma ─────────────────────────────────────────────────────────────
     @_panel_guard(needs=TIER_EXTRAS)
@@ -3899,11 +4145,14 @@ class SkyPage:
             q = d['pass']
             sub = ''
             if q is not None:
-                line = '%s · %s' % (self._date_hm(q['rise']),
-                                    self._sat_when(alm, q['rise'], q['set']))
+                # The visible window: when and where it comes into view,
+                # its highest point, where it fades -- not the geometric
+                # pass, most of which may be in shadow or too low to see.
+                line = '%s · %s' % (self._date_hm(q['start']),
+                                    self._sat_when(alm, q['start'], q['end']))
                 sub = _keep_units(self._t('appears {rise} · peaks {alt}° {culm} · disappears {set} · {m} m',
-                              rise=_esc(q['rise_ord']), alt='%.0f' % q['max_alt'],
-                              culm=_esc(q['culm_ord']), set=_esc(q['set_ord']),
+                              rise=_esc(q['start_ord']), alt='%.0f' % q['peak_alt'],
+                              culm=_esc(q['peak_ord']), set=_esc(q['end_ord']),
                               m='%d' % round(q['duration'] / 60.0)))
             elif d['usable']:
                 line = self._t('no visible pass in the coming week')

@@ -818,7 +818,8 @@ QUOTED_CONSTANTS = [
     ('COMET_KEEP_SECS',                   7 * 86400,  'seven days old'),
     ('COMET_SHORT_PERCENT',               95,         '95% as many comets'),
     ('SAT_MAX_ELEMENT_AGE_SECS',          7 * 86400,  'seven days'),
-    ('SAT_VISIBLE_MIN_CULMINATION_DEGREES', 10.0,     '10°'),
+    ('SAT_VISIBLE_MIN_ALTITUDE_DEGREES',  10.0,       'at least 10° up'),
+    ('SAT_VISIBLE_MIN_SECONDS',           60.0,       'a minute or more'),
     ('_HORIZON_QUANTUM_DEGREES',          0.002,      '0.002 degrees'),
 ]
 

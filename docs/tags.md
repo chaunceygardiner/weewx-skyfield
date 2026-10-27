@@ -190,24 +190,36 @@ distance units; and `.sunlit` — whether the satellite is in sunlight.  `$alman
 is an alternate spelling for a *listed* satellite, mirroring `hip_<number>`; it never fetches
 an unlisted one.  `.rise`, `.transit` and `.set` are the *next* occurrence from the almanac's
 time — transit meaning culmination — because passes are minutes long and "today's" is rarely
-the interesting one.  Because a pass can be up to a week out, all six satellite times — these
-three and a pass's `.rise`, `.culmination` and `.set` — render with their date (see [how far
-away a time can be](values-and-units.md#how-far-away-a-time-can-be)).  The heart of the
-surface is the pass:
+the interesting one.  Because a pass can be up to a week out, all nine satellite times — these
+three, a pass's `.rise`, `.culmination` and `.set`, and its `.visible_start`, `.visible_peak`
+and `.visible_end` — render with their date (see [how far away a time can
+be](values-and-units.md#how-far-away-a-time-can-be)).  The heart of the surface is the pass:
 
 - `$almanac.iss.next_pass` — the next pass, or the one in progress: once the satellite is
   up, `next_pass` is the current pass until it sets.  Its attributes: `.rise`,
   `.culmination` and `.set` (times), `.max_altitude` (an angle ValueHelper),
   `.rise_azimuth`, `.culmination_azimuth` and `.set_azimuth` (compass ValueHelpers, so
-  `.ordinal_compass` renders "WSW"), `.duration`, and `.visible`.
+  `.ordinal_compass` renders "WSW"), `.duration`, and `.visible`.  Those describe the whole
+  pass, horizon to horizon.  The part you can actually see is its *visible window*:
+  `.visible_start`, `.visible_peak` and `.visible_end` (times), each with an `_altitude`
+  and an `_azimuth` (`.visible_peak_altitude`, `.visible_end_azimuth`, …), and
+  `.visible_duration` — the three points of a Heavens-Above table row.
 - `$almanac.iss.next_visible_pass` — the same attributes, for the next pass *worth
-  watching*: the satellite sunlit while your sky is dark (sun below −6° — the
-  civil-twilight convention Heavens-Above uses) at some moment of the pass, and peaking at
-  least 10° up.
+  watching*: one with a visible window, a minute or more in which the satellite is sunlit,
+  your sky is dark (sun below −6° — the civil-twilight convention Heavens-Above uses) and
+  the satellite is at least 10° up, all at once.  `.visible` is that test, on either tag.
+  The visible window is often much shorter than the pass: a satellite that climbs in
+  Earth's shadow comes into view only when it leaves it, perhaps past its highest point, so
+  `.visible_peak_altitude` can be well under `.max_altitude`.  Every `visible_*` reads
+  "N/A" on a pass that is not visible.  `next_visible_pass` moves on to the following
+  visible pass as soon as the window closes, while `next_pass` stays on the pass until the
+  satellite sets.
 
 A pass runs rise → culmination → set across the geometric horizon — no refraction, which is
 irrelevant to satellite watching — and the almanac's existing horizon argument applies:
-`$almanac(horizon=10).iss.next_pass` counts only the portion above 10°.  Passes are searched
+`$almanac(horizon=10).iss.next_pass` counts only the portion above 10°.  The visible window
+lies inside the pass, so with a horizon above 10° it is cut to the part above that horizon,
+and a pass that is visible at the default horizon can lose its window.  Passes are searched
 within the orbital elements' seven-day validity window; when no qualifying pass exists,
 every attribute honestly reads "N/A" — Hubble from northern Europe, for example, never
 rises.  Likewise when the elements themselves are unusable (missing, or their epoch more

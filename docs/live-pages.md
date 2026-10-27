@@ -79,7 +79,10 @@ unprefixed spelling would rerun an extremum search on every loop packet.  When y
 field, prefer the `next_`-prefixed spelling where one exists.
 
 Event expiry is also what rolls a finished satellite pass forward to the next one the moment
-it ends, which is loopdata 6.9 behavior: earlier versions could cache a temporarily
+it ends — for a group of fields, the moment the latest time among them passes, so a
+`next_visible_pass` group that includes `.set` stays on a pass until it sets, while one asking
+only for the `visible_*` times moves on when the pass goes out of view.  This is loopdata 6.9
+behavior: earlier versions could cache a temporarily
 unavailable satellite field's `N/A` until the day rolled over, instead of recovering as soon
 as fresh elements arrived.  That is the reason for the 6.9 floor.
 
@@ -104,7 +107,7 @@ these are a stable contract:
 | `<g class="dome-labels" data-label-scale="2.2">` | dome, pass chart | One label layout (2.5 and later): every label the chart carries, at one scale.  A chart asked for [label layers](panels.md#the-sky-dome--dome_svg) has one group per scale, and the labels' `data-body` is repeated in each — a live page that moves a label must move every layer's copy (`querySelectorAll`). |
 | `data-body="<satellite>"` + `data-sunlit="1"`/`"0"` | dome | A satellite's position dot, and whether it is in sunlight — flip the dot between solid and hollow as it crosses the shadow line. |
 | `data-bright="1"`/`"0"` | dome, orrery | A comet's diamond, and whether it is plausibly naked-eye. |
-| `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one the moment this one sets. |
+| `<g class="dome-track" data-body="iss" data-rise="…" data-set="…">` | pass chart | The pass arc's group.  `data-rise`/`data-set` (2.3.2 and later) are the pass's own rise and set as epoch seconds — judge whether the pass this chart depicts is ahead, in progress or over against these, not against a live feed's *next* pass, which rolls on to the following one before this one is over. |
 | `$sky_page.satellite_names()` | template | The configured satellite tag names, in config order. |
 | `$sky_page.comet_names()` | template | The configured comet tag names, in config order. |
 | `$sky_page.can_draw()` | template | Whether the page can draw the sky at all — True with the Skyfield almanac registered, False on a lesser tier, where `dome_svg`, `pass_chart_html`, `satellites_html`, `eot_svg` and `moon_apsides_html` come back empty (2.3.4 and later).  Gate panels placed beside the dome on this rather than on a dome render. |

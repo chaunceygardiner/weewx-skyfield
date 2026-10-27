@@ -146,7 +146,8 @@ unit of loss:
 3. **Turn off `constellation_lines`.**  Fewer marks to lay out and fewer label collisions to
    resolve.
 4. **Keep the satellite list short.**  Each configured satellite is a separate fetch every
-   three hours and its own pass search.
+   three hours and its own pass search — a week of passes and their visible windows, a few
+   tenths of a second on a Raspberry Pi, repeated whenever its orbital elements change.
 5. **Turn the page off entirely** with `enable = false` in its stanza.  Every `$almanac` tag
    still works — you lose only the bundled showcase page.
 

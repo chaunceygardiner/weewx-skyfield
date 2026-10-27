@@ -228,7 +228,7 @@ satellites.  Configure them under `[Skyfield]` `[[Satellites]]` — see
 | `transit` | time | 2.0 | The next culmination, dated for the same reason. |
 | `set` | time | 2.0 | The next set, dated for the same reason. |
 | `next_pass` | object | 2.0 | The next pass, or the one in progress — see [pass attributes](#pass-attributes). |
-| `next_visible_pass` | object | 2.0 | The next pass worth watching: sunlit against a sky with the sun below −6°, peaking at least 10° up. |
+| `next_visible_pass` | object | 2.0 | The next pass worth watching: one with a visible window, a minute or more in which the satellite is sunlit, the sun below −6° and the satellite at least 10° up.  Moves on when the window closes. |
 | `elements_epoch` | time | 2.0 | The orbital elements' epoch.  Always live. |
 | `elements_age` | duration | 2.0 | Age of the elements.  Past seven days, every other tag reads N/A. |
 
@@ -236,8 +236,10 @@ satellites.  Configure them under `[Skyfield]` `[[Satellites]]` — see
 
 Attributes of `next_pass` and `next_visible_pass`.  All are plain attributes, never methods,
 so `getattr` chains (loopdata almanac fields) walk them.  With no qualifying pass, every one
-is empty.  The three times render with their date, since the pass can be up to a week out —
-see [how far away a time can be](values-and-units.md#how-far-away-a-time-can-be).
+is empty.  The six times render with their date, since the pass can be up to a week out —
+see [how far away a time can be](values-and-units.md#how-far-away-a-time-can-be).  The first
+eight describe the whole pass, horizon to horizon; the `visible_*` ten describe its visible
+window, the part that can be seen, and are empty when the pass is not visible.
 
 | Attribute | Type | Notes |
 |---|---|---|
@@ -245,11 +247,21 @@ see [how far away a time can be](values-and-units.md#how-far-away-a-time-can-be)
 | `culmination` | time | When it peaks. |
 | `set` | time | When it goes back down. |
 | `max_altitude` | angle | Peak altitude. |
-| `rise_azimuth` | compass | Where it appears — `.ordinal_compass` gives `WSW`. |
+| `rise_azimuth` | compass | Where it rises — `.ordinal_compass` gives `WSW`. |
 | `culmination_azimuth` | compass | Where it peaks. |
-| `set_azimuth` | compass | Where it disappears. |
+| `set_azimuth` | compass | Where it sets. |
 | `duration` | duration | Horizon to horizon. |
-| `visible` | bool | Whether this pass meets the visible test.  `None` with no usable elements. |
+| `visible` | bool | Whether this pass has a visible window of a minute or more: sunlit, the sun below −6° and the satellite at least 10° up, all at once.  `None` with no usable elements.  2.x: until then, lit against a dark sky at rise, culmination or set. |
+| `visible_start` | time | When it comes into view.  2.x. |
+| `visible_peak` | time | Its highest point in view.  2.x. |
+| `visible_end` | time | When it goes out of view: below 10°, into Earth's shadow, or into a brightening sky.  2.x. |
+| `visible_start_altitude` | angle | Its altitude as it comes into view.  2.x. |
+| `visible_peak_altitude` | angle | Its highest altitude in view — can be well under `max_altitude`.  2.x. |
+| `visible_end_altitude` | angle | Its altitude as it goes out of view.  2.x. |
+| `visible_start_azimuth` | compass | Where it appears.  2.x. |
+| `visible_peak_azimuth` | compass | Where it is highest in view.  2.x. |
+| `visible_end_azimuth` | compass | Where it disappears.  2.x. |
+| `visible_duration` | duration | How long it is in view.  2.x. |
 
 ## Meteor shower attributes
 

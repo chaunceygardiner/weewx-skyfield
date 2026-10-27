@@ -32,7 +32,7 @@ import weakref
 
 from datetime import datetime
 from datetime import timezone
-from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import jplephem.daf
 import jplephem.spk
@@ -966,14 +966,27 @@ SAT_REFRESH_SECS = 3 * 3600
 # cutoff every satellite tag reports the unified no-usable-elements state:
 # empty ValueHelpers ("N/A"), None for the plain-value tags.
 SAT_MAX_ELEMENT_AGE_SECS = 7 * 86400
-# A pass is visible when the satellite is sunlit while the observer is in
-# at least civil twilight (sun below -6 degrees geometric, the
-# Heavens-Above convention), sampled at rise, culmination and set --
-# whole-pass sampling catches the mid-pass fade-out into Earth's shadow.
-# next_visible_pass additionally requires a culmination of at least 10
-# degrees (a go-watch recommendation, not a bare fact like next_pass).
+# A pass is visible when, at the same instant, the satellite is sunlit,
+# the observer is in at least civil twilight (sun below -6 degrees
+# geometric, the Heavens-Above convention) and the satellite is at least
+# 10 degrees up -- for at least a minute.  The stretch where all three
+# hold is the pass's visible window: a satellite lit only near the
+# horizon, or only for seconds, is not worth going out for, however high
+# its shadowed culmination.  The window is found on a grid across the
+# pass, SAT_VISIBLE_GRID_SECS apart, and each end bisected
+# SAT_VISIBLE_BISECTIONS times (0.08 s).  The grid step must not exceed
+# SAT_VISIBLE_MIN_SECONDS: any stretch at least one step long holds a grid
+# point, so no window long enough to count is missed.
 SAT_DARK_SUN_ALT_DEGREES = -6.0
-SAT_VISIBLE_MIN_CULMINATION_DEGREES = 10.0
+SAT_VISIBLE_MIN_ALTITUDE_DEGREES = 10.0
+SAT_VISIBLE_MIN_SECONDS = 60.0
+SAT_VISIBLE_GRID_SECS = 10.0
+SAT_VISIBLE_BISECTIONS = 7
+# A bound on how fast the sun's altitude can change, degrees a minute:
+# the hour angle's rate (15 degrees an hour, a hair more) times
+# cos(latitude) times sin(azimuth).  It lets a pass whose sky the sun
+# keeps too bright skip the grid (sun_never_dark).
+SAT_SUN_RATE_DEGREES_PER_MIN = 0.26
 
 # Tag form addressing a LISTED satellite by number, e.g. $almanac.sat_25544.
 # Unlike hip_<number> (whose whole catalog is on disk), this is only an
@@ -1654,6 +1667,40 @@ def tle_lines(text: str, norad: int) -> Tuple[str, str, str]:
             name = lines[i - 1] if i > 0 else 'NORAD %d' % norad
             return name, line, lines[i + 1]
     raise ValueError('no two-line element set found')
+
+
+def sun_never_dark(sun_at_rise: float, sun_at_set: float, duration_secs: float) -> bool:
+    """Whether the sun stays at or above SAT_DARK_SUN_ALT_DEGREES for a
+    whole pass, judged from its altitude (degrees) at the pass's two ends.
+    Across the pass the sun can dip below the lower of the two by at most
+    its fastest rate times half the pass -- a bound on its speed, so it
+    holds however the altitude turns, for a pass of any length.  True
+    means no instant of the pass can be dark enough to see it."""
+    dip = SAT_SUN_RATE_DEGREES_PER_MIN * duration_secs / 120.0
+    return min(sun_at_rise, sun_at_set) - dip >= SAT_DARK_SUN_ALT_DEGREES
+
+
+def window_peak(start: Tuple[float, float, float], end: Tuple[float, float, float],
+                culminations: Iterable[Tuple[float, float, float, bool]]) -> Tuple[float, float, float]:
+    """The highest point of a visible window, as (time, altitude, azimuth):
+    the higher of its two ends, unless a culmination inside the window that
+    itself qualifies (sunlit against a dark sky, as flagged) is higher.
+    Between culminations the altitude passes through a minimum, so no other
+    instant can be higher.  A culmination that does not qualify -- in
+    shadow inside a window with a gap -- is not a point anyone could see."""
+    points = [start, end] + [(ts, alt, az) for ts, alt, az, qualifies in culminations
+                             if qualifies and start[0] <= ts <= end[0]]
+    return max(points, key=lambda pt: pt[1])
+
+
+def may_have_window(max_altitude: float, sun_at_rise: float, sun_at_set: float,
+                    duration_secs: float) -> bool:
+    """Whether a pass can have a visible window at all: it must climb
+    past the visibility bar, under a sky that can get dark enough.  The
+    passes that cannot (most of them: low, or in daylight) skip the grid
+    search -- it is the costly part of the pass list."""
+    return (max_altitude >= SAT_VISIBLE_MIN_ALTITUDE_DEGREES
+            and not sun_never_dark(sun_at_rise, sun_at_set, duration_secs))
 
 
 def satellite_from_text(text: str, norad: int, ts: Any, omm: bool) -> Any:
@@ -3361,7 +3408,15 @@ class SatellitePass:
     never a method: consumers that walk attribute chains with plain
     getattr (loopdata almanac fields) must resolve them without
     Cheetah's autocall.  With no qualifying pass, or no usable elements,
-    every ValueHelper is empty ("N/A") and visible is None."""
+    every ValueHelper is empty ("N/A") and visible is None.
+
+    The visible_* attributes describe the visible window -- the part of
+    the pass that can be seen (see SAT_VISIBLE_MIN_ALTITUDE_DEGREES) --
+    as the three points of a Heavens-Above table row: visible_start,
+    visible_peak and visible_end, each with an _altitude and an _azimuth,
+    plus visible_duration.  The geometric attributes above describe the
+    whole pass, horizon to horizon.  Every visible_* is empty when the
+    pass is not visible."""
 
     def __init__(self, binder: 'SkyfieldAlmanacBinder',
                  data: Optional[Dict[str, Any]]):
@@ -3378,11 +3433,7 @@ class SatellitePass:
         self.rise = almanac_type.time_value(a, d.get('rise'), 'ephem_year')
         self.culmination = almanac_type.time_value(a, d.get('culmination'), 'ephem_year')
         self.set = almanac_type.time_value(a, d.get('set'), 'ephem_year')
-        max_altitude = d.get('max_altitude')
-        self.max_altitude = ValueHelper(
-            ValueTuple(math.radians(max_altitude) if max_altitude is not None else None,
-                       'radian', 'group_angle'),
-            context='ephem_day', formatter=a.formatter, converter=a.converter)
+        self.max_altitude = self._angle(a, d.get('max_altitude'))
         self.rise_azimuth = almanac_type.direction_value(a, d.get('rise_azimuth'))
         self.culmination_azimuth = almanac_type.direction_value(a, d.get('culmination_azimuth'))
         self.set_azimuth = almanac_type.direction_value(a, d.get('set_azimuth'))
@@ -3390,6 +3441,30 @@ class SatellitePass:
             ValueTuple(d['set'] - d['rise'] if d else None, 'second', 'group_deltatime'),
             context='hour', formatter=a.formatter, converter=a.converter)
         self.visible: Optional[bool] = d.get('visible') if d else None
+        # The window keys exist only on a visible pass, so every visible_*
+        # of any other pass, or of none, is empty.  Times are 'ephem_year'
+        # for the same reason as rise and set.
+        self.visible_start = almanac_type.time_value(a, d.get('visible_start'), 'ephem_year')
+        self.visible_peak = almanac_type.time_value(a, d.get('visible_peak'), 'ephem_year')
+        self.visible_end = almanac_type.time_value(a, d.get('visible_end'), 'ephem_year')
+        self.visible_start_altitude = self._angle(a, d.get('visible_start_altitude'))
+        self.visible_peak_altitude = self._angle(a, d.get('visible_peak_altitude'))
+        self.visible_end_altitude = self._angle(a, d.get('visible_end_altitude'))
+        self.visible_start_azimuth = almanac_type.direction_value(a, d.get('visible_start_azimuth'))
+        self.visible_peak_azimuth = almanac_type.direction_value(a, d.get('visible_peak_azimuth'))
+        self.visible_end_azimuth = almanac_type.direction_value(a, d.get('visible_end_azimuth'))
+        self.visible_duration = ValueHelper(
+            ValueTuple(d['visible_end'] - d['visible_start'] if d.get('visible') else None,
+                       'second', 'group_deltatime'),
+            context='hour', formatter=a.formatter, converter=a.converter)
+
+    @staticmethod
+    def _angle(a: Any, degrees: Optional[float]) -> ValueHelper:
+        """An altitude, as max_altitude is served: radians in group_angle."""
+        return ValueHelper(
+            ValueTuple(math.radians(degrees) if degrees is not None else None,
+                       'radian', 'group_angle'),
+            context='ephem_day', formatter=a.formatter, converter=a.converter)
 
 
 class SkyfieldAlmanacBinder:
@@ -4336,12 +4411,13 @@ class SkyfieldAlmanacBinder:
     def _sat_passes(self, sat: Any, epoch_ts: float) -> List[Dict[str, Any]]:
         """Every pass in the elements' validity window -- a day before the
         elements' epoch through the seven-day age cutoff; never searching times
-        the elements cannot be trusted for -- computed once per element
-        set, location and horizon, and cached (the seven-day SGP4 sweep
-        is milliseconds, but loopdata asks every loop packet).  The
-        horizon is GEOMETRIC (default 0, overridable via the existing
-        $almanac(horizon=10) argument): refraction is irrelevant to
-        satellite watching, per the USNO-over-PyEphem policy."""
+        the elements cannot be trusted for -- with each pass's visible
+        window, computed once per element set, location and horizon, and
+        cached: the sweep costs a few tenths of a second on a Raspberry Pi,
+        and loopdata asks every loop packet.  The horizon is GEOMETRIC
+        (default 0, overridable via the existing $almanac(horizon=10)
+        argument): refraction is irrelevant to satellite watching, per the
+        USNO-over-PyEphem policy."""
         a = self.almanac
         horizon = float(a.horizon)
         key = ('sat_passes', self.norad, round(epoch_ts), a.lat, a.lon,
@@ -4352,8 +4428,7 @@ class SkyfieldAlmanacBinder:
     def _compute_sat_passes(self, sat: Any, epoch_ts: float,
                             horizon: float) -> List[Dict[str, Any]]:
         almanac_type = self.almanac_type
-        sky = almanac_type.sky
-        geographic, observer = almanac_type.location(self.almanac)
+        geographic, _ = almanac_type.location(self.almanac)
         t0 = almanac_type.skyfield_time(epoch_ts - 86400)
         t1 = almanac_type.skyfield_time(epoch_ts + SAT_MAX_ELEMENT_AGE_SECS)
         times, events = sat.find_events(geographic, t0, t1,
@@ -4379,21 +4454,13 @@ class SkyfieldAlmanacBinder:
         if not raw:
             return []
         # One vectorized sweep answers every per-event question: geometric
-        # altitude and azimuth, whether the satellite is sunlit, and how
-        # dark the observer's sky is (sun below -6 degrees geometric,
-        # civil twilight, the Heavens-Above convention).  A pass is
-        # visible when ANY of its sampled instants qualifies -- sampling
-        # the whole pass catches the mid-pass fade into Earth's shadow
-        # that a culmination-only test misclassifies.
+        # altitude and azimuth, whether the satellite is sunlit, and the
+        # sun's altitude, at every rise, culmination and set.
         all_stamps = [s for rise, culms, set_ in raw
                       for s in [rise] + culms + [set_]]
-        t_all = sky.ts.from_datetimes(
-            [datetime.fromtimestamp(s, timezone.utc) for s in all_stamps])
-        alt, az, _ = (sat - geographic).at(t_all).altaz()
-        sunlit = sat.at(t_all).is_sunlit(sky.planets)
-        sun_alt, _, _ = observer.at(t_all).observe(sky.sun).apparent().altaz()
-        alt_d, az_d, sun_d = alt.degrees, az.degrees, sun_alt.degrees
+        alt_d, az_d, sunlit, sun_d = self._sat_sky(sat, all_stamps)
         passes: List[Dict[str, Any]] = []
+        candidates: List[Tuple[Dict[str, Any], List[int]]] = []
         base = 0
         for rise, culms, set_ in raw:
             idx = list(range(base, base + len(culms) + 2))
@@ -4401,32 +4468,153 @@ class SkyfieldAlmanacBinder:
             # The culmination: the highest, when find_events reports more
             # than one for a single pass.
             c = max(idx[1:-1], key=lambda k: alt_d[k])
-            passes.append({
+            p = {
                 'rise': rise, 'culmination': all_stamps[c], 'set': set_,
                 'max_altitude': float(alt_d[c]),
                 'rise_azimuth': float(az_d[idx[0]]),
                 'culmination_azimuth': float(az_d[c]),
                 'set_azimuth': float(az_d[idx[-1]]),
-                'visible': any(bool(sunlit[k]) and sun_d[k] < SAT_DARK_SUN_ALT_DEGREES
-                               for k in idx),
-            })
+                'visible': False,
+            }
+            passes.append(p)
+            if may_have_window(p['max_altitude'], float(sun_d[idx[0]]),
+                               float(sun_d[idx[-1]]), set_ - rise):
+                candidates.append((p, idx))
+        if candidates:
+            self._add_visible_windows(sat, candidates, all_stamps,
+                                      alt_d, az_d, sunlit, sun_d)
         return passes
+
+    def _sat_sky(self, sat: Any, stamps: Sequence[float]) -> Tuple[Any, Any, Any, Any]:
+        """Vectorized over unix timestamps: the satellite's geometric
+        altitude and azimuth (degrees), whether it is sunlit, and the sun's
+        altitude (degrees; observed, no refraction)."""
+        sky = self.almanac_type.sky
+        geographic, observer = self.almanac_type.location(self.almanac)
+        t = sky.ts.from_datetimes(
+            [datetime.fromtimestamp(s, timezone.utc) for s in stamps])
+        alt, az, _ = (sat - geographic).at(t).altaz()
+        sunlit = sat.at(t).is_sunlit(sky.planets)
+        sun_alt, _, _ = observer.at(t).observe(sky.sun).apparent().altaz()
+        return alt.degrees, az.degrees, sunlit, sun_alt.degrees
+
+    @staticmethod
+    def _qualifying(alt_d: Any, sunlit: Any, sun_d: Any) -> Any:
+        """Elementwise: sunlit, sun below the dark bar, satellite above the
+        visibility bar -- the instant could be seen."""
+        return (numpy.asarray(sunlit, dtype=bool)
+                & (numpy.asarray(sun_d) < SAT_DARK_SUN_ALT_DEGREES)
+                & (numpy.asarray(alt_d) >= SAT_VISIBLE_MIN_ALTITUDE_DEGREES))
+
+    def _add_visible_windows(self, sat: Any,
+                             candidates: List[Tuple[Dict[str, Any], List[int]]],
+                             all_stamps: List[float], alt_d: Any, az_d: Any,
+                             sunlit: Any, sun_d: Any) -> None:
+        """Find each candidate pass's visible window -- from the first
+        instant it could be seen to the last -- and store it in the pass,
+        with 'visible' set when the window lasts SAT_VISIBLE_MIN_SECONDS.
+
+        One grid sweep across every candidate, SAT_VISIBLE_GRID_SECS apart
+        (set appended); then the grid points either side of each window
+        end are bisected, all together, SAT_VISIBLE_BISECTIONS times.  A
+        start's bracket is (does not qualify, qualifies) and an end's the
+        reverse; each reports its qualifying side, so both window ends
+        qualify.  A window qualifying at rise or set itself (only with a
+        horizon argument of 10 degrees or more) keeps that end exactly.
+
+        The peak is window_peak's: the highest of the window's two ends
+        and every culmination inside it that itself qualifies.  The
+        culminations' values come from the event sweep
+        (alt_d and the rest, indexed like all_stamps); only the ends need
+        a new evaluation."""
+        grids = [numpy.append(numpy.arange(p['rise'], p['set'], SAT_VISIBLE_GRID_SECS),
+                              p['set']) for p, _ in candidates]
+        g_alt, _, g_lit, g_sun = self._sat_sky(sat, numpy.concatenate(grids))
+        ok = self._qualifying(g_alt, g_lit, g_sun)
+        # One record per candidate with a qualifying grid point: its pass,
+        # its event-sweep indices, its window ends so far, and the index of
+        # each end's bracket in lo/hi (None for an end at rise or set).
+        found: List[Dict[str, Any]] = []
+        lo: List[float] = []
+        hi: List[float] = []
+        is_start: List[bool] = []
+        base = 0
+        for (p, idx), g in zip(candidates, grids):
+            hits = numpy.nonzero(ok[base:base + len(g)])[0]
+            base += len(g)
+            if len(hits) == 0:
+                continue
+            i0, i1 = int(hits[0]), int(hits[-1])
+            rec: Dict[str, Any] = {'pass': p, 'idx': idx,
+                                   'start': float(g[i0]), 'end': float(g[i1]),
+                                   'start_bracket': None, 'end_bracket': None}
+            if i0 > 0:
+                rec['start_bracket'] = len(lo)
+                lo.append(float(g[i0 - 1]))
+                hi.append(float(g[i0]))
+                is_start.append(True)
+            if i1 < len(g) - 1:
+                rec['end_bracket'] = len(lo)
+                lo.append(float(g[i1]))
+                hi.append(float(g[i1 + 1]))
+                is_start.append(False)
+            found.append(rec)
+        if not found:
+            return
+        if lo:
+            lo_a, hi_a = numpy.array(lo), numpy.array(hi)
+            starts = numpy.array(is_start)
+            for _ in range(SAT_VISIBLE_BISECTIONS):
+                mid = (lo_a + hi_a) / 2.0
+                m_alt, _, m_lit, m_sun = self._sat_sky(sat, mid)
+                m = self._qualifying(m_alt, m_lit, m_sun)
+                # The midpoint takes the place of whichever side it matches.
+                to_hi = numpy.where(starts, m, ~m)
+                hi_a = numpy.where(to_hi, mid, hi_a)
+                lo_a = numpy.where(to_hi, lo_a, mid)
+            for rec in found:
+                if rec['start_bracket'] is not None:
+                    rec['start'] = float(hi_a[rec['start_bracket']])
+                if rec['end_bracket'] is not None:
+                    rec['end'] = float(lo_a[rec['end_bracket']])
+        ends = [s for rec in found for s in (rec['start'], rec['end'])]
+        e_alt, e_az, _, _ = self._sat_sky(sat, ends)
+        good_culm = self._qualifying(alt_d, sunlit, sun_d)
+        for n, rec in enumerate(found):
+            p, idx, start, end = rec['pass'], rec['idx'], rec['start'], rec['end']
+            if end - start < SAT_VISIBLE_MIN_SECONDS:
+                continue
+            first = (start, float(e_alt[2 * n]), float(e_az[2 * n]))
+            last = (end, float(e_alt[2 * n + 1]), float(e_az[2 * n + 1]))
+            peak = window_peak(first, last,
+                               [(all_stamps[k], float(alt_d[k]), float(az_d[k]),
+                                 bool(good_culm[k])) for k in idx[1:-1]])
+            p.update({
+                'visible': True,
+                'visible_start': start, 'visible_peak': peak[0], 'visible_end': end,
+                'visible_start_altitude': first[1],
+                'visible_peak_altitude': peak[1],
+                'visible_end_altitude': last[1],
+                'visible_start_azimuth': first[2],
+                'visible_peak_azimuth': peak[2],
+                'visible_end_azimuth': last[2],
+            })
 
     def _next_sat_pass(self, passes: List[Dict[str, Any]],
                        visible_only: bool) -> Optional[Dict[str, Any]]:
         """The next pass from the almanac's time.  A pass in progress IS
         the next pass (rise <= now < set: the countdown rolls into
-        "overhead now, sets in three minutes").  The visible variant adds
-        the go-watch bar: a qualifying visibility sample and a
-        culmination of at least 10 degrees; plain next_pass is the
-        unfiltered fact."""
+        "overhead now, sets in three minutes").  The visible variant is
+        the next pass worth watching: the next visible pass whose window
+        has not closed -- it rolls on when the window ends, not when the
+        satellite sets, since by then it is too low, in shadow or in a
+        brightening sky."""
         time_ts = self.almanac.time_ts
         for p in passes:
-            if p['set'] <= time_ts:
-                continue
-            if visible_only and not (
-                    p['visible'] and
-                    p['max_altitude'] >= SAT_VISIBLE_MIN_CULMINATION_DEGREES):
+            if visible_only:
+                if not p['visible'] or p['visible_end'] <= time_ts:
+                    continue
+            elif p['set'] <= time_ts:
                 continue
             return p
         return None

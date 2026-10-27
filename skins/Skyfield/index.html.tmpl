@@ -72,7 +72,7 @@
 
 ## The pass chart appears only when some configured satellite has a visible
 ## pass in its elements' validity window: the sky as it will stand at that
-## pass's culmination, the one single-epoch home for the pass's arc (the
+## pass's visible peak, the one single-epoch home for the pass's arc (the
 ## dome shows only the current sky).
 #set $passchart = $sky_page.pass_chart_html($almanac, palette=$palette)
 #if $passchart
@@ -80,7 +80,7 @@
       <h2 class="eyebrow">$gettext("The Next Visible Pass · the sky at its peak")</h2>
       <div class="sky-desk">$passchart</div>
       <div class="sky-phone">$sky_page.pass_chart_html($almanac, palette=$palette, narrow=True)</div>
-      <p class="caption">$gettext("The whole sky as it will stand at the pass's highest point, on the date above — the dashed arc is the satellite's path, its rise and set times at the ends.  Only stars bright enough for a twilight sky are drawn: a visible pass happens while your sky is half dark.")</p>
+      <p class="caption">$gettext("The whole sky as it will stand at the satellite's highest visible point, on the date above — the dashed arc is the satellite's path and the solid stretch the part you can see, its times at its ends.  Only stars bright enough for a twilight sky are drawn: a visible pass happens while your sky is half dark.")</p>
     </section>
 #end if
 
@@ -143,7 +143,7 @@
       <div class="chips">
         $sky_page.satellites_html($almanac, palette=$palette)
       </div>
-      <p class="caption">$gettext("Each row is the satellite's next visible pass — visible means the satellite is sunlit while your sky is dark, peaking at least 10° up.  The soonest of these passes gets its own chart below.  Orbital elements refresh from CelesTrak every few hours.")</p>
+      <p class="caption">$gettext("Each row is the satellite's next visible pass — visible means the satellite is sunlit while your sky is dark and it is at least 10° up, for at least a minute.  The soonest of these passes gets its own chart below.  Orbital elements refresh from CelesTrak every few hours.")</p>
     </section>
 #end if
 

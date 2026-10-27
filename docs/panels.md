@@ -334,8 +334,8 @@ Two places that can bite, and the second one bites silently:
 
   Each panel's `<style>` defines **both channels of every role it uses**, precisely so that
   swap always lands on a rule.  Without that guarantee it would depend on what the chart
-  happened to draw: a pass chart's satellite is sunlit at culmination — that is what makes
-  the pass visible — so nothing on that chart ever fills with halo, the swapped mark would
+  happened to draw: a pass chart's satellite is sunlit at its visible peak — that is what
+  makes the pass visible — so nothing on that chart ever fills with halo, the swapped mark would
   ask for `.sky-fill-halo`, find no rule, and fall back to the SVG initial.  Black, for a
   fill: a solid black disc where a hollow white ring belongs, with nothing logged.  The
   guarantee holds for role pairs, not for any two classes on a mark — a planet dot's fill and
@@ -506,7 +506,9 @@ the satellite crosses the shadow line.  A comet's diamond carries `data-bright="
 `<g class="dome-track" data-body="iss">`, states the pass's rise and set as epoch seconds
 (`data-rise`/`data-set`, 2.3.2 and later), so a live layer can tell whether the pass this
 chart depicts is ahead, in progress or over without consulting a feed whose *next* pass
-has already rolled on.  These hooks are a
+has already rolled on — `next_visible_pass` moves on as soon as the visible window closes,
+minutes before the satellite sets.  Inside that group the dashed path is the whole pass and
+the solid path after it is the visible window (2.x).  These hooks are a
 stable contract, and so are `$sky_page.satellite_names()` and `$sky_page.comet_names()`,
 through which an embedding skin enumerates the configured satellites and comets — the tag
 names in config order, empty when none are configured or the almanac is not registered —
@@ -533,13 +535,16 @@ $sky_page.pass_chart_html($almanac)
 
 <img src="https://raw.githubusercontent.com/chaunceygardiner/weewx-skyfield/main/screenshots/panel_passchart.png" width="440" alt="The next visible pass chart panel">
 
-The whole sky as it will stand at the culmination of the soonest upcoming
-[visible pass](tags.md#satellites) among the configured satellites, with the pass drawn
-across it as a dashed arc — rise and set times at the endpoints, the satellite's own dot at
-the peak — under a dated head line naming the satellite and the pass ("ISS · Sun, Jun 22 ·
-3:11 AM → 3:21 AM · peak 19°").  The peak dot can be the hollow in-shadow ring: a pass is
-visible when *any* of it is sunlit in a dark sky, and a morning pass often exits Earth's
-shadow just after culminating — the chart honestly shows it flaring into view mid-sky.  One chart, one epoch: the arc crosses the stars it will
+The whole sky as it will stand at the visible peak of the soonest upcoming
+[visible pass](tags.md#satellites) among the configured satellites — the highest point at
+which the satellite can be seen.  The whole pass is drawn across it as a dashed arc, horizon
+to horizon, and its visible window — the stretch in which the satellite is sunlit, your sky
+dark and the satellite at least 10° up — as a solid stretch over it, with its two times at
+its ends and the satellite's own dot at the peak, under a dated head line naming the
+satellite and the window ("ISS · Sun, Jun 22 · 3:17 AM → 3:18 AM · peak 17°").  The window is
+often a small part of the pass: that morning pass rises at 3:11 in Earth's shadow, passes
+its 19° culmination still in it, and comes into view only as it leaves the shadow, at 17°.
+One chart, one epoch: the arc crosses the stars it will
 actually cross, the per-pass convention sky-charting has always used for future events (the
 sky dome, by contrast, never shows anything but the current sky).  The star field uses
 twilight-honest cutoffs — a visible pass happens while the sky is only half dark, so only
@@ -618,9 +623,20 @@ its *current* sun distance on the same log scale — marker only, no orbit ring,
 eccentric orbit does not draw as a circle — its tail streaming radially outward (a comet's
 tail points away from the sun, and on a sun-centered plan view that is simply outward),
 with the true distance in the tooltip and the dome's solid/hollow naked-eye rule; a comet
-beyond the outermost ring pins near the rim.
+beyond the outermost ring pins near the rim, its tail shortened there to stay on the plate.
 Unlike the dome, the orrery plots a comet whether or not it is above the observer's
 horizon: it is a plan view of the solar system, not the observer's sky.
+
+Each name sits beside its own body, clear of every other dot and diamond, of every comet's
+tail and of the 0° mark, and nearer its own body than any other — even when two bodies crowd
+together, as Venus and Earth do near inferior conjunction.  The 0° mark moves below its line
+while a body or a comet's tail sits at its end, and a row further up or down when both spots
+are taken.  Where bodies crowd closer than a name can tell apart (two nearly touching, or a
+tight group in the narrow frame, whose type is set for a phone), a name can end nearer a
+neighbor or touching another name; it goes on a dot only when no other spot is left.  On the
+phone that is common for a comet: one beyond Neptune is pinned at the rim just outside
+Neptune's ring, and one deep inside crowds the inner planets, so a comet's name there often
+ends nearer a neighbor.
 
 ## The equation of time — `eot_svg`
 
@@ -736,8 +752,10 @@ configured.  The `chips` wrapper provides the single-column layout.
 
 One card per configured satellite (see [Satellites](installation.md#satellites)): its
 [next visible pass](tags.md#satellites) — the date and countdown in the countdown-chip
-idiom, rolling into "overhead now" during the pass itself, then "appears WSW · peaks 45° SSW
-· disappears NE · 6 m".  The rows are honest about nothing-to-see: a satellite with no
+idiom, rolling into "overhead now" while it is in view, then "appears WSW · peaks 45° SSW
+· disappears NE · 6 m" — all of it the visible window, not the whole pass: where it comes
+into view, its highest point in view, where it goes out of view, and for how long.  The rows
+are honest about nothing-to-see: a satellite with no
 visible pass in the coming week says so, and one with no usable orbital elements says
 *that*, pointing at the weewxd log — the panel never shows a stale pass.
 `$sky_page.has_satellites()` returns whether any satellites are configured, so a template

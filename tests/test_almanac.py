@@ -17,6 +17,7 @@ regression values.
 
 import ast
 import contextlib
+import datetime
 import io
 import json
 import logging
@@ -105,6 +106,25 @@ def read_csv(norad: int) -> str:
 def celestrak_answer() -> bytes:
     with open(CELESTRAK_ANSWER, 'rb') as f:
         return f.read()
+
+
+# The visible-window attributes every pass carries (2.12), all empty
+# unless the pass is visible.
+VISIBLE_WINDOW_ATTRS = (
+    'visible_start', 'visible_peak', 'visible_end',
+    'visible_start_altitude', 'visible_peak_altitude', 'visible_end_altitude',
+    'visible_start_azimuth', 'visible_peak_azimuth', 'visible_end_azimuth',
+    'visible_duration')
+
+
+def assert_window_empty(sat_pass):
+    """Every visible_* attribute of a pass with no visible window reads
+    N/A: a ValueHelper with no value."""
+    for attr in VISIBLE_WINDOW_ATTRS:
+        vh = getattr(sat_pass, attr)
+        assert isinstance(vh, weewx.units.ValueHelper), attr
+        assert vh.raw is None, attr
+        assert 'N/A' in str(vh), attr
 
 
 def raw(value_helper, unit):
@@ -3762,9 +3782,8 @@ class TestSatellitePositions:
 class TestSatellitePasses:
     """The next_pass family, per the settled semantics: geometric horizon
     (default 0, the almanac's horizon argument), the 7-day element-
-    validity search window, whole-pass visibility sampling against a -6
-    degree dark sky, and the 10-degree go-watch bar for the visible
-    variant."""
+    validity search window, and the visible test (TestVisibleWindow has
+    the window itself)."""
 
     def test_next_pass_pins(self, almanac):
         p = almanac.iss.next_pass
@@ -3780,9 +3799,10 @@ class TestSatellitePasses:
         assert p.set_azimuth.ordinal_compass() == 'SSE'
 
     def test_next_visible_pass_pins(self, almanac):
-        """The next VISIBLE pass skips ahead to the next morning's dark-
-        sky pass (03:11 local): sunlit satellite, observer past civil
-        dusk, culmination over the 10-degree bar."""
+        """The next VISIBLE pass skips ahead to the next morning's pass
+        (rising 03:11 local), which has a visible window: sunlit, the
+        observer past civil dusk, the satellite 10 degrees up.  These are
+        its geometric figures, horizon to horizon."""
         v = almanac.iss.next_visible_pass
         assert raw(v.rise, 'unix_epoch') == pytest.approx(1750587085.008, abs=1.0)
         assert raw(v.max_altitude, 'degree_angle') == pytest.approx(19.34, abs=ANGLE_TOL)
@@ -3831,6 +3851,7 @@ class TestSatellitePasses:
         assert time.strftime('%x', time.localtime(rise_ts)) \
             != time.strftime('%x', time.localtime(almanac.time_ts))
         for vh in (v.rise, v.culmination, v.set,
+                   v.visible_start, v.visible_peak, v.visible_end,
                    almanac.iss.rise, almanac.iss.transit, almanac.iss.set):
             ts = raw(vh, 'unix_epoch')
             rendered = str(vh)
@@ -3844,7 +3865,7 @@ class TestSatellitePasses:
 
     def test_time_formats_override_reaches_pass_times(self, sky):
         """A skin restyling these times does it with [Units][[TimeFormats]]
-        ephem_year, so the override must reach all six tags."""
+        ephem_year, so the override must reach all nine tags."""
         formatter = weewx.units.get_default_formatter()
         formatter.time_format_dict = dict(formatter.time_format_dict)
         formatter.time_format_dict['ephem_year'] = '%Y-%m-%d %H:%M'
@@ -3854,6 +3875,7 @@ class TestSatellitePasses:
                                         formatter=formatter)
             v = alm.iss.next_visible_pass
             for vh in (v.rise, v.culmination, v.set,
+                       v.visible_start, v.visible_peak, v.visible_end,
                        alm.iss.rise, alm.iss.transit, alm.iss.set):
                 ts = raw(vh, 'unix_epoch')
                 assert ts is not None
@@ -3872,16 +3894,17 @@ class TestSatellitePasses:
     def test_whole_window_pass_stats(self, sky, almanac):
         """The pass list spans the element-validity window (a day before
         the epoch through the 7-day cutoff), every pass ordered, with the
-        fixture's known census: visibility sampled over the WHOLE pass
-        (rise, every culmination, set) and the 10-degree bar applied only
-        by the visible variant."""
+        fixture's known census: 12 visible passes, each with a window of
+        a minute or more in which the ISS is sunlit, the sun below -6
+        degrees and the ISS 10 degrees up.  Until 2.12 'visible' meant
+        lit against a dark sky at rise, a culmination or set, and 16
+        passes peaking over 10 degrees qualified -- three of them with no
+        such window at all (TestVisibleWindow)."""
         binder = almanac.iss
         sat, epoch_ts = sky.satellite_elements(ISS_NORAD)
         passes = binder._sat_passes(sat, epoch_ts)
         assert len(passes) == 59
-        assert sum(1 for p in passes if p['visible']) == 17
-        assert sum(1 for p in passes
-                   if p['visible'] and p['max_altitude'] >= 10.0) == 16
+        assert sum(1 for p in passes if p['visible']) == 12
         for p in passes:
             assert epoch_ts - 86400 <= p['rise']
             assert p['set'] <= epoch_ts + wxskyfield.SAT_MAX_ELEMENT_AGE_SECS
@@ -3900,6 +3923,7 @@ class TestSatellitePasses:
         assert v.visible is None
         assert 'N/A' in str(v.rise)
         assert 'N/A' in str(v.max_altitude)
+        assert_window_empty(v)
 
     def test_geostationary_never_rises(self):
         """The fabricated far-side geostationary satellite: find_events
@@ -3919,6 +3943,7 @@ class TestSatellitePasses:
             assert raw(alm.geosat.transit, 'unix_epoch') is None
             assert raw(alm.geosat.next_pass.rise, 'unix_epoch') is None
             assert alm.geosat.next_pass.visible is None
+            assert_window_empty(alm.geosat.next_pass)
 
     def test_loopdata_chain_walk(self, almanac):
         """loopdata walks tag chains with plain getattr -- no Cheetah
@@ -3929,11 +3954,212 @@ class TestSatellitePasses:
         p = getattr(binder, 'next_pass')
         for attr in ('rise', 'culmination', 'set', 'max_altitude',
                      'rise_azimuth', 'culmination_azimuth', 'set_azimuth',
-                     'duration'):
+                     'duration') + VISIBLE_WINDOW_ATTRS:
             value = getattr(p, attr)
             assert not callable(value), attr
             assert isinstance(value, weewx.units.ValueHelper), attr
         assert getattr(p, 'visible') is False
+
+
+class TestVisibleWindow:
+    """A pass is visible when, at the same instant, the satellite is
+    sunlit, the sun is below -6 degrees and the satellite is at least 10
+    degrees up, for at least a minute; the visible_* attributes report
+    that window.  Before 2.12 a pass qualified when it was lit against a
+    dark sky at its rise, a culmination or its set, and its culmination
+    cleared 10 degrees -- so a pass lit only at its 0-degree set point,
+    however high its shadowed culmination, was listed (Terra from Palo
+    Alto, 2026-10-26: lit 40 s, never above 2.4 degrees, "peaks 90°")."""
+
+    # The fixture's pass A (rise 2025-06-22 03:11:25 PDT): culminates at
+    # 19.3 degrees in Earth's shadow and comes into view as it leaves it,
+    # just after, at 17.5 degrees; drops below 10 degrees 95 s later.
+    A_RISE = 1750587085.008
+    A_START, A_END = 1750587434.149, 1750587529.305
+    # Pass B (rise 04:47:32): in view from 12.7 degrees, through its
+    # 38.5-degree culmination, down to 10 degrees.
+    B_START, B_PEAK, B_END = 1750593007.300, 1750593172.379, 1750593363.081
+    # Rises of the passes the old rule listed and the new does not: three
+    # with no window at all (06-28's culminates at 55 degrees in shadow),
+    # and one whose window lasts only 35.6 s.
+    NO_WINDOW_RISES = (1750670619.970, 1750926836.873, 1751099559.487)
+    SHORT_WINDOW_RISE = 1750843321.885
+    # Bisection leaves each end within 10 s / 2**7 of the true crossing.
+    PRECISION = wxskyfield.SAT_VISIBLE_GRID_SECS / 2 ** wxskyfield.SAT_VISIBLE_BISECTIONS
+
+    @staticmethod
+    def passes(sky, almanac):
+        sat, epoch_ts = sky.satellite_elements(ISS_NORAD)
+        return almanac.iss._sat_passes(sat, epoch_ts)
+
+    @staticmethod
+    def qualifies(sky, ts):
+        """Straight from Skyfield, not through the engine: sunlit, sun
+        below -6, ISS at least 10 degrees up, at unix time ts."""
+        sat, _ = sky.satellite_elements(ISS_NORAD)
+        geo = skyfield.api.wgs84.latlon(LATITUDE, LONGITUDE, elevation_m=ALTITUDE_M)
+        t = sky.ts.from_datetime(datetime.datetime.fromtimestamp(ts, datetime.timezone.utc))
+        alt = (sat - geo).at(t).altaz()[0].degrees
+        sun = (sky.planets['earth'] + geo).at(t).observe(sky.planets['sun']).apparent()
+        return (bool(sat.at(t).is_sunlit(sky.planets))
+                and sun.altaz()[0].degrees < wxskyfield.SAT_DARK_SUN_ALT_DEGREES
+                and alt >= wxskyfield.SAT_VISIBLE_MIN_ALTITUDE_DEGREES)
+
+    def test_pass_a_window(self, almanac):
+        v = almanac.iss.next_visible_pass
+        assert raw(v.rise, 'unix_epoch') == pytest.approx(self.A_RISE, abs=1.0)
+        assert raw(v.visible_start, 'unix_epoch') == pytest.approx(self.A_START, abs=0.2)
+        assert raw(v.visible_end, 'unix_epoch') == pytest.approx(self.A_END, abs=0.2)
+        # The culmination is in shadow, so the highest it can be SEEN is
+        # where it comes out of it: the window's start.
+        assert raw(v.visible_peak, 'unix_epoch') == raw(v.visible_start, 'unix_epoch')
+        assert raw(v.visible_peak, 'unix_epoch') > raw(v.culmination, 'unix_epoch')
+        assert raw(v.visible_peak_altitude, 'degree_angle') == pytest.approx(17.49, abs=ANGLE_TOL)
+        assert raw(v.max_altitude, 'degree_angle') == pytest.approx(19.34, abs=ANGLE_TOL)
+        assert raw(v.visible_end_altitude, 'degree_angle') == pytest.approx(10.0, abs=ANGLE_TOL)
+        assert v.visible_start_azimuth.ordinal_compass() == 'ESE'
+        assert v.visible_peak_azimuth.ordinal_compass() == 'ESE'
+        assert v.visible_end_azimuth.ordinal_compass() == 'E'
+        assert raw(v.visible_duration, 'second') == pytest.approx(95.16, abs=0.4)
+        assert v.visible is True
+
+    def test_pass_b_window_peaks_at_its_culmination(self, almanac):
+        """After pass A's window closes the next visible pass is B, in
+        view from 12.7 degrees as it leaves Earth's shadow, peaking at its
+        culmination (which qualifies: it is sunlit there)."""
+        v = almanac(almanac_time=self.A_END + 60).iss.next_visible_pass
+        assert raw(v.visible_start, 'unix_epoch') == pytest.approx(self.B_START, abs=0.2)
+        assert raw(v.visible_peak, 'unix_epoch') == pytest.approx(self.B_PEAK, abs=1.0)
+        assert raw(v.visible_peak, 'unix_epoch') == raw(v.culmination, 'unix_epoch')
+        assert raw(v.visible_end, 'unix_epoch') == pytest.approx(self.B_END, abs=0.2)
+        assert raw(v.visible_start_altitude, 'degree_angle') == pytest.approx(12.70, abs=ANGLE_TOL)
+        assert raw(v.visible_peak_altitude, 'degree_angle') == pytest.approx(38.46, abs=ANGLE_TOL)
+        assert (v.visible_start_azimuth.ordinal_compass(),
+                v.visible_peak_azimuth.ordinal_compass(),
+                v.visible_end_azimuth.ordinal_compass()) == ('WSW', 'NW', 'NE')
+
+    def test_every_window_end_is_its_crossing(self, sky, almanac):
+        """Checked against Skyfield directly: each reported window end
+        qualifies, and an instant just past the bisection's precision
+        outside it does not."""
+        visible = [p for p in self.passes(sky, almanac) if p['visible']]
+        assert len(visible) == 12
+        step = self.PRECISION + 0.02
+        for p in visible:
+            assert self.qualifies(sky, p['visible_start'])
+            assert self.qualifies(sky, p['visible_end'])
+            assert not self.qualifies(sky, p['visible_start'] - step)
+            assert not self.qualifies(sky, p['visible_end'] + step)
+
+    def test_passes_the_old_rule_listed(self, sky, almanac):
+        """Lit against a dark sky only below 10 degrees (one culminating
+        at 55 degrees in shadow), or above it for only 35.6 s: not
+        visible, and no window."""
+        by_rise = {round(p['rise']): p for p in self.passes(sky, almanac)}
+        for rise in self.NO_WINDOW_RISES + (self.SHORT_WINDOW_RISE,):
+            p = by_rise[round(rise)]
+            assert p['max_altitude'] >= 10.0
+            assert p['visible'] is False
+            assert 'visible_start' not in p
+        assert by_rise[round(self.NO_WINDOW_RISES[2])]['max_altitude'] \
+            == pytest.approx(55.4, abs=0.1)
+
+    def test_rolls_when_the_window_closes(self, almanac):
+        """next_visible_pass is A before and during its window and rolls
+        to B the moment the window closes -- while next_pass is still A,
+        up and visible, until it sets."""
+        for ts in (self.A_RISE + 155, self.A_START + 46):      # 03:14:00, 03:18:00
+            nvp = almanac(almanac_time=ts).iss.next_visible_pass
+            assert raw(nvp.visible_start, 'unix_epoch') == pytest.approx(self.A_START, abs=0.2)
+        end = raw(almanac.iss.next_visible_pass.visible_end, 'unix_epoch')
+        for ts in (end + 30, end):                            # strictly after
+            alm = almanac(almanac_time=ts)
+            assert raw(alm.iss.next_visible_pass.visible_start, 'unix_epoch') \
+                == pytest.approx(self.B_START, abs=0.2)
+            assert raw(alm.iss.next_pass.rise, 'unix_epoch') == pytest.approx(self.A_RISE, abs=1.0)
+            assert alm.iss.next_pass.visible is True
+
+    def test_next_pass_visible_agrees_with_next_visible_pass(self, sky, almanac):
+        """While there is a next pass, and outside the minutes between a
+        visible pass's window closing and its set, next_pass.visible is
+        True exactly when next_pass IS next_visible_pass."""
+        passes = self.passes(sky, almanac)
+        gaps = [(p['visible_end'], p['set']) for p in passes if p['visible']]
+        checked = 0
+        for ts in range(TIME_TS, int(passes[-1]['set']), 1200):
+            if any(a <= ts < b for a, b in gaps):
+                continue
+            alm = almanac(almanac_time=ts)
+            np_, nvp = alm.iss.next_pass, alm.iss.next_visible_pass
+            same = raw(np_.rise, 'unix_epoch') == raw(nvp.rise, 'unix_epoch')
+            assert np_.visible is same, ts
+            checked += 1
+        assert checked > 400
+
+    def test_prefilters_skip_only_hopeless_passes(self, sky, almanac, monkeypatch):
+        """The passes that skip the grid search (too low, or under a sky
+        the sun keeps too bright) would have had no window anyway: with
+        every pass searched, the list is identical."""
+        sat, epoch_ts = sky.satellite_elements(ISS_NORAD)
+        binder = almanac.iss
+        filtered = binder._compute_sat_passes(sat, epoch_ts, 0.0)
+        monkeypatch.setattr(wxskyfield, 'may_have_window', lambda *args: True)
+        searched = binder._compute_sat_passes(sat, epoch_ts, 0.0)
+        assert searched == filtered
+        assert sum(p['visible'] for p in searched) == 12
+
+    def test_window_peak(self):
+        """Pure: the peak is the higher window end, unless a qualifying
+        culmination inside the window is higher.  A culmination in shadow
+        (inside a window with a gap) or outside the window never is --
+        pass A's own culmination lies before its window opens."""
+        start, end = (100.0, 17.5, 108.0), (195.0, 10.0, 82.0)
+        assert wxskyfield.window_peak(start, end, []) == start
+        assert wxskyfield.window_peak(start, end, [(150.0, 40.0, 95.0, True)]) \
+            == (150.0, 40.0, 95.0)
+        assert wxskyfield.window_peak(start, end, [(150.0, 40.0, 95.0, False)]) == start
+        assert wxskyfield.window_peak(start, end, [(60.0, 40.0, 95.0, True)]) == start
+        assert wxskyfield.window_peak((100.0, 10.0, 0.0), (195.0, 12.0, 1.0), []) \
+            == (195.0, 12.0, 1.0)
+
+    def test_grid_cannot_miss_a_window_that_counts(self):
+        assert wxskyfield.SAT_VISIBLE_GRID_SECS <= wxskyfield.SAT_VISIBLE_MIN_SECONDS
+
+    def test_sun_never_dark_bound(self):
+        """Pure: across a pass the sun can sink below the lower of its two
+        end altitudes by at most its fastest rate times half the pass.
+        Exactly at that bound the pass is still skipped; a hair lower, it
+        is searched."""
+        dark = wxskyfield.SAT_DARK_SUN_ALT_DEGREES
+        dip = wxskyfield.SAT_SUN_RATE_DEGREES_PER_MIN * 600 / 120.0
+        assert wxskyfield.sun_never_dark(dark + dip, dark + 20, 600) is True
+        assert wxskyfield.sun_never_dark(dark + 20, dark + dip, 600) is True
+        assert wxskyfield.sun_never_dark(dark + dip - 0.001, dark + 20, 600) is False
+        assert wxskyfield.sun_never_dark(dark - 1, dark + 20, 600) is False
+        # A long pass needs a bigger margin.
+        assert wxskyfield.sun_never_dark(dark + dip, dark + dip, 1200) is False
+
+    def test_sun_never_dark_holds_for_the_real_sun(self, sky):
+        """The case the bound exists for, from the ephemeris: near 60.5 N
+        at the June solstice the sun's midnight low is just below -6
+        degrees, so a 16-minute pass centered on it has both ends at or
+        above -6 while the sky between is dark enough.  The skip must not
+        fire there, and the real dip must sit inside the bound."""
+        geo = skyfield.api.wgs84.latlon(60.55, 0.0)
+        observer = sky.planets['earth'] + geo
+        start = datetime.datetime(2025, 6, 20, 23, 0, tzinfo=datetime.timezone.utc).timestamp()
+        stamps = [start + 10 * k for k in range(721)]                 # two hours
+        t = sky.ts.from_datetimes([datetime.datetime.fromtimestamp(x, datetime.timezone.utc)
+                                   for x in stamps])
+        alts = observer.at(t).observe(sky.planets['sun']).apparent().altaz()[0].degrees
+        k = int(numpy.argmin(alts))
+        lo, hi = k - 48, k + 48                                       # 960 s
+        sun_rise, sun_set = float(alts[lo]), float(alts[hi])
+        dark = wxskyfield.SAT_DARK_SUN_ALT_DEGREES
+        assert float(alts[k]) < dark <= min(sun_rise, sun_set)
+        assert wxskyfield.sun_never_dark(sun_rise, sun_set, 960) is False
+        dip = wxskyfield.SAT_SUN_RATE_DEGREES_PER_MIN * 960 / 120.0
+        assert min(float(a) for a in alts[lo:hi + 1]) >= min(sun_rise, sun_set) - dip
 
 
 class TestSatelliteStale:
@@ -3964,6 +4190,7 @@ class TestSatelliteStale:
             assert raw(p.rise, 'unix_epoch') is None
             assert p.visible is None
             assert 'N/A' in str(p.rise)
+            assert_window_empty(p)
             # The diagnostics ignore the cutoff -- they explain the N/As.
             assert raw(stale.iss.elements_epoch, 'unix_epoch') \
                 == pytest.approx(ISS_EPOCH_TS, abs=1.0)
@@ -4175,6 +4402,15 @@ SKYFIELD_ONLY_EXPRESSIONS = [
     "almanac.iss.next_pass.culmination_azimuth", "almanac.iss.next_pass.set_azimuth",
     "almanac.iss.next_pass.duration",
     "almanac.iss.next_visible_pass.rise", "almanac.iss.next_visible_pass.visible",
+    "almanac.iss.next_visible_pass.visible_start", "almanac.iss.next_visible_pass.visible_peak",
+    "almanac.iss.next_visible_pass.visible_end",
+    "almanac.iss.next_visible_pass.visible_start_altitude",
+    "almanac.iss.next_visible_pass.visible_peak_altitude",
+    "almanac.iss.next_visible_pass.visible_end_altitude",
+    "almanac.iss.next_visible_pass.visible_start_azimuth",
+    "almanac.iss.next_visible_pass.visible_peak_azimuth",
+    "almanac.iss.next_visible_pass.visible_end_azimuth",
+    "almanac.iss.next_visible_pass.visible_duration",
     "almanac(horizon=10).iss.next_pass.rise",
     "almanac.iss.elements_epoch", "almanac.iss.elements_age",
     "almanac.sat_25544.alt", "almanac.iss.name", "almanac.iss.label",

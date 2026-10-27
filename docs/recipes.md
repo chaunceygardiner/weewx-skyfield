@@ -76,10 +76,10 @@ PyEphem's 0–1 fraction.  All three are different things; the
 ```
 #set $iss_pass = $almanac.iss.next_visible_pass
 #if $iss_pass.visible
-  The ISS appears $iss_pass.rise ($iss_pass.rise_azimuth.ordinal_compass),
-  peaks at $iss_pass.max_altitude ($iss_pass.culmination_azimuth.ordinal_compass),
-  and disappears $iss_pass.set ($iss_pass.set_azimuth.ordinal_compass).
-  Visible for $iss_pass.duration.
+  The ISS appears $iss_pass.visible_start ($iss_pass.visible_start_azimuth.ordinal_compass),
+  peaks at $iss_pass.visible_peak_altitude ($iss_pass.visible_peak_azimuth.ordinal_compass),
+  and disappears $iss_pass.visible_end ($iss_pass.visible_end_azimuth.ordinal_compass).
+  Visible for $iss_pass.visible_duration.
 #else
   No visible ISS pass in the coming week.
 #end if
@@ -87,13 +87,16 @@ PyEphem's 0–1 fraction.  All three are different things; the
 
 Guard on `.visible` rather than on a time: with no qualifying pass every attribute is an
 empty ValueHelper that renders `N/A`, and `.visible` is the flag that says so.
-`next_visible_pass` is deliberately strict — sunlit, sky dark, peaking at least 10° up — so
-use `next_pass` when you want every pass regardless of whether you could see it.
+`next_visible_pass` is deliberately strict — at least a minute in which the ISS is sunlit,
+the sky dark and the ISS at least 10° up — and the `visible_*` attributes report just that
+stretch, which can be much shorter and lower than the whole pass (`rise`, `max_altitude`,
+`set`, `duration`).  Use `next_pass` when you want every pass regardless of whether you could
+see it.
 
-The three times print with their date — `06/22/2025 03:11:25 AM` — because the pass being
+The two times print with their date — `06/22/2025 03:17:14 AM` — because the pass being
 reported is anywhere in the coming week, which is what the `#else` branch above admits.
 To print a bare clock time instead, format the tag in place:
-`$iss_pass.rise.format(format_string="%X")`.  Avoid overriding `ephem_year` in `[Units]`
+`$iss_pass.visible_start.format(format_string="%X")`.  Avoid overriding `ephem_year` in `[Units]`
 `[[TimeFormats]]` for this: that also restyles the equinoxes, the moon-phase and apsis finders,
 meteor-shower peaks and a comet's perihelion (see [how far away a time can
 be](values-and-units.md#how-far-away-a-time-can-be)).

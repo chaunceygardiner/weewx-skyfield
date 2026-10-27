@@ -69,9 +69,10 @@ minutes, because this extension follows the USNO's geometric definition.  See
 ### Satellite times now show a date
 
 Intended, as of 2.5.  A pass is searched up to a week ahead, so a bare clock time for a pass
-three days out read as tonight.  The six satellite times — `rise`, `culmination` and `set` on
+three days out read as tonight.  The satellite times — `rise`, `culmination` and `set` on
 `next_pass` and `next_visible_pass`, and the satellite's own `rise`, `transit` and `set` — now
-render in the `ephem_year` context, with their date, rather than `ephem_day`.  For the old look
+render in the `ephem_year` context, with their date, rather than `ephem_day`; so do a pass's
+`visible_start`, `visible_peak` and `visible_end`, added later.  For the old look
 on one tag, format it in place:
 `$almanac.iss.next_visible_pass.rise.format(format_string="%X")`.  Overriding `ephem_year`
 itself would also restyle the equinoxes, the moon-phase finders, meteor-shower peaks and a
@@ -102,9 +103,10 @@ stations poleward of about ±35°.  The configured defaults — ISS at 51.6° an
 41.5° — put on a show for essentially everyone.  See
 [Choosing satellites](installation.md#satellites).
 
-Remember also that `next_visible_pass` is deliberately strict: sunlit, against a sky with the
-sun below −6°, peaking at least 10° up.  `next_pass` is the unfiltered fact and will often
-have an answer when `next_visible_pass` does not.
+Remember also that `next_visible_pass` is deliberately strict: at least a minute in which
+the satellite is sunlit, the sun is below −6° and the satellite is at least 10° up, all at
+once.  A satellite whose passes are lit only low in the sky can go a whole week without one.  `next_pass` is the unfiltered fact and will
+often have an answer when `next_visible_pass` does not.
 
 ### A number looks wrong by a factor of 3600 or 57.3
 

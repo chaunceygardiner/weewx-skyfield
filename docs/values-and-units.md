@@ -130,9 +130,10 @@ exactly `$almanac.sun.rise`.)
 Satellite times are `ephem_year` because passes are searched across the orbital elements'
 seven-day validity window, so `$almanac.iss.next_visible_pass.rise` routinely names an
 instant one to seven days out.  A bare clock time for a pass three days away does not merely
-lose the date — it reads as tonight.  That covers the three
-[pass attributes](tag-index.md#pass-attributes) `rise`, `culmination` and `set`, and the
-satellite's own `rise`, `transit` and `set`, which come off the same pass list.
+lose the date — it reads as tonight.  That covers the six
+[pass attributes](tag-index.md#pass-attributes) that are times — `rise`, `culmination` and
+`set`, and `visible_start`, `visible_peak` and `visible_end` — and the satellite's own
+`rise`, `transit` and `set`, which come off the same pass list.
 
 To change one tag only — a pass time you want as a bare clock time, say — format it in
 place: `$almanac.iss.next_pass.rise.format(format_string="%X")`.

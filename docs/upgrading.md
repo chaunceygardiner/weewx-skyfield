@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 4
-description: What changed for existing weewx-skyfield users — satellites needing Skyfield 1.49, satellite elements as OMM, removed options, the one tag whose units changed, satellite times that now carry their date, markup changes for skins that embed the panels, the download switches, and the companion-extension version floors.
+description: What changed for existing weewx-skyfield users — what a visible satellite pass means, satellites needing Skyfield 1.49, satellite elements as OMM, removed options, the one tag whose units changed, satellite times that now carry their date, markup changes for skins that embed the panels, the download switches, and the companion-extension version floors.
 ---
 
 # Upgrading
@@ -79,6 +79,29 @@ map.  To restore the sparse pre-2.0 look:
 
 ## Coming from 2.x
 
+### If you show visible satellite passes (2.x)
+
+**A visible pass is one you can see now.**  `next_visible_pass` and `.visible` used to accept
+a pass that was lit against a dark sky at its rise, its culmination or its set and peaked at
+least 10° up, so a pass lit only at the horizon, with its high culmination in Earth's shadow,
+was listed — Terra from Palo Alto, "peaks 90°", lit for 40 seconds and never above 2.4°.  A
+pass is visible now only with a *visible window*: a minute or more in which the satellite is
+sunlit, the sun is below −6° and the satellite is at least 10° up, all at once.  Fewer passes
+qualify, and every one that does can be seen.  Nothing to configure.
+
+The window has its own attributes — `visible_start`, `visible_peak` and `visible_end`, each
+with an `_altitude` and an `_azimuth`, and `visible_duration` (see [pass
+attributes](tag-index.md#pass-attributes)).  `rise`, `culmination`, `set`, `max_altitude`,
+the three azimuths and `duration` still describe the whole pass, horizon to horizon, so a
+template that says when the satellite "appears" and how high it "peaks" wants the
+`visible_*` ones.  `next_visible_pass` now moves on to the following visible pass when the
+window closes, minutes before the satellite sets.
+
+On a live page, loopdata keeps a group of `next_visible_pass` fields until the latest time
+among them has passed.  A group that includes `.set` keeps showing a pass until it sets,
+after its window has closed (and one with `.culmination`, until the culmination when that
+comes after the window); leave them out to move on with the window.
+
 ### If you use satellites on Skyfield 1.47 or 1.48 (2.10)
 
 **Satellites now need Skyfield 1.49 or later.**  Their elements arrive in the OMM format
@@ -109,7 +132,14 @@ moon-phase finders, meteor-shower peaks and a comet's perihelion.  Values are un
 tag read through `.raw` is untouched.  See [How far away a time can
 be](values-and-units.md#how-far-away-a-time-can-be).
 
-### If you embed the panels, seven things need your attention
+### If you embed the panels, eight things need your attention
+
+**The pass chart draws the visible window (2.x).**  Inside `<g class="dome-track">` the dashed
+path is still the whole pass; a second, solid path after it is the visible window, and the
+arc's `<title>` is on that one.  The two clock labels sit at the window's ends instead of on
+the rim, and the chart's moment is the window's highest point rather than the culmination,
+so the featured satellite's dot is drawn sunlit, `data-sunlit="1"`.  `data-rise` and `data-set` are
+unchanged: the whole pass's rise and set.
 
 **Nothing you draw today has moved (2.7).**  Every chart method now takes `narrow`, and the
 frame it does *not* take — the wide one, the default — is byte for byte what 2.6.2 drew, apart
